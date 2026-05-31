@@ -3,7 +3,7 @@ import axios from 'axios';
 interface TokenResponse {
   TokenType: string;
   AccessToken: string;
-  ExpiresIn: number;
+  Expires: string; // ISO date string, e.g. "2026-05-31T07:23:45.000Z"
 }
 
 interface UserToken {
@@ -30,7 +30,7 @@ class MindbodyAuth {
       return null;
     }
 
-    // If token acquisition previously failed, don't keep retrying
+    // If token acquisition previously failed, don't keep retrying — restart the server to reset
     if (this.tokenFailed) {
       return null;
     }
@@ -57,8 +57,9 @@ class MindbodyAuth {
         }
       );
 
-      const expiresAt = new Date();
-      expiresAt.setSeconds(expiresAt.getSeconds() + response.data.ExpiresIn - 60);
+      const expiresAt = response.data.Expires
+        ? new Date(new Date(response.data.Expires).getTime() - 60_000)
+        : new Date(Date.now() + 23 * 60 * 60 * 1000); // fallback: 23 hours
 
       this.userToken = {
         token: response.data.AccessToken,
