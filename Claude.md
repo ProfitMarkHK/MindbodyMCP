@@ -1,9 +1,11 @@
-# Claude.md - Mindbody MCP Server v2.0
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
-This is the Mindbody MCP Server - a comprehensive Model Context Protocol server that provides AI assistants with complete access to the Mindbody API for fitness/wellness studio management. Perfect for yoga studios, pilates studios, gyms, and wellness centers.
+The Mindbody MCP Server is a comprehensive Model Context Protocol server that provides AI assistants with complete access to the Mindbody API for fitness/wellness studio management. It's built with TypeScript, Bun, and the MCP SDK.
 
-## Core Capabilities
+**Core capabilities:**
 - **Complete Class Management**: View, book, cancel, substitute teachers, manage waitlists
 - **Client Management**: Add/update clients, track visits, memberships, balances
 - **Sales & Commerce**: Process payments, sell packages, memberships, products
@@ -11,6 +13,137 @@ This is the Mindbody MCP Server - a comprehensive Model Context Protocol server 
 - **Site Operations**: Manage locations, programs, resources, session types
 - **Appointments**: Book, update, find available slots
 - **Enrollments**: Manage courses, workshops, series registrations
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Standard triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout with `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Development
+
+### Quick Start
+```bash
+# Install dependencies
+bun install
+
+# Run in development mode (STDIO transport)
+bun run dev
+
+# Run with SSE transport (production-like)
+bun run dev:sse
+
+# Run tests
+bun test
+
+# Type checking and linting
+bun run typecheck
+bun run lint
+
+# Build for production
+bun run build
+```
+
+### Project Structure
+```
+src/
+├── index.ts              # MCP server entry point and tool registration
+├── api/                  # API client and authentication
+│   ├── client.ts        # HTTP client with retry logic
+│   └── auth.ts          # OAuth 2.0 token management
+├── tools/               # Tool implementations (one per domain)
+│   ├── classManagement.ts
+│   ├── clientManagement.ts
+│   ├── appointmentManagement.ts
+│   ├── enrollmentManagement.ts
+│   ├── siteManagement.ts
+│   ├── salesManagement.ts
+│   └── teacherSchedule.ts
+├── cache/               # In-memory caching system
+├── types/               # TypeScript type definitions
+└── utils/               # Helper utilities (dates, formatting)
+
+tests/                   # Test files and benchmarks
+docs/                    # Documentation and API spec
+```
+
+### Testing
+```bash
+# Run all tests
+bun test
+
+# Test a specific tool manually
+bun run test:tool
+
+# Test SSE transport
+bun run test:sse
+
+# Run performance benchmarks
+bun run benchmark
+```
+
+### Adding a New Tool
+
+1. **Create the tool file** in `src/tools/yourFeature.ts`:
+   ```typescript
+   import { SomeResponse } from '../types/mindbody';
+   
+   export async function yourTool(
+     param1: string,
+     param2?: number
+   ): Promise<SomeResponse> {
+     // Implementation
+   }
+   ```
+
+2. **Add types** to `src/types/mindbody.ts` for request/response shapes
+
+3. **Register in `src/index.ts`**:
+   - Import the function
+   - Add to the ListToolsRequest handler
+   - Add a case in CallToolRequest handler
+
+4. **Update documentation**:
+   - `README.md` with tool description
+   - This file with usage examples
+   - Add JSDoc comments
+
+See `CONTRIBUTING.md` for detailed style guidelines and PR process.
+
+## Architecture
+
+### Layers
+
+**MCP Server (`src/index.ts`)** → Handles protocol, routes tool requests  
+**Tools Layer (`src/tools/`)** → Business logic for each domain  
+**API Client (`src/api/client.ts`)** → HTTP requests with automatic retry  
+**Auth (`src/api/auth.ts`)** → OAuth 2.0 token refresh  
+**Cache (`src/cache/`)** → TTL-based in-memory caching  
+**Types (`src/types/`)** → TypeScript definitions  
+
+### Key Design Decisions
+
+- **Bun runtime**: 4x faster cold starts than Node.js, native TS support
+- **Modular tools**: One file per domain, ~200 line limit
+- **Smart caching**: 60 min for static data, 5 min for dynamic
+- **Type safety**: Full TypeScript strict mode
+- **Error handling**: Automatic retry with exponential backoff, user-friendly messages
+
+### Performance Features
+
+- **Automatic retry**: Exponential backoff on 5xx errors
+- **Token refresh**: OAuth tokens refresh before expiry
+- **Connection pooling**: Axios handles reuse
+- **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
+- **Multi-level caching**: Teacher ID → class data → HTTP responses
 
 ## Available Tools (50+ endpoints)
 
@@ -459,15 +592,53 @@ MCP_SERVER_VERSION=2.0.0
 - Check location filters
 - Ensure teacher has scheduled classes
 
-## Future Enhancements
-- AI-powered substitute recommendations
-- Predictive attendance analytics
-- Automated waitlist management
-- Multi-site synchronization
-- Advanced reporting tools
-- Webhook integration for real-time updates
-- Mobile app integration
-- Revenue optimization suggestions
+## Configuration for Development
 
-## Support
-For issues or questions about the MCP server, please check the repository documentation or contact support.
+### Environment Setup
+Create `.env` with Mindbody sandbox credentials:
+```bash
+MINDBODY_API_KEY=your_key
+MINDBODY_SITE_ID=-99
+MINDBODY_SOURCE_NAME=your_source
+MINDBODY_SOURCE_PASSWORD=your_password
+MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
+```
+
+### Running Locally with Claude Desktop
+Update `~/Library/Application Support/Claude/claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "mindbody": {
+      "command": "bun",
+      "args": ["run", "dev"],
+      "cwd": "/path/to/MindbodyMCP",
+      "env": {
+        "MINDBODY_API_KEY": "...",
+        "MINDBODY_SITE_ID": "-99",
+        "MINDBODY_SOURCE_NAME": "...",
+        "MINDBODY_SOURCE_PASSWORD": "..."
+      }
+    }
+  }
+}
+```
+
+## Debugging
+
+### Enable Verbose Logging
+The API client logs all requests and responses. Check console output when running `bun run dev`.
+
+### Common Issues
+- **"Teacher not found"**: Check exact spelling, try first/last name only
+- **"Class is full"**: Check waitlist and alternative times
+- **Auth failures**: Verify environment variables, check token expiry
+- **Rate limits**: Use caching, batch requests, implement backoff
+
+## Future Enhancements
+- Webhook support for real-time updates
+- Advanced reporting and analytics tools
+- Multi-site synchronization
+- AI-powered substitute recommendations
+- Mobile app integration
+- GraphQL API layer
