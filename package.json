@@ -25,9 +25,12 @@
     "url": "https://github.com/vespo92/MindbodyMCP/issues"
   },
   "homepage": "https://github.com/vespo92/MindbodyMCP#readme",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "mindbody-mcp": "dist/index.js"
   },
