@@ -15,8 +15,6 @@ export const enrollmentRouter = router({
           staffIds: z.array(z.number()).optional(),
           programIds: z.array(z.number()).optional(),
           sessionTypeIds: z.array(z.number()).optional(),
-          semesterIds: z.array(z.number()).optional(),
-          courseIds: z.array(z.number()).optional(),
           startDate: z.string().optional(),
           endDate: z.string().optional(),
           limit: z.number().optional(),
@@ -31,11 +29,15 @@ export const enrollmentRouter = router({
     .input(
       z.object({
         clientId: z.string(),
-        classScheduleId: z.number(),
-        enrollFromDate: z.string().optional(),
-        enrollUntilDate: z.string().optional(),
+        classScheduleId: z.number().int().positive(),
+        /** EnrollDateForward: book every session from this date-time on. */
+        enrollDateForward: z.string().optional(),
+        /** EnrollOpen: book only these session date-times. */
+        enrollOpenDates: z.array(z.string()).optional(),
         waitlist: z.boolean().optional(),
+        waitlistEntryId: z.number().int().optional(),
         sendEmail: z.boolean().optional(),
+        test: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

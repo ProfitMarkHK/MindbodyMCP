@@ -1,12 +1,23 @@
-import { mindbodyClient, type IMindbodyClient } from '../api/client';
-import { classCache, SimpleCache } from '../cache/index';
+import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { classCache, SimpleCache } from '../cache/index.js';
+import { getSelectedSite, SiteSelectionError, type SiteSummary } from '../utils/siteTime.js';
 
-// Get site information
+/**
+ * Get site information for THE site this server operates on.
+ *
+ * Multi-site policy (operator decision): when the API key can reach more than
+ * one site, no site data is returned unless a site was chosen, either by the
+ * configured default `MINDBODY_SITE_ID` or by an explicit `siteId` argument.
+ * In that case `site` is absent and `error` + `availableSites` say what to pick.
+ */
 export async function getSitesTool(
+  siteId?: string | number,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<{
-  site: {
+  error?: string;
+  availableSites?: SiteSummary[];
+  site?: {
     id: number;
     name: string;
     description?: string;
@@ -28,17 +39,18 @@ export async function getSitesTool(
     totalLocations: number;
   };
 }> {
-  const cacheKey = 'site-info';
-  let cached = cache.get<any>(cacheKey);
-
-  if (!cached) {
-    cached = await client.get<any>('/site/sites', {
-      params: { Limit: 1 },
-    });
-    cache.set(cacheKey, cached, 60); // Cache for 60 minutes
+  // Shared with getSiteTimeZone: one cached site record (60 minutes), resolved
+  // to exactly one site or refused.
+  let site: any;
+  try {
+    site = await getSelectedSite(client, cache, siteId);
+  } catch (error) {
+    if (error instanceof SiteSelectionError) {
+      return { error: error.message, availableSites: error.availableSites };
+    }
+    throw error;
   }
 
-  const site = cached.Sites[0];
   return {
     site: {
       id: site.Id,
@@ -104,13 +116,11 @@ export async function getLocationsTool(
   let cached = cache.get<any>(cacheKey);
 
   if (!cached) {
-    cached = await client.get<any>('/site/locations', {
-      params: { Limit: 100 },
-    });
+    cached = await fetchAllPages<any>(client, '/site/locations', {}, 'Locations');
     cache.set(cacheKey, cached, 60); // Cache for 60 minutes
   }
 
-  const locations = cached.Locations.map((location: any) => ({
+  const locations = (cached.items ?? cached.Locations ?? []).map((location: any) => ({
     id: location.Id,
     name: location.Name,
     description: location.Description,
@@ -142,7 +152,7 @@ export async function getLocationsTool(
 
   return {
     locations,
-    totalLocations: locations.length,
+    totalLocations: cached.totalResults ?? cached.PaginationResponse?.TotalResults ?? locations.length,
   };
 }
 
@@ -161,15 +171,17 @@ export async function getProgramsTool(
   }>;
   totalPrograms: number;
 }> {
-  const response = await client.get<any>('/site/programs', {
-    params: {
+  const { items: programRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/site/programs',
+    {
       ScheduleType: scheduleType || 'All',
       OnlineOnly: onlineOnly,
-      Limit: 200,
     },
-  });
+    'Programs'
+  );
 
-  const programs = response.Programs.map((program: any) => ({
+  const programs = programRows.map((program: any) => ({
     id: program.Id,
     name: program.Name,
     scheduleType: program.ScheduleType,
@@ -179,7 +191,7 @@ export async function getProgramsTool(
 
   return {
     programs,
-    totalPrograms: programs.length,
+    totalPrograms: totalResults || programs.length,
   };
 }
 
@@ -197,23 +209,29 @@ export async function getResourcesTool(
   }>;
   totalResources: number;
 }> {
-  const response = await client.get<any>('/site/resources', {
-    params: {
+  const { items: resourceRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/site/resources',
+    {
       SessionTypeIds: sessionTypeIds,
       LocationId: locationId,
       StartDateTime: startDateTime,
       EndDateTime: endDateTime,
     },
-  });
+    // docs/openapi.json types this 200 response only as `{"type": "object"}` (no
+    // schema, so no documented list key). 'Resources' is the key the live API
+    // returns; it cannot be checked against the spec until the spec documents it.
+    'Resources'
+  );
 
-  const resources = response.Resources.map((resource: any) => ({
+  const resources = resourceRows.map((resource: any) => ({
     id: resource.Id,
     name: resource.Name,
   }));
 
   return {
     resources,
-    totalResources: resources.length,
+    totalResources: totalResults || resources.length,
   };
 }
 
@@ -238,15 +256,17 @@ export async function getSessionTypesTool(
   }>;
   totalSessionTypes: number;
 }> {
-  const response = await client.get<any>('/site/sessiontypes', {
-    params: {
+  const { items: sessionRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/site/sessiontypes',
+    {
       ProgramIds: programIds,
       OnlineOnly: onlineOnly,
-      Limit: 200,
     },
-  });
+    'SessionTypes'
+  );
 
-  const sessionTypes = response.SessionTypes.map((session: any) => ({
+  const sessionTypes = sessionRows.map((session: any) => ({
     id: session.Id,
     name: session.Name,
     defaultDuration: session.DefaultTimeLength,
@@ -262,7 +282,7 @@ export async function getSessionTypesTool(
 
   return {
     sessionTypes,
-    totalSessionTypes: sessionTypes.length,
+    totalSessionTypes: totalResults || sessionTypes.length,
   };
 }
 
@@ -300,18 +320,20 @@ export async function getStaffTool(
   }>;
   totalStaff: number;
 }> {
-  const response = await client.get<any>('/staff/staff', {
-    params: {
+  const { items: staffMembers, totalResults } = await fetchAllPages<any>(
+    client,
+    '/staff/staff',
+    {
       StaffIds: staffIds,
       Filters: filters,
       SessionTypeIds: sessionTypeIds,
       LocationIds: locationIds,
       StartDateTime: startDateTime,
-      Limit: 200,
     },
-  });
+    'StaffMembers'
+  );
 
-  const staff = response.StaffMembers.map((member: any) => ({
+  const staff = staffMembers.map((member: any) => ({
     id: member.Id,
     firstName: member.FirstName,
     lastName: member.LastName,
@@ -337,7 +359,7 @@ export async function getStaffTool(
 
   return {
     staff,
-    totalStaff: response.PaginationResponse.TotalResults,
+    totalStaff: totalResults,
   };
 }
 

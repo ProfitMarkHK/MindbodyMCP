@@ -1,5 +1,5 @@
 import type { AxiosRequestConfig } from "axios";
-import type { IMindbodyClient } from "../src/api/client";
+import type { IMindbodyClient } from "../src/api/client.js";
 
 interface OpenApiParameter {
   name: string;
@@ -35,12 +35,30 @@ export class SpecValidatingClient implements IMindbodyClient {
     const method = (config.method || "GET").toLowerCase();
     const url = config.url || "";
     this.validate(method, url, config.params);
-    return this.fixture as T;
+    return (method === "get" ? this.page(config.params) : this.fixture) as T;
   }
 
   async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     this.validate("get", url, config?.params);
-    return this.fixture as T;
+    return this.page(config?.params) as T;
+  }
+
+  /**
+   * Honour `Limit`/`Offset` the way Mindbody does, so a paging caller
+   * (fetchAllPages) sees a real end of data instead of the same page forever.
+   * Every top-level array in the fixture is sliced; when the request carries no
+   * `Offset` (a non-paged endpoint) the fixture is returned untouched.
+   */
+  private page(params?: Record<string, unknown>): unknown {
+    const fixture = this.fixture;
+    if (params?.Offset === undefined || fixture === null || typeof fixture !== "object") return fixture;
+    const offset = Number(params.Offset);
+    const limit = params.Limit === undefined ? Infinity : Number(params.Limit);
+    const paged: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(fixture as Record<string, unknown>)) {
+      paged[key] = Array.isArray(value) ? value.slice(offset, offset + limit) : value;
+    }
+    return paged;
   }
 
   async post<T>(url: string, _data?: unknown, _config?: AxiosRequestConfig): Promise<T> {

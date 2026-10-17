@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { SpecValidatingClient, SpecValidationError } from "./spec-validating-client";
-import { getClassesTool, getClassDescriptionsTool, getClassSchedulesTool, getClassVisitsTool } from "../src/tools/classManagement";
-import { SimpleCache } from "../src/cache/index";
+import { SpecValidatingClient, SpecValidationError } from "./spec-validating-client.js";
+import { getClassesTool, getClassDescriptionsTool, getClassSchedulesTool, getClassVisitsTool } from "../src/tools/classManagement.js";
+import { SimpleCache } from "../src/cache/index.js";
 
 const spec = JSON.parse(
   readFileSync(resolve(__dirname, "../docs/openapi.json"), "utf-8")

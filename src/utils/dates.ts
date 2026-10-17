@@ -2,13 +2,22 @@ export function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+/**
+ * UTC calendar date of this process's clock. NOT the site's date: Mindbody dates
+ * are site-local, so tool defaults use `siteDateString` from siteTime.ts.
+ */
 export function getToday(): string {
   return formatDate(new Date());
 }
 
+/**
+ * Calendar arithmetic on a YYYY-MM-DD date. `new Date('YYYY-MM-DD')` is UTC
+ * midnight, so the day is shifted in UTC too; `setDate` (host-local) would land
+ * on the wrong date when the host zone crosses a DST change inside the span.
+ */
 export function addDays(dateStr: string, days: number): string {
   const date = new Date(dateStr);
-  date.setDate(date.getDate() + days);
+  date.setUTCDate(date.getUTCDate() + days);
   return formatDate(date);
 }
 

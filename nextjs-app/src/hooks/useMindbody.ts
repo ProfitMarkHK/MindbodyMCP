@@ -239,8 +239,10 @@ export function useUpdateAppointment() {
 
 export function useEnrollments(params?: {
   locationIds?: number[];
+  classScheduleIds?: number[];
   staffIds?: number[];
   programIds?: number[];
+  sessionTypeIds?: number[];
   startDate?: string;
   endDate?: string;
 }) {
@@ -259,6 +261,7 @@ export function useAddClientToEnrollment() {
   return trpc.enrollment.addClient.useMutation({
     onSuccess: () => {
       utils.enrollment.getAll.invalidate();
+      utils.enrollment.getClientEnrollments.invalidate();
     },
   });
 }

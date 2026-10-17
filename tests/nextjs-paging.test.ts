@@ -295,50 +295,6 @@ describe("nextjs-app MindbodyService reads whole lists through the pager", () =>
     expect(server.calls[0].params).not.toHaveProperty("limit");
   });
 
-  it("getClientEnrollments reads GET /client/clientschedule (Visits) with waitlist entries, class visits only", async () => {
-    const visit = (id: number) => ({
-      Id: id,
-      ClassId: id === 3 ? 0 : 100 + id, // row 3 is an appointment visit: no class
-      Name: `Course ${id}`,
-      StaffId: 9,
-      LocationId: 1,
-      StartDateTime: "2026-10-18T08:00:00",
-      EndDateTime: "2026-10-18T09:00:00",
-      SignedIn: id === 1,
-      LateCancelled: id === 2,
-      Missed: false,
-      WaitlistInfo: id === 4 ? { WaitlistId: 55 } : undefined,
-    });
-    const server = new PagingServer({ total: 5, serverCap: 2, key: "Visits", row: visit });
-    const service = new MindbodyService(server as any);
-    const result = await service.getClientEnrollments("C1", "2026-10-01", "2026-10-31");
-
-    expect(server.calls.every((call) => call.url === "/client/clientschedule")).toBe(true);
-    expect(server.offsets).toEqual([0, 2, 4]);
-    expect(server.calls[0].params).toMatchObject({
-      ClientId: "C1",
-      StartDate: "2026-10-01",
-      EndDate: "2026-10-31",
-      IncludeWaitlistEntries: true,
-      Limit: 200,
-      Offset: 0,
-    });
-    expect(result.total).toBe(4);
-    expect(result.items.map((v) => v.id)).toEqual(["1", "2", "4", "5"]);
-    expect(result.items[0]).toEqual({
-      id: "1",
-      classId: 101,
-      courseName: "Course 1",
-      staffId: 9,
-      locationId: 1,
-      startDate: "2026-10-18T08:00:00",
-      endDate: "2026-10-18T09:00:00",
-      isWaitlisted: false,
-      signedIn: true,
-      lateCancelled: false,
-      missed: false,
-    });
-    expect(result.items[1].lateCancelled).toBe(true);
-    expect(result.items[2].isWaitlisted).toBe(true);
-  });
+  // getEnrollments, addClientToEnrollment and getClientEnrollments are covered
+  // in tests/nextjs-enrollment.test.ts.
 });

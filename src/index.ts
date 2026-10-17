@@ -5,6 +5,9 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
+  type CallToolResult,
+  type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import dotenv from 'dotenv';
 import http from 'http';
@@ -17,7 +20,7 @@ import { fileURLToPath } from 'url';
 dotenv.config();
 
 // Import all tools
-import { getTeacherScheduleTool } from './tools/teacherSchedule';
+import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -27,7 +30,7 @@ import {
   substituteClassTeacherTool,
   getClassSchedulesTool,
   getClassVisitsTool,
-} from './tools/classManagement';
+} from './tools/classManagement.js';
 import {
   getClientsTool,
   addClientTool,
@@ -37,7 +40,7 @@ import {
   addClientArrivalTool,
   getClientAccountBalancesTool,
   getClientContractsTool,
-} from './tools/clientManagement';
+} from './tools/clientManagement.js';
 import {
   getServicesTool,
   getPackagesTool,
@@ -45,7 +48,7 @@ import {
   checkoutShoppingCartTool,
   purchaseContractTool,
   getContractsTool,
-} from './tools/salesManagement';
+} from './tools/salesManagement.js';
 import {
   getSitesTool,
   getLocationsTool,
@@ -54,20 +57,55 @@ import {
   getSessionTypesTool,
   getStaffTool,
   getActivationCodeTool,
-} from './tools/siteManagement';
+} from './tools/siteManagement.js';
 import {
   getStaffAppointmentsTool,
   addAppointmentTool,
   updateAppointmentTool,
+  cancelAppointmentsTool,
+  MAX_CANCELLATIONS_PER_REQUEST,
+  UPDATE_APPOINTMENT_EXECUTE_VALUES,
+  type UpdateAppointmentExecute,
   getBookableItemsTool,
   getActiveSessionTimesTool,
   getScheduleItemsTool,
-} from './tools/appointmentManagement';
+} from './tools/appointmentManagement.js';
 import {
   getEnrollmentsTool,
   addClientToEnrollmentTool,
   getClientEnrollmentsTool,
-} from './tools/enrollmentManagement';
+  cancelEnrollmentVisitsTool,
+  MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST,
+} from './tools/enrollmentManagement.js';
+
+// Usage text. Printed for --help/-h before anything else, so it works with no
+// .env, no credentials and no network.
+const USAGE = `Mindbody MCP Server v2.0
+
+Usage: mindbody-mcp [options]
+
+Options:
+  -t, --transport <stdio|sse>  Transport to serve (default: stdio)
+  -p, --port <number>          Port for the SSE transport (default: 3000)
+      --host <hostname>        Host to bind for SSE (default: 0.0.0.0)
+      --ssl-cert <path>        TLS certificate; requires --ssl-key
+      --ssl-key <path>         TLS private key; requires --ssl-cert
+  -h, --help                   Show this help and exit
+
+See README.md for full setup and tool documentation.`;
+
+/**
+ * True when --help or -h was passed. Note that -h previously aliased --host;
+ * help is the conventional meaning of -h, so --host is now the long form only.
+ */
+function isHelpRequested(): boolean {
+  return process.argv.slice(2).some((arg) => arg === '--help' || arg === '-h');
+}
+
+if (isHelpRequested()) {
+  console.log(USAGE);
+  process.exit(0);
+}
 
 // Validate required environment variables
 const requiredEnvVars = [
@@ -85,21 +123,11 @@ for (const envVar of requiredEnvVars) {
   }
 }
 
-// Create MCP server
-const server = new Server(
-  {
-    name: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
-    version: process.env.MCP_SERVER_VERSION || '2.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
-
-// Register tool handlers
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// Tool handlers live at module scope so that every SSE connection can be given
+// its own freshly configured Server (see createMcpServer). Sharing a single
+// Server instance across concurrent clients leaks per-session state between
+// them - advisory GHSA-345p-7cg4-v4c7.
+const listToolsHandler = async (): Promise<ListToolsResult> => {
   return {
     tools: [
       // Teacher/Staff Tools
@@ -430,6 +458,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     },
                   },
                   quantity: { type: 'number' },
+                  appointmentIds: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    description: 'Existing appointment IDs this item pays for (reconciles)',
+                  },
                 },
               },
             },
@@ -473,8 +506,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // Site & Location Tools
       {
         name: 'getSites',
-        description: 'Get site/business information',
-        inputSchema: { type: 'object', properties: {} },
+        description:
+          'Get site/business information for the site this server operates on. If the API key reaches more than one site, no site data is returned unless MINDBODY_SITE_ID is configured or siteId is passed; the response then lists availableSites instead.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            siteId: { type: 'string', description: 'Explicit site ID to query (overrides the configured default)' },
+          },
+        },
       },
       {
         name: 'getLocations',
@@ -534,9 +573,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             startDate: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
             endDate: { type: 'string', description: 'End date in YYYY-MM-DD format' },
             appointmentIds: { type: 'array', items: { type: 'number' }, description: 'Appointment IDs' },
-            clientIds: { type: 'array', items: { type: 'string' }, description: 'Client IDs' },
+            clientId: { type: 'string', description: 'Client ID (a single client)' },
           },
-          required: ['staffIds'],
+          required: [],
         },
       },
       {
@@ -553,7 +592,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
             notes: { type: 'string', description: 'Appointment notes' },
             staffRequested: { type: 'boolean', description: 'Staff requested' },
-            executePayment: { type: 'boolean', description: 'Execute payment' },
+            executePayment: { type: 'boolean', description: 'Deprecated and ignored: not part of the Mindbody API' },
             sendEmail: { type: 'boolean', description: 'Send confirmation email' },
             applyPayment: { type: 'boolean', description: 'Apply payment' },
           },
@@ -562,7 +601,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'updateAppointment',
-        description: 'Update an appointment',
+        description:
+          'Update an appointment: reschedule, change staff or notes, or apply a status action via execute ' +
+          '(confirm, unconfirm, arrive, unarrive, complete). Does not cancel: use cancelAppointments.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -572,11 +613,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             endDateTime: { type: 'string', description: 'End date/time' },
             resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
             notes: { type: 'string', description: 'Notes' },
-            executePayment: { type: 'boolean', description: 'Execute payment' },
+            execute: {
+              type: 'string',
+              enum: [...UPDATE_APPOINTMENT_EXECUTE_VALUES],
+              description: 'Status action to apply. Cancellation is not accepted here; use cancelAppointments.',
+            },
+            executePayment: { type: 'boolean', description: 'Deprecated and ignored: not part of the Mindbody API' },
             sendEmail: { type: 'boolean', description: 'Send email' },
             applyPayment: { type: 'boolean', description: 'Apply payment' },
           },
           required: ['appointmentId'],
+        },
+      },
+      {
+        name: 'cancelAppointments',
+        description:
+          `Cancel future appointments for a single client. Guards, all checked before anything is cancelled: ` +
+          `one client per call; 1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs, no duplicates; ` +
+          `each appointment must belong to that client, start in the future, and not already be ` +
+          `cancelled, late-cancelled, completed or a no-show. All-or-nothing: if any ID fails a guard, ` +
+          `none are cancelled. Cancellations run one at a time and stop at the first failure.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID who owns every appointment' },
+            appointmentIds: {
+              type: 'array',
+              items: { type: 'number' },
+              description: `1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs to cancel`,
+            },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false)' },
+            sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
+          },
+          required: ['clientId', 'appointmentIds'],
         },
       },
       {
@@ -597,7 +666,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'getActiveSessionTimes',
-        description: 'Get active session availability times',
+        description:
+          'Get the active session start times (the business-hours increments at which sessions can be scheduled; not bookable availability, use getBookableItems for that). Returns activeTimes (all "HH:MM:SS" start times), bySessionType (sessionTypeId with its own activeTimes) and totalActiveTimes',
         inputSchema: {
           type: 'object',
           properties: {
@@ -627,56 +697,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // Enrollment Tools
       {
         name: 'getEnrollments',
-        description: 'Get enrollments (courses, workshops, series)',
+        description: 'List enrollments (courses, workshops, series) scheduled at the site: GET /enrollment/enrollments. Each row is a ClassSchedule whose Program has ScheduleType Enrollment; its `id` is the classScheduleId that addClientToEnrollment takes. Without dates: today through 365 days ahead in the site timezone. Sessions (individual classes) are not included; use getClasses with classScheduleIds for them.',
         inputSchema: {
           type: 'object',
           properties: {
             locationIds: { type: 'array', items: { type: 'number' }, description: 'Location IDs' },
-            classScheduleIds: { type: 'array', items: { type: 'number' }, description: 'Class schedule IDs' },
+            classScheduleIds: { type: 'array', items: { type: 'number' }, description: 'Enrollment (class schedule) IDs' },
             staffIds: { type: 'array', items: { type: 'number' }, description: 'Staff IDs' },
-            programIds: { type: 'array', items: { type: 'number' }, description: 'Program IDs' },
+            programIds: { type: 'array', items: { type: 'number' }, description: 'Program IDs (enrollment programs: getPrograms with scheduleType Enrollment)' },
             sessionTypeIds: { type: 'array', items: { type: 'number' }, description: 'Session type IDs' },
-            semesterIds: { type: 'array', items: { type: 'number' }, description: 'Semester IDs' },
-            courseIds: { type: 'array', items: { type: 'number' }, description: 'Course IDs' },
-            startDate: { type: 'string', description: 'Start date' },
-            endDate: { type: 'string', description: 'End date' },
+            startDate: { type: 'string', description: 'Start date (YYYY-MM-DD); default today at the site' },
+            endDate: { type: 'string', description: 'End date (YYYY-MM-DD); default 365 days after startDate' },
           },
         },
       },
       {
         name: 'addClientToEnrollment',
-        description: 'Register client for course/workshop',
+        description: 'Book one client into one enrollment: POST /enrollment/addclienttoenrollment. With neither enrollDateForward nor enrollOpenDates the client is booked into the whole enrollment. enrollDateForward books every session from that date on (the enrollment must allow date-forward enrollment); enrollOpenDates books only the listed sessions (the enrollment must allow open enrollment). Refuses to book a session the client already holds (Mindbody itself allows double booking). Returns the schedule with its sessions. To move a client to other dates, cancel with cancelEnrollmentVisits and add again; Mindbody has no move operation.',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
-            classScheduleIds: { type: 'array', items: { type: 'number' }, description: 'Class schedule IDs' },
-            enrollmentDateForward: { type: 'string', description: 'Enrollment date forward' },
-            enrollmentDates: { type: 'array', items: { type: 'string' }, description: 'Specific enrollment dates' },
-            enroll: { type: 'boolean', description: 'Enroll (default true)' },
-            waitlist: { type: 'boolean', description: 'Add to waitlist' },
-            sendEmail: { type: 'boolean', description: 'Send confirmation email' },
-            testMode: { type: 'boolean', description: 'Test mode' },
+            classScheduleId: { type: 'number', description: 'Enrollment ID (the `id` from getEnrollments)' },
+            enrollDateForward: { type: 'string', description: 'Enroll from this date on (YYYY-MM-DDTHH:mm:ss, site-local). Takes priority over enrollOpenDates' },
+            enrollOpenDates: { type: 'array', items: { type: 'string' }, description: 'Enroll only for these session date-times (YYYY-MM-DDTHH:mm:ss, site-local)' },
+            waitlist: { type: 'boolean', description: 'Add to the enrollment waitlist instead (default false)' },
+            waitlistEntryId: { type: 'number', description: 'Move this waitlist entry into the enrollment' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
+            test: { type: 'boolean', description: 'Validate only; nothing is committed (default false)' },
           },
-          required: ['clientId', 'classScheduleIds'],
+          required: ['clientId', 'classScheduleId'],
         },
       },
       {
         name: 'getClientEnrollments',
-        description: 'Get client\'s enrollments',
+        description: 'A client\'s enrollments (courses, workshops, series) with every session they hold, grouped by enrollment. Reads the client schedule (GET /client/clientschedule, waitlist entries included) and resolves each visit\'s class (GET /class/classes); a visit counts as an enrollment session only when its class belongs to a Program with ScheduleType Enrollment, so drop-in classes and appointments are excluded. Each session carries the visitId that cancelEnrollmentVisits takes. Without dates: today through 365 days ahead in the site timezone, so past sessions appear only when startDate is given.',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Start date (YYYY-MM-DD); default today at the site' },
+            endDate: { type: 'string', description: 'End date (YYYY-MM-DD); default 365 days after startDate' },
           },
           required: ['clientId'],
         },
       },
+      {
+        name: 'cancelEnrollmentVisits',
+        description: `Cancel 1 to ${MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST} future enrollment sessions for ONE client, by visit ID (from getClientEnrollments), via POST /class/removeclientfromclass. Before anything is written, every visit must be on the client's own schedule, be a booked enrollment session (not an appointment, waitlist entry or drop-in class), start in the future in the site timezone, and not be late-cancelled or signed in (Mindbody reports future unattended enrollment visits as missed, so that flag is not a guard). All-or-nothing: if any visit fails a guard nothing is cancelled and \`rejected\` says why. This is the only way to drop a client from an enrollment; to move them to other dates, cancel then addClientToEnrollment.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID who owns every visit' },
+            visitIds: { type: 'array', items: { type: 'number' }, description: `1 to ${MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST} visit IDs, no duplicates` },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false)' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
+          },
+          required: ['clientId', 'visitIds'],
+        },
+      },
     ],
   };
-});
+};
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult> => {
   const { name, arguments: args } = request.params;
 
   try {
@@ -894,7 +978,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       // Site & Location Tools
       case 'getSites':
-        const sitesResult = await getSitesTool();
+        const sitesResult = await getSitesTool(args.siteId as string | undefined);
         return { content: [{ type: 'text', text: JSON.stringify(sitesResult, null, 2) }] };
       
       case 'getLocations':
@@ -936,7 +1020,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.startDate as string | undefined,
           args.endDate as string | undefined,
           args.appointmentIds as number[] | undefined,
-          args.clientIds as string[] | undefined
+          args.clientId as string | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(appointmentsResult, null, 2) }] };
       
@@ -966,9 +1050,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.notes as string | undefined,
           args.executePayment as boolean | undefined,
           args.sendEmail as boolean | undefined,
-          args.applyPayment as boolean | undefined
+          args.applyPayment as boolean | undefined,
+          args.execute as UpdateAppointmentExecute | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(updateAppointmentResult, null, 2) }] };
+
+      case 'cancelAppointments':
+        const cancelAppointmentsResult = await cancelAppointmentsTool(
+          args.clientId as string,
+          args.appointmentIds as number[],
+          args.lateCancel as boolean | undefined,
+          args.sendEmail as boolean | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(cancelAppointmentsResult, null, 2) }] };
       
       case 'getBookableItems':
         const bookableResult = await getBookableItemsTool(
@@ -1009,29 +1103,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args.staffIds as number[] | undefined,
           args.programIds as number[] | undefined,
           args.sessionTypeIds as number[] | undefined,
-          args.semesterIds as number[] | undefined,
-          args.courseIds as number[] | undefined,
           args.startDate as string | undefined,
           args.endDate as string | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(enrollmentsResult, null, 2) }] };
-      
+
       case 'addClientToEnrollment':
         const addEnrollmentResult = await addClientToEnrollmentTool(
           args.clientId as string,
-          args.classScheduleIds as number[],
-          args.enrollmentDateForward as string | undefined,
-          args.enrollmentDates as string[] | undefined,
-          args.enroll as boolean | undefined,
+          args.classScheduleId as number,
+          args.enrollDateForward as string | undefined,
+          args.enrollOpenDates as string[] | undefined,
           args.waitlist as boolean | undefined,
           args.sendEmail as boolean | undefined,
-          args.testMode as boolean | undefined
+          args.test as boolean | undefined,
+          args.waitlistEntryId as number | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(addEnrollmentResult, null, 2) }] };
-      
+
       case 'getClientEnrollments':
-        const clientEnrollmentsResult = await getClientEnrollmentsTool(args.clientId as string);
+        const clientEnrollmentsResult = await getClientEnrollmentsTool(
+          args.clientId as string,
+          args.startDate as string | undefined,
+          args.endDate as string | undefined
+        );
         return { content: [{ type: 'text', text: JSON.stringify(clientEnrollmentsResult, null, 2) }] };
+
+      case 'cancelEnrollmentVisits':
+        const cancelEnrollmentResult = await cancelEnrollmentVisitsTool(
+          args.clientId as string,
+          args.visitIds as number[],
+          args.lateCancel as boolean | undefined,
+          args.sendEmail as boolean | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(cancelEnrollmentResult, null, 2) }] };
       
       default:
         return {
@@ -1045,7 +1150,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+};
+
+/**
+ * Build a new MCP Server with all tool handlers registered.
+ *
+ * MUST be called once per connection/transport. A single shared Server instance
+ * lets concurrent SSE clients observe each other's session state - see advisory
+ * GHSA-345p-7cg4-v4c7.
+ */
+function createMcpServer(): Server {
+  const server = new Server(
+    {
+      name: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
+      version: process.env.MCP_SERVER_VERSION || '2.0.0',
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
+  server.setRequestHandler(CallToolRequestSchema, callToolHandler);
+
+  return server;
+}
 
 // Parse command-line arguments
 function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string, sslCert?: string, sslKey?: string } {
@@ -1065,7 +1196,8 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
       }
     } else if (arg === '--port' || arg === '-p') {
       port = parseInt(args[++i], 10);
-    } else if (arg === '--host' || arg === '-h') {
+    } else if (arg === '--host') {
+      // -h is help, not host: see isHelpRequested().
       host = args[++i];
     } else if (arg === '--ssl-cert') {
       sslCert = args[++i];
@@ -1094,10 +1226,136 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
   return { transport, port, host, sslCert, sslKey };
 }
 
+// Hosts that are always safe for local development. Note these are compared as
+// full `Host` header values, so they are listed with and without the default
+// port because the SDK does an exact string match on the header.
+const LOCAL_DEV_HOSTS = [
+  'localhost',
+  'localhost:3000',
+  '127.0.0.1',
+  '127.0.0.1:3000',
+  '[::1]',
+  '[::1]:3000',
+];
+
+/**
+ * Enforce DNS rebinding protection at the HTTP layer.
+ *
+ * This exists because the SDK's own `validateRequestHeaders()` is only reachable
+ * from `SSEServerTransport.handlePostMessage()`, which this server never calls -
+ * the POST route below only sets CORS headers. So setting the transport options
+ * alone provides NO protection here. We validate the GET ourselves, which is the
+ * request that actually opens the stream.
+ *
+ * Semantics deliberately mirror the SDK exactly (see validateRequestHeaders in
+ * SDK 1.32.1): Host is compared by exact string match against the allowlist, and
+ * Origin is only checked when an origin allowlist is configured.
+ *
+ * @returns an error string when the request must be rejected, else undefined.
+ */
+function checkDnsRebinding(
+  req: http.IncomingMessage,
+  settings: { enableDnsRebindingProtection: boolean; allowedHosts: string[]; allowedOrigins: string[] }
+): string | undefined {
+  if (!settings.enableDnsRebindingProtection) {
+    return undefined;
+  }
+
+  if (settings.allowedHosts.length > 0) {
+    const hostHeader = req.headers.host;
+    if (!hostHeader || !settings.allowedHosts.includes(hostHeader)) {
+      return `Invalid Host header: ${hostHeader}`;
+    }
+  }
+
+  if (settings.allowedOrigins.length > 0) {
+    const originHeader = req.headers.origin;
+    if (originHeader && !settings.allowedOrigins.includes(originHeader)) {
+      return `Invalid Origin header: ${originHeader}`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve DNS rebinding protection settings for the SSE transport.
+ *
+ * Security posture: protection is ON by default.
+ *
+ * Evidence from SDK 1.32.1 (`dist/esm/server/sse.js`, validateRequestHeaders):
+ *   - if `enableDnsRebindingProtection` is falsy, validation is skipped entirely;
+ *   - the Host header is only checked when `allowedHosts` is non-empty;
+ *   - the Origin header is only checked when `allowedOrigins` is non-empty.
+ *
+ * So enabling protection with an empty allowlist is a no-op (it does not reject
+ * everything), and enabling it with a localhost allowlist keeps local dev
+ * working. We therefore default `allowedHosts` to loopback names rather than
+ * leaving it undefined.
+ */
+function resolveDnsRebindingSettings(port: number): {
+  enableDnsRebindingProtection: boolean;
+  allowedHosts: string[];
+  allowedOrigins: string[];
+} {
+  // Opt-out escape hatch. Anything other than an explicit falsy value keeps
+  // protection enabled.
+  const rawOptOut = process.env.MCP_DNS_REBINDING_PROTECTION?.trim().toLowerCase();
+  const enabled = rawOptOut !== 'false' && rawOptOut !== '0' && rawOptOut !== 'no' && rawOptOut !== 'off';
+
+  const parseList = (value: string | undefined): string[] | undefined => {
+    const items = value
+      ?.split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    return items && items.length > 0 ? items : undefined;
+  };
+
+  const configuredHosts = parseList(process.env.MCP_ALLOWED_HOSTS);
+
+  // When the operator has not set an explicit allowlist, fall back to loopback
+  // plus the port we are actually listening on, so a non-default MCP_PORT in
+  // local development still works with zero configuration.
+  const allowedHosts = configuredHosts ?? [
+    ...LOCAL_DEV_HOSTS,
+    `localhost:${port}`,
+    `127.0.0.1:${port}`,
+    `[::1]:${port}`,
+  ];
+
+  return {
+    enableDnsRebindingProtection: enabled,
+    allowedHosts: enabled ? allowedHosts : [],
+    // Origins are only checked when explicitly configured; the SSE endpoint is
+    // normally driven by native MCP clients that send no Origin header at all.
+    allowedOrigins: parseList(process.env.MCP_ALLOWED_ORIGINS) ?? [],
+  };
+}
+
 // Start SSE server
 async function startSSEServer(config: { port?: number, host?: string, sslCert?: string, sslKey?: string }) {
   const port = config.port || 3000;
   const host = config.host || '0.0.0.0';
+
+  // DNS rebinding protection is enabled by default; see
+  // resolveDnsRebindingSettings() for the SDK-derived rationale.
+  const dnsRebinding = resolveDnsRebindingSettings(port);
+  if (dnsRebinding.enableDnsRebindingProtection) {
+    console.error(`DNS rebinding protection: ON (allowed hosts: ${dnsRebinding.allowedHosts.join(', ')})`);
+    if (!process.env.MCP_ALLOWED_HOSTS && host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+      console.error(
+        `WARNING: bound to ${host} but no MCP_ALLOWED_HOSTS set. ` +
+        'Remote clients will be rejected until you set MCP_ALLOWED_HOSTS to your public hostname, ' +
+        'or set MCP_DNS_REBINDING_PROTECTION=false to disable the check.'
+      );
+    }
+  } else {
+    console.error('DNS rebinding protection: DISABLED (MCP_DNS_REBINDING_PROTECTION opt-out set)');
+  }
+
+  // Every SSE connection gets its own Server instance so that concurrent
+  // sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
+  const activeServers = new Set<Server>();
   
   // Create HTTP/HTTPS server based on SSL configuration
   let httpServer: http.Server | https.Server;
@@ -1182,31 +1440,49 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     
     // SSE endpoint - create transport for each connection
     if (req.url === '/sse' && req.method === 'GET') {
-      // Set SSE headers
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': corsOrigin,
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID',
-        'Access-Control-Allow-Credentials': 'true',
-        'X-Accel-Buffering': 'no' // Disable Nginx buffering
-      });
-      
+      // DNS rebinding protection. Must run before any header is written,
+      // otherwise the response is already committed and we cannot send a 403.
+      const rebindingError = checkDnsRebinding(req, dnsRebinding);
+      if (rebindingError) {
+        console.error(`Rejected SSE connection: ${rebindingError}`);
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end(rebindingError);
+        return;
+      }
+
+      // Set SSE headers.
+      // These must be set via setHeader (not writeHead) because the SDK's
+      // SSEServerTransport.start() issues its own res.writeHead(200, ...) when
+      // connect() runs. Calling writeHead here first throws
+      // ERR_HTTP_HEADERS_SENT and kills the SSE endpoint. setHeader values are
+      // merged into that writeHead, with the SDK's own Content-Type winning.
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
+
       // Create SSE transport for this connection
       const transport = new SSEServerTransport('/sse', res as any, {
-        // DNS rebinding protection options
-        enableDnsRebindingProtection: false, // Set to true in production with proper allowed hosts
-        allowedHosts: process.env.MCP_ALLOWED_HOSTS?.split(','),
-        allowedOrigins: process.env.MCP_ALLOWED_ORIGINS?.split(',')
+        // DNS rebinding protection - ON by default, env-driven.
+        enableDnsRebindingProtection: dnsRebinding.enableDnsRebindingProtection,
+        allowedHosts: dnsRebinding.allowedHosts,
+        allowedOrigins: dnsRebinding.allowedOrigins,
       });
-      
+
+      // Give this connection its own Server with its own tool handlers.
+      const connectionServer = createMcpServer();
+      activeServers.add(connectionServer);
+
       // Connect the server to this transport
-      await server.connect(transport);
-      
+      await connectionServer.connect(transport);
+
       // Handle connection close
       req.on('close', () => {
+        activeServers.delete(connectionServer);
         transport.close();
       });
       
@@ -1240,27 +1516,31 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   });
   
   // Graceful shutdown handling
-  process.on('SIGINT', async () => {
-    console.error('\nShutting down SSE server gracefully...');
-    await server.close();
+  const shutdown = async (signal: string) => {
+    console.error(`\nShutting down SSE server gracefully (${signal})...`);
+    for (const active of activeServers) {
+      try {
+        await active.close();
+      } catch {
+        // Connection already torn down; nothing to do.
+      }
+    }
+    activeServers.clear();
     httpServer.close(() => {
       console.error('Server closed');
       process.exit(0);
     });
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    console.error('\nShutting down SSE server gracefully...');
-    await server.close();
-    httpServer.close(() => {
-      console.error('Server closed');
-      process.exit(0);
-    });
-  });
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
 // Start STDIO server
 async function startStdioServer() {
+  // STDIO is a single-client transport, so one Server instance is correct here.
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Mindbody MCP Server v2.0 started (STDIO) - Complete yoga studio management');

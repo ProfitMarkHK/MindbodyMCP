@@ -15,7 +15,7 @@ import type {
   Appointment, GetAppointmentsParams, AddAppointmentParams, UpdateAppointmentParams,
   BookableItem, GetBookableItemsParams, ScheduleItem, ActiveSessionTime,
   // Enrollment
-  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams, ClientScheduleVisit,
+  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams, ClientEnrollmentVisit, EnrollmentBookingResult,
   // Sales
   Service, Package, Product, Contract,
   GetServicesParams, GetProductsParams, GetContractsParams,
@@ -25,6 +25,75 @@ import type {
   // Utility
   TeacherSchedule, OperationResult, ListResult, VisitSummary,
 } from './types';
+
+// ============================================================================
+// ENROLLMENT HELPERS (module-level; see the ENROLLMENT MANAGEMENT section)
+// ============================================================================
+
+/** Program.ScheduleType value that marks an enrollment (course/workshop/series). */
+export const ENROLLMENT_SCHEDULE_TYPE = 'Enrollment';
+
+/** Default lookahead for getEnrollments and getClientEnrollments, in days. */
+export const DEFAULT_ENROLLMENT_WINDOW_DAYS = 365;
+
+/** GET /class/classes `ClassIds` per request, to keep the query string bounded. */
+const CLASS_LOOKUP_CHUNK = 50;
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+/**
+ * Today through DEFAULT_ENROLLMENT_WINDOW_DAYS as YYYY-MM-DD, unless given.
+ * Uses the host's UTC date like every other default range in this file (the
+ * Next.js client has no site-timezone helper; the MCP server does).
+ */
+function defaultEnrollmentWindow(startDate?: string, endDate?: string): { start: string; end: string } {
+  const start = startDate || new Date().toISOString().split('T')[0];
+  const end =
+    endDate ||
+    new Date(new Date(`${start}T00:00:00Z`).getTime() + DEFAULT_ENROLLMENT_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0];
+  return { start, end };
+}
+
+function staffDisplayName(staff: any): string {
+  if (!staff) return '';
+  return staff.Name || `${staff.FirstName || ''} ${staff.LastName || ''}`.trim();
+}
+
+/** The day names whose `Day<Name>` flag is true on a ClassSchedule. */
+function scheduledDays(schedule: any): string[] {
+  return DAY_NAMES.filter((day) => schedule?.[`Day${day}`] === true);
+}
+
+/** A GET /enrollment/enrollments row (ClassSchedule) as an Enrollment. */
+function mapEnrollment(schedule: any): Enrollment {
+  const description = schedule.ClassDescription;
+  return {
+    id: Number(schedule.Id),
+    name: description?.Name ?? '',
+    description: description?.Description ?? undefined,
+    courseId: schedule.Course?.Id ?? undefined,
+    courseName: schedule.Course?.Name ?? undefined,
+    programId: description?.Program?.Id ?? undefined,
+    programName: description?.Program?.Name ?? undefined,
+    sessionTypeId: description?.SessionType?.Id ?? undefined,
+    sessionTypeName: description?.SessionType?.Name ?? undefined,
+    staffId: schedule.Staff?.Id ?? undefined,
+    staffName: staffDisplayName(schedule.Staff),
+    locationId: schedule.Location?.Id ?? undefined,
+    locationName: schedule.Location?.Name ?? '',
+    semesterId: schedule.SemesterId ?? undefined,
+    startDate: schedule.StartDate,
+    endDate: schedule.EndDate,
+    startTime: schedule.StartTime,
+    endTime: schedule.EndTime,
+    days: scheduledDays(schedule),
+    allowOpenEnrollment: Boolean(schedule.AllowOpenEnrollment),
+    allowDateForwardEnrollment: Boolean(schedule.AllowDateForwardEnrollment),
+    isAvailable: Boolean(schedule.IsAvailable),
+  };
+}
 
 // ============================================================================
 // UNIFIED MINDBODY SERVICE - All API Operations in One Place
@@ -949,8 +1018,25 @@ export class MindbodyService {
   // ENROLLMENT MANAGEMENT
   // ==========================================================================
 
+  // Mindbody has no enrollment record. An enrollment is a ClassSchedule whose
+  // Program has ScheduleType `Enrollment`; each session is a Class on that
+  // schedule; a client's seat in a session is a Visit on the client's schedule.
+  // The visit itself carries no enrollment marker, so a visit is an enrollment
+  // visit when its class's ClassDescription.Program.ScheduleType is
+  // `Enrollment`. This mirrors src/tools/enrollmentManagement.ts in the MCP
+  // server, field for field against docs/openapi.json.
+
+  /**
+   * Enrollments scheduled at the site: GET /enrollment/enrollments (paginated,
+   * list key `Enrollments`, rows are ClassSchedule). Without dates the window
+   * is today through DEFAULT_ENROLLMENT_WINDOW_DAYS; the API's own default is
+   * today only (EndDate defaults to StartDate). The spec's filters are
+   * ClassScheduleIds, LocationIds, StaffIds, ProgramIds, SessionTypeIds,
+   * StartDate and EndDate; there is no semester or course filter here.
+   */
   async getEnrollments(params?: GetEnrollmentsParams): Promise<ListResult<Enrollment>> {
-    const { items: rows } = await fetchAllPages<any>(
+    const { start, end } = defaultEnrollmentWindow(params?.startDate, params?.endDate);
+    const { items: rows, totalResults } = await fetchAllPages<any>(
       this.client,
       '/enrollment/enrollments',
       {
@@ -959,105 +1045,158 @@ export class MindbodyService {
         StaffIds: params?.staffIds,
         ProgramIds: params?.programIds,
         SessionTypeIds: params?.sessionTypeIds,
-        SemesterIds: params?.semesterIds,
-        CourseIds: params?.courseIds,
-        StartDate: params?.startDate,
-        EndDate: params?.endDate,
+        StartDate: start,
+        EndDate: end,
       },
       'Enrollments',
       params?.limit || DEFAULT_PAGE_SIZE
     );
 
-    const enrollments = rows.map((e: any) => ({
-      id: e.Id,
-      locationId: e.Location?.Id,
-      locationName: e.Location?.Name || '',
-      name: e.Name,
-      description: e.Description,
-      staffId: e.Staff?.Id,
-      staffName: e.Staff?.Name,
-      programId: e.Program?.Id,
-      programName: e.Program?.Name,
-      scheduleType: e.ScheduleType,
-      startDate: e.StartDate,
-      endDate: e.EndDate,
-      startTime: e.StartTime,
-      endTime: e.EndTime,
-      dayOfWeek: e.DayOfWeek,
-      maxCapacity: e.MaxCapacity,
-      webCapacity: e.WebCapacity,
-      isAvailable: e.IsAvailable ?? true,
-    }));
-
-    return { items: enrollments, total: enrollments.length };
+    const enrollments = rows.map(mapEnrollment);
+    return { items: enrollments, total: totalResults || enrollments.length };
   }
 
-  async addClientToEnrollment(params: AddClientToEnrollmentParams): Promise<OperationResult> {
+  /**
+   * Book one client into one enrollment: POST /enrollment/addclienttoenrollment.
+   * Body field names follow the spec exactly: ClientId, ClassScheduleId
+   * (singular), EnrollDateForward (one date-time, takes priority), EnrollOpen
+   * (an ARRAY of session date-times), Waitlist, WaitlistEntryId, SendEmail,
+   * Test. With neither date option the client is booked into every session.
+   * The response is the ClassSchedule with its `Classes`; those are returned
+   * as `data.sessions`.
+   */
+  async addClientToEnrollment(params: AddClientToEnrollmentParams): Promise<OperationResult<EnrollmentBookingResult>> {
+    if (!Number.isInteger(params.classScheduleId) || params.classScheduleId <= 0) {
+      return {
+        success: false,
+        message: 'classScheduleId must be a positive integer (the enrollment id from getEnrollments)',
+      };
+    }
     try {
-      await this.client.post<any>('/enrollment/addclienttoenrollment', {
+      const response = await this.client.post<any>('/enrollment/addclienttoenrollment', {
         ClientId: params.clientId,
         ClassScheduleId: params.classScheduleId,
-        EnrollDateForward: params.enrollFromDate,
-        EnrollOpen: params.enrollUntilDate,
-        Waitlist: params.waitlist,
-        SendEmail: params.sendEmail,
+        EnrollDateForward: params.enrollDateForward,
+        EnrollOpen: params.enrollOpenDates,
+        Waitlist: params.waitlist ?? false,
+        WaitlistEntryId: params.waitlistEntryId,
+        SendEmail: params.sendEmail ?? false,
+        Test: params.test ?? false,
       });
-      return { success: true, message: 'Client added to enrollment successfully' };
+      const sessions = (Array.isArray(response?.Classes) ? response.Classes : []).map((cls: any) => ({
+        classId: Number(cls.Id),
+        startDateTime: cls.StartDateTime,
+        endDateTime: cls.EndDateTime,
+        totalBooked: cls.TotalBooked ?? undefined,
+      }));
+      const what = params.waitlist ? 'waitlisted for' : 'enrolled in';
+      return {
+        success: true,
+        data: {
+          classScheduleId: Number(response?.Id ?? params.classScheduleId),
+          name: response?.ClassDescription?.Name ?? undefined,
+          sessions,
+        },
+        message: `${params.test ? '[test] ' : ''}Client ${params.clientId} ${what} enrollment ${params.classScheduleId} (${sessions.length} session(s) on the schedule)`,
+      };
     } catch (error: any) {
       return { success: false, message: error.message || 'Failed to add client to enrollment' };
     }
   }
 
   /**
-   * A client's class and enrollment visits from their schedule.
+   * The sessions a client holds in enrollments (courses, workshops, series).
    *
-   * Reads GET /client/clientschedule (paginated, list key `Visits`). There is
-   * no GET /client/clientenrollments in docs/openapi.json and the live API
-   * answers that path with HTTP 404, so the previous implementation could never
-   * succeed. This mirrors `getClientEnrollmentsTool` in the MCP server.
+   * 1. GET /client/clientschedule (paginated, `Visits`, IncludeWaitlistEntries)
+   *    for the window; rows with no ClassId are appointments and are dropped.
+   *    There is no GET /client/clientenrollments in docs/openapi.json (the
+   *    live API answers 404).
+   * 2. GET /class/classes (paginated, `ClassIds` in chunks) resolves each
+   *    visit's class. A visit is kept only when that class's
+   *    ClassDescription.Program.ScheduleType is `Enrollment`; drop-in class
+   *    visits are left out. Without this step the schedule rows cannot be told
+   *    apart: `VisitType`/`TypeGroup` are the same for both.
    *
-   * What the spec lets this say, and what it does not:
-   *   - A schedule row is a `VisitWithWaitlistInfo`. The spec has no field that
-   *     tells an enrollment session from a drop-in class visit, so every
-   *     class-based visit (`ClassId` > 0) is returned. Appointment visits carry
-   *     no ClassId and are excluded because they are never enrollments.
-   *   - Staff and location NAMES, the enrollment date and per-enrollment totals
-   *     are not in the response, so only `staffId` / `locationId` and the
-   *     per-visit `signedIn` / `lateCancelled` / `missed` flags are returned.
-   *   - `isWaitlisted` is true when the row carries `WaitlistInfo.WaitlistId`.
-   *   - Without dates Mindbody defaults to today only (EndDate defaults to
-   *     today, StartDate to EndDate).
+   * Without dates the window is today through DEFAULT_ENROLLMENT_WINDOW_DAYS,
+   * so past sessions appear only when startDate is given.
    */
-  async getClientEnrollments(clientId: string, startDate?: string, endDate?: string): Promise<ListResult<ClientScheduleVisit>> {
+  async getClientEnrollments(clientId: string, startDate?: string, endDate?: string): Promise<ListResult<ClientEnrollmentVisit>> {
+    const { start, end } = defaultEnrollmentWindow(startDate, endDate);
     const { items: rows } = await fetchAllPages<any>(
       this.client,
       '/client/clientschedule',
       {
         ClientId: clientId,
-        StartDate: startDate,
-        EndDate: endDate,
+        StartDate: start,
+        EndDate: end,
         IncludeWaitlistEntries: true,
       },
       'Visits'
     );
 
-    const visits: ClientScheduleVisit[] = rows
-      .filter((visit: any) => Number(visit?.ClassId) > 0)
-      .map((visit: any) => ({
+    const classVisits = rows.filter((visit: any) => Number(visit?.ClassId) > 0);
+    if (classVisits.length === 0) return { items: [], total: 0 };
+
+    const classes = await this.lookupClassesById(
+      classVisits.map((visit: any) => Number(visit.ClassId)),
+      `${start}T00:00:00`,
+      `${end}T23:59:59`
+    );
+
+    const visits: ClientEnrollmentVisit[] = [];
+    for (const visit of classVisits) {
+      const cls = classes.get(Number(visit.ClassId));
+      if (!cls || cls.ClassDescription?.Program?.ScheduleType !== ENROLLMENT_SCHEDULE_TYPE) continue;
+      const waitlistEntryId = visit.WaitlistInfo?.WaitlistId ?? undefined;
+      visits.push({
         id: String(visit.Id),
         classId: Number(visit.ClassId),
-        courseName: visit.Name ?? '',
-        staffId: visit.StaffId ?? undefined,
-        locationId: visit.LocationId ?? undefined,
-        startDate: visit.StartDateTime,
-        endDate: visit.EndDateTime,
-        isWaitlisted: visit.WaitlistInfo?.WaitlistId != null,
+        classScheduleId: Number(cls.ClassScheduleId),
+        name: cls.ClassDescription?.Name ?? visit.Name ?? '',
+        programId: cls.ClassDescription?.Program?.Id ?? undefined,
+        programName: cls.ClassDescription?.Program?.Name ?? undefined,
+        staffId: cls.Staff?.Id ?? visit.StaffId ?? undefined,
+        staffName: staffDisplayName(cls.Staff),
+        locationId: cls.Location?.Id ?? visit.LocationId ?? undefined,
+        locationName: cls.Location?.Name ?? '',
+        startDateTime: visit.StartDateTime,
+        endDateTime: visit.EndDateTime,
+        isWaitlisted: waitlistEntryId != null,
+        waitlistEntryId,
         signedIn: Boolean(visit.SignedIn),
         lateCancelled: Boolean(visit.LateCancelled),
         missed: Boolean(visit.Missed),
-      }));
+        makeUp: Boolean(visit.MakeUp),
+      });
+    }
+    visits.sort((a, b) => a.startDateTime.localeCompare(b.startDateTime));
 
     return { items: visits, total: visits.length };
+  }
+
+  /**
+   * GET /class/classes for a set of class IDs, in chunks of CLASS_LOOKUP_CHUNK,
+   * every chunk paged. Returns a map ClassId -> raw Class. The dates bound the
+   * lookup the same way the caller bounded the visits.
+   */
+  private async lookupClassesById(classIds: number[], startDateTime: string, endDateTime: string): Promise<Map<number, any>> {
+    const byId = new Map<number, any>();
+    const unique = [...new Set(classIds)];
+    for (let i = 0; i < unique.length; i += CLASS_LOOKUP_CHUNK) {
+      const { items } = await fetchAllPages<any>(
+        this.client,
+        '/class/classes',
+        {
+          ClassIds: unique.slice(i, i + CLASS_LOOKUP_CHUNK),
+          StartDateTime: startDateTime,
+          EndDateTime: endDateTime,
+          HideCanceledClasses: false,
+        },
+        'Classes'
+      );
+      for (const cls of items) byId.set(Number(cls.Id), cls);
+    }
+    return byId;
   }
 
   // ==========================================================================
