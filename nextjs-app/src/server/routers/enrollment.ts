@@ -43,8 +43,14 @@ export const enrollmentRouter = router({
     }),
 
   getClientEnrollments: protectedProcedure
-    .input(z.object({ clientId: z.string() }))
+    .input(
+      z.object({
+        clientId: z.string(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+      })
+    )
     .query(async ({ ctx, input }) => {
-      return ctx.mindbody.getClientEnrollments(input.clientId);
+      return ctx.mindbody.getClientEnrollments(input.clientId, input.startDate, input.endDate);
     }),
 });

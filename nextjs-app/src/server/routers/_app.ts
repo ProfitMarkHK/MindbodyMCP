@@ -14,7 +14,9 @@ import { salesRouter } from './sales';
 export const appRouter = router({
   site: siteRouter,
   staff: staffRouter,
-  client: clientRouter,
+  // `client` is reserved by the tRPC React proxy (it collides with a built-in
+  // method and fails to type-check), so the client router is mounted as `clients`.
+  clients: clientRouter,
   class: classRouter,
   appointment: appointmentRouter,
   enrollment: enrollmentRouter,

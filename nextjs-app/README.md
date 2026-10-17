@@ -165,6 +165,24 @@ const response = await fetch('/api/sync', {
 const status = await fetch('/api/sync').then(r => r.json());
 ```
 
+## Pagination (mandatory)
+
+Every Mindbody GET endpoint that accepts `Limit`/`Offset` in the repo's
+`docs/openapi.json` is read through `fetchAllPages` in
+`src/lib/mindbody/paging.ts`, a port of the MCP server's pager with the same
+contract: `Limit` 200 per page, `Offset` advanced by the rows actually
+received, the walk continues until the server's `TotalResults` is reached, and
+it throws rather than truncate (after 100 pages, or when the server ignores
+`Offset`). The `limit` field on list parameters is the page size, not a cap on
+the result. This is enforced statically by Gate 13 in the repo root
+(`tests/pagination-gate.test.ts`, run by `bun run check`), which scans
+`nextjs-app/src/**/*.ts(x)` as well as `src/`; a single `this.client.get()` to
+a paginated endpoint fails the build. Add new list reads through
+`fetchAllPages(this.client, '/path', params, 'ListKey')`.
+
+The tRPC client router is mounted as `trpc.clients` (not `trpc.client`, which
+collides with a built-in method of the tRPC React proxy).
+
 ## API Reference
 
 ### MindbodyService Methods
@@ -214,7 +232,7 @@ const status = await fetch('/api/sync').then(r => r.json());
 #### Enrollments
 - `getEnrollments(params?)` - Get enrollments
 - `addClientToEnrollment(params)` - Enroll client
-- `getClientEnrollments(clientId)` - Get client's enrollments
+- `getClientEnrollments(clientId, startDate?, endDate?)` - A client's class and enrollment visits from their schedule (`GET /client/clientschedule`, with waitlist status). Mindbody has no `/client/clientenrollments` endpoint (the live API returns 404), and its schedule rows do not distinguish enrollment sessions from drop-in classes, so both appear; appointment visits are excluded. Without dates Mindbody returns today only.
 
 #### Sales
 - `getServices(params?)` - Get services

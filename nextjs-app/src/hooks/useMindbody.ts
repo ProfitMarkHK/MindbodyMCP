@@ -54,59 +54,59 @@ export function useTeacherSchedule(teacherId: number, startDate?: string, endDat
 // ==========================================================================
 
 export function useClients(params?: { searchText?: string; clientIds?: string[]; isProspect?: boolean }) {
-  return trpc.client.getAll.useQuery(params);
+  return trpc.clients.getAll.useQuery(params);
 }
 
 export function useClientById(clientId: string) {
-  return trpc.client.getById.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getById.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useClientSearch(searchText: string) {
-  return trpc.client.search.useQuery({ searchText }, { enabled: searchText.length >= 2 });
+  return trpc.clients.search.useQuery({ searchText }, { enabled: searchText.length >= 2 });
 }
 
 export function useClientVisits(clientId: string, startDate?: string, endDate?: string) {
-  return trpc.client.getVisits.useQuery(
+  return trpc.clients.getVisits.useQuery(
     { clientId, startDate, endDate },
     { enabled: !!clientId }
   );
 }
 
 export function useClientMemberships(clientId: string, locationId?: number) {
-  return trpc.client.getMemberships.useQuery(
+  return trpc.clients.getMemberships.useQuery(
     { clientId, locationId },
     { enabled: !!clientId }
   );
 }
 
 export function useClientContracts(clientId: string) {
-  return trpc.client.getContracts.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getContracts.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useClientAccountBalances(clientId: string) {
-  return trpc.client.getAccountBalances.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getAccountBalances.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useAddClient() {
   const utils = trpc.useUtils();
-  return trpc.client.add.useMutation({
+  return trpc.clients.add.useMutation({
     onSuccess: () => {
-      utils.client.getAll.invalidate();
+      utils.clients.getAll.invalidate();
     },
   });
 }
 
 export function useUpdateClient() {
   const utils = trpc.useUtils();
-  return trpc.client.update.useMutation({
+  return trpc.clients.update.useMutation({
     onSuccess: () => {
-      utils.client.getAll.invalidate();
+      utils.clients.getAll.invalidate();
     },
   });
 }
 
 export function useClientCheckIn() {
-  return trpc.client.checkIn.useMutation();
+  return trpc.clients.checkIn.useMutation();
 }
 
 // ==========================================================================
@@ -247,9 +247,9 @@ export function useEnrollments(params?: {
   return trpc.enrollment.getAll.useQuery(params);
 }
 
-export function useClientEnrollments(clientId: string) {
+export function useClientEnrollments(clientId: string, startDate?: string, endDate?: string) {
   return trpc.enrollment.getClientEnrollments.useQuery(
-    { clientId },
+    { clientId, startDate, endDate },
     { enabled: !!clientId }
   );
 }

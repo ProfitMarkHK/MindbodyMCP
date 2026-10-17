@@ -5,6 +5,8 @@
 // Client & Service
 export { MindbodyApiClient, getMindbodyClient, resetMindbodyClient } from './client';
 export { MindbodyService, getMindbodyService, resetMindbodyService } from './service';
+export { fetchAllPages, DEFAULT_PAGE_SIZE, MAX_PAGES } from './paging';
+export type { PagedGetClient, FetchAllPagesOptions } from './paging';
 
 // Types - Core Entities
 export type {
@@ -61,6 +63,7 @@ export type {
   BookableItem,
   ScheduleItem,
   ActiveSessionTime,
+  ClientScheduleVisit,
   ShoppingCartResult,
   CartItem,
   Payment,

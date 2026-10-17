@@ -1,4 +1,5 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
+import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
 import type {
   // Site & Location
   Site, Location, Resource,
@@ -14,7 +15,7 @@ import type {
   Appointment, GetAppointmentsParams, AddAppointmentParams, UpdateAppointmentParams,
   BookableItem, GetBookableItemsParams, ScheduleItem, ActiveSessionTime,
   // Enrollment
-  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams,
+  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams, ClientScheduleVisit,
   // Sales
   Service, Package, Product, Contract,
   GetServicesParams, GetProductsParams, GetContractsParams,
@@ -41,8 +42,8 @@ export class MindbodyService {
   // ==========================================================================
 
   async getSites(): Promise<ListResult<Site>> {
-    const response = await this.client.get<any>('/site/sites');
-    const sites = response.Sites.map((site: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/sites', {}, 'Sites');
+    const sites = rows.map((site: any) => ({
       id: site.Id,
       name: site.Name,
       description: site.Description,
@@ -59,8 +60,8 @@ export class MindbodyService {
   }
 
   async getLocations(): Promise<ListResult<Location>> {
-    const response = await this.client.get<any>('/site/locations');
-    const locations = response.Locations.map((loc: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/locations', {}, 'Locations');
+    const locations = rows.map((loc: any) => ({
       id: loc.Id,
       name: loc.Name,
       description: loc.Description,
@@ -79,8 +80,8 @@ export class MindbodyService {
   }
 
   async getResources(): Promise<ListResult<Resource>> {
-    const response = await this.client.get<any>('/site/resources');
-    const resources = response.Resources.map((res: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/resources', {}, 'Resources');
+    const resources = rows.map((res: any) => ({
       id: res.Id,
       name: res.Name,
     }));
@@ -100,14 +101,17 @@ export class MindbodyService {
   // ==========================================================================
 
   async getPrograms(params?: GetProgramsParams): Promise<ListResult<Program>> {
-    const response = await this.client.get<any>('/site/programs', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/site/programs',
+      {
         ScheduleType: params?.scheduleType,
         OnlineOnly: params?.onlineOnly,
-        Limit: params?.limit || 200,
       },
-    });
-    const programs = response.Programs.map((prog: any) => ({
+      'Programs',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const programs = rows.map((prog: any) => ({
       id: prog.Id,
       name: prog.Name,
       scheduleType: prog.ScheduleType,
@@ -118,14 +122,17 @@ export class MindbodyService {
   }
 
   async getSessionTypes(params?: GetSessionTypesParams): Promise<ListResult<SessionType>> {
-    const response = await this.client.get<any>('/site/sessiontypes', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/site/sessiontypes',
+      {
         ProgramIds: params?.programIds,
         OnlineOnly: params?.onlineOnly,
-        Limit: params?.limit || 200,
       },
-    });
-    const sessionTypes = response.SessionTypes.map((st: any) => ({
+      'SessionTypes',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const sessionTypes = rows.map((st: any) => ({
       id: st.Id,
       name: st.Name,
       type: st.Type,
@@ -144,18 +151,20 @@ export class MindbodyService {
   // ==========================================================================
 
   async getStaff(params?: GetStaffParams): Promise<ListResult<Staff>> {
-    const response = await this.client.get<any>('/staff/staff', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/staff/staff',
+      {
         StaffIds: params?.staffIds,
         Filters: params?.filters,
         SessionTypeIds: params?.sessionTypeIds,
         LocationIds: params?.locationIds,
         StartDateTime: params?.startDateTime,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const staff = response.StaffMembers.map((s: any) => ({
+      'StaffMembers',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const staff = rows.map((s: any) => ({
       id: s.Id,
       firstName: s.FirstName,
       lastName: s.LastName,
@@ -168,7 +177,7 @@ export class MindbodyService {
       appointmentTrn: s.AppointmentTrn,
       independentContractor: s.IndependentContractor,
     }));
-    return { items: staff, total: response.PaginationResponse?.TotalResults || staff.length };
+    return { items: staff, total: totalResults };
   }
 
   async getStaffById(staffId: number): Promise<Staff | null> {
@@ -181,17 +190,19 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClients(params?: GetClientsParams): Promise<ListResult<Client>> {
-    const response = await this.client.get<any>('/client/clients', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/client/clients',
+      {
         SearchText: params?.searchText,
         ClientIds: params?.clientIds,
         LastModifiedDate: params?.lastModifiedDate,
         IsProspect: params?.isProspect,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const clients = response.Clients.map((c: any) => ({
+      'Clients',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const clients = rows.map((c: any) => ({
       id: c.Id,
       firstName: c.FirstName,
       lastName: c.LastName,
@@ -228,7 +239,7 @@ export class MindbodyService {
       creationDate: c.CreationDate,
       membershipIcon: c.MembershipIcon,
     }));
-    return { items: clients, total: response.PaginationResponse?.TotalResults || clients.length };
+    return { items: clients, total: totalResults };
   }
 
   async getClientById(clientId: string): Promise<Client | null> {
@@ -322,16 +333,18 @@ export class MindbodyService {
     const defaultStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const defaultEnd = new Date().toISOString().split('T')[0];
 
-    const response = await this.client.get<any>('/client/clientvisits', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientvisits',
+      {
         ClientId: params.clientId,
         StartDate: params.startDate || defaultStart,
         EndDate: params.endDate || defaultEnd,
-        Limit: 200,
       },
-    });
+      'Visits'
+    );
 
-    const visits: ClientVisit[] = response.Visits.map((v: any) => ({
+    const visits: ClientVisit[] = rows.map((v: any) => ({
       id: v.Id,
       classId: v.ClassId,
       className: v.Name,
@@ -368,10 +381,13 @@ export class MindbodyService {
   }
 
   async getClientMemberships(clientId: string, locationId?: number): Promise<ListResult<ClientMembership>> {
-    const response = await this.client.get<any>('/client/activeclientmemberships', {
-      params: { ClientId: clientId, LocationId: locationId },
-    });
-    const memberships = response.ClientMemberships.map((m: any) => ({
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/activeclientmemberships',
+      { ClientId: clientId, LocationId: locationId },
+      'ClientMemberships'
+    );
+    const memberships = rows.map((m: any) => ({
       id: m.Id,
       name: m.Name,
       remainingClasses: m.Remaining,
@@ -387,10 +403,13 @@ export class MindbodyService {
   }
 
   async getClientContracts(clientId: string): Promise<ListResult<ClientContract>> {
-    const response = await this.client.get<any>('/client/clientcontracts', {
-      params: { ClientId: clientId },
-    });
-    const contracts = response.Contracts.map((c: any) => ({
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientcontracts',
+      { ClientId: clientId },
+      'Contracts'
+    );
+    const contracts = rows.map((c: any) => ({
       id: c.Id,
       name: c.ContractName,
       description: c.Description,
@@ -406,10 +425,13 @@ export class MindbodyService {
   }
 
   async getClientAccountBalances(clientId: string): Promise<{ accountBalance: number; creditCardBalances: Array<{ amount: number; cardType: string; lastFour: string }> }> {
-    const response = await this.client.get<any>('/client/clientaccountbalances', {
-      params: { ClientIds: [clientId] },
-    });
-    const client = response.Clients[0];
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientaccountbalances',
+      { ClientIds: [clientId] },
+      'Clients'
+    );
+    const client = rows[0];
     return {
       accountBalance: client?.AccountBalance || 0,
       creditCardBalances: client?.ClientCreditCards?.map((card: any) => ({
@@ -441,19 +463,21 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClasses(params?: GetClassesParams): Promise<ListResult<Class>> {
-    const response = await this.client.get<any>('/class/classes', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/class/classes',
+      {
         ClassDescriptionIds: params?.classDescriptionIds,
         ClassIds: params?.classIds,
         StaffIds: params?.staffIds,
         StartDateTime: params?.startDateTime,
         EndDateTime: params?.endDateTime,
         LocationIds: params?.locationIds,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const classes = response.Classes.map((c: any) => ({
+      'Classes',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const classes = rows.map((c: any) => ({
       id: c.Id,
       classScheduleId: c.ClassScheduleId,
       location: {
@@ -489,7 +513,7 @@ export class MindbodyService {
       totalBookedWaitlist: c.TotalBookedWaitlist,
       virtualStreamLink: c.VirtualStreamLink,
     }));
-    return { items: classes, total: response.PaginationResponse?.TotalResults || classes.length };
+    return { items: classes, total: totalResults };
   }
 
   async getClassById(classId: number): Promise<Class | null> {
@@ -498,8 +522,8 @@ export class MindbodyService {
   }
 
   async getClassDescriptions(): Promise<ListResult<ClassDescription>> {
-    const response = await this.client.get<any>('/class/classdescriptions');
-    const descriptions = response.ClassDescriptions.map((cd: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/class/classdescriptions', {}, 'ClassDescriptions');
+    const descriptions = rows.map((cd: any) => ({
       id: cd.Id,
       name: cd.Name,
       description: cd.Description,
@@ -512,17 +536,19 @@ export class MindbodyService {
   }
 
   async getClassSchedules(params?: { locationIds?: number[]; classDescriptionIds?: number[]; staffIds?: number[]; startDate?: string; endDate?: string }): Promise<ListResult<ClassSchedule>> {
-    const response = await this.client.get<any>('/class/classschedules', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/class/classschedules',
+      {
         LocationIds: params?.locationIds,
         ClassDescriptionIds: params?.classDescriptionIds,
         StaffIds: params?.staffIds,
         StartDate: params?.startDate,
         EndDate: params?.endDate,
-        Limit: 200,
       },
-    });
-    const schedules = response.ClassSchedules.map((cs: any) => ({
+      'ClassSchedules'
+    );
+    const schedules = rows.map((cs: any) => ({
       id: cs.Id,
       locationId: cs.Location?.Id,
       classDescriptionId: cs.ClassDescription?.Id,
@@ -579,15 +605,17 @@ export class MindbodyService {
   }
 
   async getWaitlistEntries(classIds?: number[], clientIds?: string[], hidePastEntries?: boolean): Promise<ListResult<WaitlistEntry>> {
-    const response = await this.client.get<any>('/class/waitlistentries', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/class/waitlistentries',
+      {
         ClassIds: classIds,
         ClientIds: clientIds,
         HidePastEntries: hidePastEntries,
-        Limit: 200,
       },
-    });
-    const entries = response.WaitlistEntries.map((entry: any) => ({
+      'WaitlistEntries'
+    );
+    const entries = rows.map((entry: any) => ({
       id: entry.Id,
       classId: entry.ClassId,
       clientId: entry.Client?.Id,
@@ -685,19 +713,22 @@ export class MindbodyService {
     const defaultStart = new Date().toISOString().split('T')[0];
     const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    const response = await this.client.get<any>('/appointment/staffappointments', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/staffappointments',
+      {
         StaffIds: params.staffIds,
         LocationIds: params.locationIds,
         StartDate: params.startDate || defaultStart,
         EndDate: params.endDate || defaultEnd,
         AppointmentIds: params.appointmentIds,
         ClientIds: params.clientIds,
-        Limit: params.limit || 200,
       },
-    });
+      'Appointments',
+      params.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const appointments = response.Appointments.map((apt: any) => ({
+    const appointments = rows.map((apt: any) => ({
       id: apt.Id,
       status: apt.Status,
       staffId: apt.StaffId || apt.Staff?.Id,
@@ -721,7 +752,7 @@ export class MindbodyService {
       resources: apt.Resources?.map((r: any) => ({ id: r.Id, name: r.Name })),
     }));
 
-    return { items: appointments, total: response.PaginationResponse?.TotalResults || appointments.length };
+    return { items: appointments, total: totalResults };
   }
 
   async addAppointment(params: AddAppointmentParams): Promise<OperationResult<Appointment>> {
@@ -806,20 +837,24 @@ export class MindbodyService {
     const defaultStart = new Date().toISOString().split('T')[0];
     const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    const response = await this.client.get<any>('/appointment/bookableitems', {
-      params: {
+    // The spec documents `Availabilities` as the one list key of
+    // GetBookableItemsResponse; `BookableItems` is not in docs/openapi.json.
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/bookableitems',
+      {
         SessionTypeIds: params.sessionTypeIds,
         LocationIds: params.locationIds,
         StaffIds: params.staffIds,
         StartDate: params.startDate || defaultStart,
         EndDate: params.endDate || defaultEnd,
         AppointmentId: params.appointmentId,
-        Limit: 200,
       },
-    });
+      'Availabilities'
+    );
 
-    const items = response.BookableItems.map((item: any) => ({
-      scheduledItemId: item.ScheduledItemId,
+    const items = rows.map((item: any) => ({
+      scheduledItemId: item.Id ?? item.ScheduledItemId,
       staffId: item.StaffId || item.Staff?.Id,
       staffName: item.Staff?.Name || `${item.Staff?.FirstName || ''} ${item.Staff?.LastName || ''}`.trim(),
       sessionTypeId: item.SessionTypeId || item.SessionType?.Id,
@@ -839,18 +874,20 @@ export class MindbodyService {
     const defaultStart = new Date().toISOString().split('T')[0];
     const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    const response = await this.client.get<any>('/appointment/scheduleitems', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/scheduleitems',
+      {
         LocationIds: params?.locationIds,
         StaffIds: params?.staffIds,
         StartDate: params?.startDate || defaultStart,
         EndDate: params?.endDate || defaultEnd,
         IgnorePrepFinishBuffer: params?.ignorePrepFinishBuffer,
-        Limit: 200,
       },
-    });
+      'StaffMembers'
+    );
 
-    const scheduleItems = response.StaffMembers.flatMap((staff: any) =>
+    const scheduleItems = rows.flatMap((staff: any) =>
       staff.Appointments.map((apt: any) => ({
         id: apt.Id,
         isAvailable: apt.IsAvailable,
@@ -870,17 +907,20 @@ export class MindbodyService {
   }
 
   async getActiveSessionTimes(params?: { scheduleType?: 'All' | 'Class' | 'Enrollment' | 'Appointment'; sessionTypeIds?: number[]; startTime?: string; endTime?: string; days?: string[] }): Promise<ListResult<ActiveSessionTime>> {
-    const response = await this.client.get<any>('/appointment/activesessiontimes', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/activesessiontimes',
+      {
         ScheduleType: params?.scheduleType || 'All',
         SessionTypeIds: params?.sessionTypeIds,
         StartTime: params?.startTime,
         EndTime: params?.endTime,
         Days: params?.days,
       },
-    });
+      'ActiveSessionTimes'
+    );
 
-    const activeTimes = response.ActiveSessionTimes.map((time: any) => {
+    const activeTimes = rows.map((time: any) => {
       const result: ActiveSessionTime = {
         id: time.Id,
         sessionTypeId: time.SessionTypeId || time.SessionType?.Id,
@@ -910,8 +950,10 @@ export class MindbodyService {
   // ==========================================================================
 
   async getEnrollments(params?: GetEnrollmentsParams): Promise<ListResult<Enrollment>> {
-    const response = await this.client.get<any>('/enrollment/enrollments', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/enrollment/enrollments',
+      {
         LocationIds: params?.locationIds,
         ClassScheduleIds: params?.classScheduleIds,
         StaffIds: params?.staffIds,
@@ -921,11 +963,12 @@ export class MindbodyService {
         CourseIds: params?.courseIds,
         StartDate: params?.startDate,
         EndDate: params?.endDate,
-        Limit: params?.limit || 200,
       },
-    });
+      'Enrollments',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const enrollments = response.Enrollments.map((e: any) => ({
+    const enrollments = rows.map((e: any) => ({
       id: e.Id,
       locationId: e.Location?.Id,
       locationName: e.Location?.Name || '',
@@ -965,25 +1008,56 @@ export class MindbodyService {
     }
   }
 
-  async getClientEnrollments(clientId: string): Promise<ListResult<Enrollment>> {
-    const response = await this.client.get<any>('/client/clientenrollments', {
-      params: { ClientId: clientId },
-    });
+  /**
+   * A client's class and enrollment visits from their schedule.
+   *
+   * Reads GET /client/clientschedule (paginated, list key `Visits`). There is
+   * no GET /client/clientenrollments in docs/openapi.json and the live API
+   * answers that path with HTTP 404, so the previous implementation could never
+   * succeed. This mirrors `getClientEnrollmentsTool` in the MCP server.
+   *
+   * What the spec lets this say, and what it does not:
+   *   - A schedule row is a `VisitWithWaitlistInfo`. The spec has no field that
+   *     tells an enrollment session from a drop-in class visit, so every
+   *     class-based visit (`ClassId` > 0) is returned. Appointment visits carry
+   *     no ClassId and are excluded because they are never enrollments.
+   *   - Staff and location NAMES, the enrollment date and per-enrollment totals
+   *     are not in the response, so only `staffId` / `locationId` and the
+   *     per-visit `signedIn` / `lateCancelled` / `missed` flags are returned.
+   *   - `isWaitlisted` is true when the row carries `WaitlistInfo.WaitlistId`.
+   *   - Without dates Mindbody defaults to today only (EndDate defaults to
+   *     today, StartDate to EndDate).
+   */
+  async getClientEnrollments(clientId: string, startDate?: string, endDate?: string): Promise<ListResult<ClientScheduleVisit>> {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientschedule',
+      {
+        ClientId: clientId,
+        StartDate: startDate,
+        EndDate: endDate,
+        IncludeWaitlistEntries: true,
+      },
+      'Visits'
+    );
 
-    const enrollments = response.Enrollments?.map((e: any) => ({
-      id: e.Id,
-      locationId: e.Location?.Id,
-      locationName: e.Location?.Name || '',
-      name: e.Name,
-      description: e.Description,
-      staffId: e.Staff?.Id,
-      staffName: e.Staff?.Name,
-      startDate: e.StartDate,
-      endDate: e.EndDate,
-      isAvailable: true,
-    })) || [];
+    const visits: ClientScheduleVisit[] = rows
+      .filter((visit: any) => Number(visit?.ClassId) > 0)
+      .map((visit: any) => ({
+        id: String(visit.Id),
+        classId: Number(visit.ClassId),
+        courseName: visit.Name ?? '',
+        staffId: visit.StaffId ?? undefined,
+        locationId: visit.LocationId ?? undefined,
+        startDate: visit.StartDateTime,
+        endDate: visit.EndDateTime,
+        isWaitlisted: visit.WaitlistInfo?.WaitlistId != null,
+        signedIn: Boolean(visit.SignedIn),
+        lateCancelled: Boolean(visit.LateCancelled),
+        missed: Boolean(visit.Missed),
+      }));
 
-    return { items: enrollments, total: enrollments.length };
+    return { items: visits, total: visits.length };
   }
 
   // ==========================================================================
@@ -991,18 +1065,21 @@ export class MindbodyService {
   // ==========================================================================
 
   async getServices(params?: GetServicesParams): Promise<ListResult<Service>> {
-    const response = await this.client.get<any>('/sale/services', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/services',
+      {
         ProgramIds: params?.programIds,
         SessionTypeIds: params?.sessionTypeIds,
         LocationId: params?.locationId,
         ClassId: params?.classId,
         HideRelatedPrograms: params?.hideRelatedPrograms,
-        Limit: params?.limit || 200,
       },
-    });
+      'Services',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const services = response.Services.map((s: any) => ({
+    const services = rows.map((s: any) => ({
       id: s.Id,
       name: s.Name,
       price: s.Price,
@@ -1023,15 +1100,17 @@ export class MindbodyService {
   }
 
   async getPackages(locationId?: number, classScheduleId?: number): Promise<ListResult<Package>> {
-    const response = await this.client.get<any>('/sale/packages', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/packages',
+      {
         LocationId: locationId,
         ClassScheduleId: classScheduleId,
-        Limit: 200,
       },
-    });
+      'Packages'
+    );
 
-    const packages = response.Packages.map((p: any) => ({
+    const packages = rows.map((p: any) => ({
       id: p.Id,
       name: p.Name,
       classCount: p.Count,
@@ -1048,18 +1127,21 @@ export class MindbodyService {
   }
 
   async getProducts(params?: GetProductsParams): Promise<ListResult<Product>> {
-    const response = await this.client.get<any>('/sale/products', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/sale/products',
+      {
         ProductIds: params?.productIds,
         SearchText: params?.searchText,
         CategoryIds: params?.categoryIds,
         SubCategoryIds: params?.subCategoryIds,
         SellOnline: params?.sellOnline,
-        Limit: params?.limit || 200,
       },
-    });
+      'Products',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const products = response.Products.map((p: any) => ({
+    const products = rows.map((p: any) => ({
       id: p.Id,
       name: p.Name,
       price: p.Price,
@@ -1074,20 +1156,22 @@ export class MindbodyService {
       sellOnline: p.SellOnline,
     }));
 
-    return { items: products, total: response.PaginationResponse?.TotalResults || products.length };
+    return { items: products, total: totalResults };
   }
 
   async getContracts(params?: GetContractsParams): Promise<ListResult<Contract>> {
-    const response = await this.client.get<any>('/sale/contracts', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/contracts',
+      {
         ContractIds: params?.contractIds,
         SoldOnline: params?.soldOnline,
         LocationId: params?.locationId,
-        Limit: 200,
       },
-    });
+      'Contracts'
+    );
 
-    const contracts = response.Contracts.map((c: any) => ({
+    const contracts = rows.map((c: any) => ({
       id: c.Id,
       name: c.Name,
       description: c.Description,

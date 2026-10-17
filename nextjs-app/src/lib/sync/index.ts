@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { MindbodyService, getMindbodyService } from '@/lib/mindbody/service';
 
 // ============================================================================
@@ -555,7 +555,7 @@ export class MindbodySyncService {
           active: pkg.active,
           productId: pkg.productId,
           sellOnline: pkg.sellOnline,
-          services: pkg.services || null,
+          services: pkg.services ?? Prisma.JsonNull,
           syncedAt: new Date(),
         };
 

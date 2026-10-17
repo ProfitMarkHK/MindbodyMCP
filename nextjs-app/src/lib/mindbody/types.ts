@@ -450,6 +450,25 @@ export interface Enrollment {
   isAvailable: boolean;
 }
 
+/**
+ * One row of a client's schedule (GET /client/clientschedule), as returned by
+ * MindbodyService.getClientEnrollments. See that method for what the spec does
+ * and does not let this carry.
+ */
+export interface ClientScheduleVisit {
+  id: string;
+  classId: number;
+  courseName: string;
+  staffId?: number;
+  locationId?: number;
+  startDate: string;
+  endDate: string;
+  isWaitlisted: boolean;
+  signedIn: boolean;
+  lateCancelled: boolean;
+  missed: boolean;
+}
+
 export interface GetEnrollmentsParams {
   locationIds?: number[];
   classScheduleIds?: number[];
@@ -572,7 +591,8 @@ export interface CartItem {
   item: {
     type: 'Service' | 'Product' | 'Package' | 'Tip';
     metadata: {
-      id: number;
+      /** Service, Product or Package ID. Not used for a Tip, which carries `amount`. */
+      id?: number;
       name?: string;
       amount?: number;
     };
