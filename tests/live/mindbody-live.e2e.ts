@@ -1337,6 +1337,7 @@ describe('live tier — appointments', () => {
     const originalStart: string = before.startDateTime ?? createdAppointmentStart;
 
     const updated = await callTool('updateAppointment', {
+      clientId: createdClientId,
       appointmentId: createdAppointmentId,
       startDateTime: discovered.bookableStartAlt,
       sendEmail: false,
@@ -1360,6 +1361,7 @@ describe('live tier — appointments', () => {
     if (!requireCreatedAppointment('updateAppointment execute=arrive marks the appointment Arrived')) return;
 
     const arrived = await callTool('updateAppointment', {
+      clientId: createdClientId,
       appointmentId: createdAppointmentId,
       execute: 'arrive',
       sendEmail: false,
@@ -1667,6 +1669,7 @@ describe('live tier — appointment cleanup', () => {
     );
 
     const updated = await callTool('updateAppointment', {
+      clientId: createdClientId,
       appointmentId: createdAppointmentId,
       notes: `LEFTOVER live-e2e ${RUN_TOKEN} — ${why}`,
       sendEmail: false,
