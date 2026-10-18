@@ -134,20 +134,34 @@ interface StaffAppointmentsResponse {
 
 Updates an existing appointment: reschedule it (new `startDateTime`), change staff or notes, or apply one status action with `execute`. It does not cancel. Use `cancelAppointments`.
 
+Ownership, status and timing are verified before anything is written, and none of the guards can be skipped by omitting an argument. An appointment that fails a guard is reported in `rejected` and nothing is sent.
+
 #### Parameters
 
 | Parameter | Type | Required | Description | Default |
 |-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client ID who owns the appointment | - |
 | `appointmentId` | number | Yes | Appointment ID | - |
 | `startDateTime` | string | No | New start date/time (reschedule) | - |
 | `endDateTime` | string | No | New end date/time | - |
 | `staffId` | number | No | Change staff | - |
 | `resourceIds` | number[] | No | Resource IDs | - |
 | `notes` | string | No | Notes | - |
-| `execute` | string | No | One of `confirm`, `unconfirm`, `arrive`, `unarrive`, `complete`. `cancel` and `latecancel` are refused client-side with no API call. | - |
+| `execute` | string | No | One of `confirm`, `unconfirm`, `arrive`, `unarrive`, `complete`. `cancel` and `latecancel` are refused client-side with no API call. `complete` additionally requires the appointment to have started. | - |
 | `executePayment` | boolean | No | Deprecated and ignored: not part of the Mindbody API | - |
 | `sendEmail` | boolean | No | Send email | - |
-| `applyPayment` | boolean | No | Apply payment | - |
+| `applyPayment` | boolean | No | Apply a current applicable client service from that client's account. Refused alongside a reschedule, and on an appointment that has already taken place. | - |
+
+#### Guards
+
+| Guard | Rule |
+|-------|------|
+| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer. No API call is made if either fails. |
+| Ownership | The appointment must belong to `clientId`, looked up with `GET /appointment/staffappointments`. Someone else's appointment — or one outside the window, one year back through two years ahead — is reported as `not found for this client`, which never names the real owner. |
+| Terminal status | A `Cancelled` or `LateCancelled` appointment is final: no update of any kind is accepted. |
+| Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment` and no reschedule. Notes, staff and resources are still accepted. |
+| Timing | `execute: complete` requires the appointment to have started, compared in the site's timezone. `arrive` and `unarrive` are not time-gated, because arrival is recorded against a booked appointment. |
+| Timezone | If the site timezone cannot be resolved, nothing is looked up and nothing is written. |
 
 #### Response
 

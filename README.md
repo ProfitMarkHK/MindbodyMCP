@@ -185,7 +185,7 @@ The server provides 41 tools across 6 categories:
 ### 📆 Appointments
 - `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client
 - `addAppointment` - Book appointments
-- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel.
+- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `getBookableItems` - Find available slots
 - `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that

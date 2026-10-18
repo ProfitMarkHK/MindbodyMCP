@@ -602,11 +602,17 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       {
         name: 'updateAppointment',
         description:
-          'Update an appointment: reschedule, change staff or notes, or apply a status action via execute ' +
-          '(confirm, unconfirm, arrive, unarrive, complete). Does not cancel: use cancelAppointments.',
+          "Update ONE appointment belonging to ONE client: reschedule, change staff, notes or resources, or apply a " +
+          `status action via execute (confirm, unconfirm, arrive, unarrive, complete). Guards, all checked before ` +
+          `anything is written: clientId and appointmentId must both be given; the appointment must belong to that ` +
+          `client, else "not found for this client"; a cancelled appointment is final and accepts no update; a ` +
+          `completed or no-show one takes no status action, no payment and no reschedule (notes are still fine); ` +
+          `execute complete needs the appointment to have started, in the site's timezone. applyPayment may not be ` +
+          `combined with a reschedule. Does not cancel: use cancelAppointments.`,
         inputSchema: {
           type: 'object',
           properties: {
+            clientId: { type: 'string', description: 'Client ID who owns the appointment; verified before any write' },
             appointmentId: { type: 'number', description: 'Appointment ID' },
             staffId: { type: 'number', description: 'Staff ID' },
             startDateTime: { type: 'string', description: 'Start date/time' },
@@ -616,13 +622,20 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             execute: {
               type: 'string',
               enum: [...UPDATE_APPOINTMENT_EXECUTE_VALUES],
-              description: 'Status action to apply. Cancellation is not accepted here; use cancelAppointments.',
+              description:
+                'Status action to apply. Cancellation is not accepted here; use cancelAppointments. ' +
+                'complete additionally requires the appointment to have started.',
             },
             executePayment: { type: 'boolean', description: 'Deprecated and ignored: not part of the Mindbody API' },
             sendEmail: { type: 'boolean', description: 'Send email' },
-            applyPayment: { type: 'boolean', description: 'Apply payment' },
+            applyPayment: {
+              type: 'boolean',
+              description:
+                "Apply a current applicable client service from the client's account. Refused alongside a " +
+                'reschedule, and on an appointment that has already taken place.',
+            },
           },
-          required: ['appointmentId'],
+          required: ['clientId', 'appointmentId'],
         },
       },
       {
@@ -1042,6 +1055,7 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       
       case 'updateAppointment':
         const updateAppointmentResult = await updateAppointmentTool(
+          args.clientId as string,
           args.appointmentId as number,
           args.staffId as number | undefined,
           args.startDateTime as string | undefined,

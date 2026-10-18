@@ -2,7 +2,6 @@ import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/clie
 import { classCache, SimpleCache } from '../cache/index.js';
 import {
   getSiteTimeZone,
-  siteDateString,
   siteDateStringPlusDays,
   siteLocalToEpochMs,
   withDefaultDates,
@@ -156,6 +155,115 @@ export async function addAppointmentTool(
   }
 }
 
+// Appointment ownership verification
+//
+// updateAppointment and cancelAppointments both act on ONE appointment that must
+// belong to ONE client, so they share one lookup and one comparison. A row whose
+// owner cannot be read, or whose owner is not the requested client, is reported
+// exactly as a row that was never returned, so a guessed appointment id cannot
+// be used to discover whose an appointment is.
+
+/** How far the shared lookup reaches into the past, in site-calendar days. */
+const OWNERSHIP_LOOKBACK_DAYS = 365;
+/** How far the shared lookup reaches into the future, in site-calendar days. */
+const OWNERSHIP_LOOKAHEAD_DAYS = 365 * 2;
+
+/**
+ * Statuses that settle an appointment's attendance. A completed or no-show
+ * appointment is over: it can still be annotated, but no status action, no
+ * payment and no reschedule may be applied to it.
+ */
+const ATTENDANCE_FINAL_STATUSES = new Set(['Completed', 'NoShow']);
+
+/**
+ * Statuses after which an appointment is closed to every write, notes included.
+ * Nothing in this server reverses a cancellation, so writing to a cancelled
+ * appointment could only corrupt history or resurrect attendance.
+ */
+const TERMINAL_STATUSES = new Set(['Cancelled', 'LateCancelled']);
+
+/** Statuses from which a cancellation is refused. */
+const NON_CANCELLABLE_STATUSES = new Set([...TERMINAL_STATUSES, ...ATTENDANCE_FINAL_STATUSES]);
+
+const NOT_FOUND_FOR_CLIENT = 'not found for this client';
+const AMBIGUOUS_LOOKUP = 'appointment returned more than once by lookup; refusing ambiguous data';
+
+/** One discriminated shape, so `if (!result.ok)` narrows for the compiler too. */
+interface OwnershipLookup {
+  ok: boolean;
+  timeZone?: string;
+  rows?: any[];
+  kind?: 'site timezone' | 'lookup';
+  reason?: string;
+}
+
+/**
+ * Read the appointments with these ids AS THIS CLIENT sees them, together with
+ * the site's IANA zone, which is what any timing guard has to be judged in.
+ * Fails closed: without the zone the caller cannot decide a timing guard, so the
+ * failure is reported rather than guessed.
+ */
+async function lookupAppointmentsForClient(
+  client: IMindbodyClient,
+  cache: SimpleCache,
+  clientId: string,
+  appointmentIds: number[],
+  lookbackDays: number
+): Promise<OwnershipLookup> {
+  let timeZone: string;
+  try {
+    timeZone = await getSiteTimeZone(client, cache);
+  } catch (error: any) {
+    return {
+      ok: false,
+      kind: 'site timezone',
+      reason: `site timezone unavailable: ${error?.message ?? 'unknown error'}`,
+    };
+  }
+
+  const now = new Date();
+  try {
+    const { items: rows } = await fetchAllPages<any>(
+      client,
+      '/appointment/staffappointments',
+      {
+        AppointmentIds: appointmentIds,
+        // The spec defines a single `request.clientId`, not a list.
+        ClientId: clientId,
+        StartDate: siteDateStringPlusDays(now, timeZone, -lookbackDays),
+        EndDate: siteDateStringPlusDays(now, timeZone, OWNERSHIP_LOOKAHEAD_DAYS),
+      },
+      'Appointments'
+    );
+    return { ok: true, timeZone, rows };
+  } catch (error: any) {
+    return {
+      ok: false,
+      kind: 'lookup',
+      reason: `appointment lookup failed: ${error?.message ?? 'unknown error'}`,
+    };
+  }
+}
+
+/** The single row for `appointmentId` when it is unambiguously this client's. */
+function ownedAppointmentRow(
+  rows: any[],
+  appointmentId: number,
+  clientId: string
+): { row: any } | { reason: string } {
+  const matches = rows.filter((row) => Number(row?.Id) === appointmentId);
+  if (matches.length === 0) return { reason: NOT_FOUND_FOR_CLIENT };
+  if (matches.length > 1) return { reason: AMBIGUOUS_LOOKUP };
+
+  const row = matches[0];
+  const rowClientId = row.ClientId ?? row.Client?.Id;
+  if (rowClientId === undefined || rowClientId === null || String(rowClientId) !== clientId) {
+    // Never reveal which client owns it; a mismatch looks exactly like "missing".
+    return { reason: NOT_FOUND_FOR_CLIENT };
+  }
+  return { row };
+}
+
 // Update appointment
 
 /**
@@ -173,7 +281,117 @@ export const UPDATE_APPOINTMENT_EXECUTE_VALUES = [
 
 export type UpdateAppointmentExecute = (typeof UPDATE_APPOINTMENT_EXECUTE_VALUES)[number];
 
+/**
+ * Execute values that settle an appointment's outcome. A booked or confirmed
+ * appointment can still be completed; a completed or no-show one cannot be
+ * arrived, un-arrived or completed again, because those are exactly the
+ * attendance and revenue writes this tool must not be able to replay.
+ */
+const OUTCOME_SETTLING_EXECUTIONS = new Set<UpdateAppointmentExecute>([
+  'arrive',
+  'unarrive',
+  'complete',
+]);
+
+/**
+ * Execute values that may only be applied once the appointment has started,
+ * compared in the site's zone.
+ *
+ * ONLY `complete` is gated. It is the revenue write: it finalises attendance and,
+ * with a purchased service on the appointment, the money. Applying it to an
+ * appointment that has not begun is the one act that is pure corruption once
+ * ownership has been verified.
+ *
+ * `arrive` and `unarrive` are deliberately NOT time-gated. Arrival is recorded
+ * against a booked appointment in the salon workflow, including against a slot
+ * booked for a later day, so a started-only rule would refuse legitimate
+ * check-ins. What makes `arrive` safe here is ownership — the appointment must
+ * be the requested client's, and must not have settled already — not its clock.
+ * `confirm`/`unconfirm` move no attendance and no money, so they are ungated.
+ */
+const STARTED_ONLY_EXECUTIONS = new Set<UpdateAppointmentExecute>(['complete']);
+
+/** Lookback for updateAppointment's ownership lookup, in site-calendar days. */
+const UPDATE_LOOKBACK_DAYS = 365;
+
+export interface UpdateAppointmentResult {
+  success: boolean;
+  appointment?: {
+    id: number;
+    status: string;
+    startDateTime: string;
+    endDateTime: string;
+    staffName: string;
+  };
+  rejected: Array<{ id: number; reason: string }>;
+  message: string;
+}
+
+/** Every refusal reads the same way: the reason, and the fact nothing was written. */
+function updateRefusal(id: number, reason: string): UpdateAppointmentResult {
+  return {
+    success: false,
+    rejected: [{ id, reason }],
+    message: `Rejected: ${reason}. The appointment was not updated.`,
+  };
+}
+
+/** Why a looked-up, owned appointment may not be updated, or null if it may. */
+function updateRejectionReason(
+  row: any,
+  request: {
+    execute?: UpdateAppointmentExecute;
+    applyPayment: boolean;
+    reschedule: boolean;
+  },
+  nowMs: number,
+  timeZone: string
+): string | null {
+  const status = row?.Status;
+  if (TERMINAL_STATUSES.has(status)) {
+    return `appointment status is ${status}, which is final; no update can be made to it`;
+  }
+  if (ATTENDANCE_FINAL_STATUSES.has(status)) {
+    if (request.execute !== undefined && OUTCOME_SETTLING_EXECUTIONS.has(request.execute)) {
+      return `appointment status is ${status}, which has settled the appointment's outcome; only its details can still be changed`;
+    }
+    if (request.applyPayment) {
+      return `appointment status is ${status}; a payment cannot be applied to an appointment that has already taken place`;
+    }
+    if (request.reschedule) {
+      return `appointment status is ${status}; an appointment that has already taken place cannot be rescheduled`;
+    }
+  }
+
+  if (request.execute !== undefined && STARTED_ONLY_EXECUTIONS.has(request.execute)) {
+    // Site-local wall time read in the SITE's zone, never this process's. An
+    // unparseable value is refused rather than compared against.
+    const startMs = siteLocalToEpochMs(row.StartDateTime, timeZone);
+    if (Number.isNaN(startMs)) return 'appointment start time could not be parsed';
+    if (startMs > nowMs) {
+      return `execute ${request.execute} needs the appointment to have started; it starts at ${row.StartDateTime} site time`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Update ONE appointment belonging to ONE client: reschedule, change staff,
+ * notes or resources, or apply one status action.
+ *
+ * Every guard runs before any write, and none can be skipped by omitting an
+ * argument:
+ *   1. request shape (clientId, appointmentId) — no calls;
+ *   2. the execute allow-list, which also refuses the cancel verbs — no calls;
+ *   3. applyPayment may not ride along with a reschedule — no calls;
+ *   4. ownership: the appointment must belong to `clientId` and be inside the
+ *      lookup window, else "not found for this client";
+ *   5. status: a cancelled appointment is final, and an attendance-final one
+ *      takes no status action, no payment and no reschedule;
+ *   6. timing: `complete` needs the appointment to have started, in site time.
+ */
 export async function updateAppointmentTool(
+  clientId: string,
   appointmentId: number,
   staffId?: number,
   startDateTime?: string,
@@ -186,18 +404,16 @@ export async function updateAppointmentTool(
   sendEmail?: boolean,
   applyPayment?: boolean,
   execute?: UpdateAppointmentExecute,
-  client: IMindbodyClient = mindbodyClient
-): Promise<{
-  success: boolean;
-  appointment?: {
-    id: number;
-    status: string;
-    startDateTime: string;
-    endDateTime: string;
-    staffName: string;
-  };
-  message: string;
-}> {
+  client: IMindbodyClient = mindbodyClient,
+  cache: SimpleCache = classCache
+): Promise<UpdateAppointmentResult> {
+  if (typeof clientId !== 'string' || clientId.trim() === '') {
+    return updateRefusal(-1, 'clientId must be a non-empty string');
+  }
+  if (typeof appointmentId !== 'number' || !Number.isInteger(appointmentId) || appointmentId <= 0) {
+    return updateRefusal(-1, `appointment id ${JSON.stringify(appointmentId)} is not a positive integer`);
+  }
+
   // MCP arguments are untyped at runtime, so the union above is not a guarantee.
   if (
     execute !== undefined &&
@@ -205,13 +421,46 @@ export async function updateAppointmentTool(
   ) {
     const value = String(execute);
     const isCancel = value.toLowerCase() === 'cancel' || value.toLowerCase() === 'latecancel';
-    return {
-      success: false,
-      message: isCancel
-        ? `updateAppointment does not cancel appointments. Use cancelAppointments, which verifies the client, timing and status before cancelling.`
-        : `Unsupported execute value "${value}". Allowed: ${UPDATE_APPOINTMENT_EXECUTE_VALUES.join(', ')}. To cancel, use cancelAppointments.`,
-    };
+    return updateRefusal(
+      -1,
+      isCancel
+        ? 'updateAppointment does not cancel appointments. Use cancelAppointments, which verifies the client, timing and status before cancelling.'
+        : `Unsupported execute value "${value}". Allowed: ${UPDATE_APPOINTMENT_EXECUTE_VALUES.join(', ')}. To cancel, use cancelAppointments.`
+    );
   }
+
+  // ApplyPayment applies "a current applicable client service from the client's
+  // account" to THIS appointment, chosen against the appointment's current time
+  // (docs/openapi.json, UpdateAppointmentRequest). Moving the appointment in the
+  // same call makes it unresolvable afterwards which service was consumed, and
+  // no MCP path reverses a sale, so the two are never combined.
+  const reschedule = startDateTime !== undefined || endDateTime !== undefined;
+  if (applyPayment === true && reschedule) {
+    return updateRefusal(
+      -1,
+      'applyPayment cannot be combined with a reschedule; move the appointment first, then apply the payment in a second call'
+    );
+  }
+
+  const lookup = await lookupAppointmentsForClient(
+    client,
+    cache,
+    clientId,
+    [appointmentId],
+    UPDATE_LOOKBACK_DAYS
+  );
+  if (!lookup.ok) return updateRefusal(-1, lookup.reason);
+
+  const owned = ownedAppointmentRow(lookup.rows, appointmentId, clientId);
+  if ('reason' in owned) return updateRefusal(appointmentId, owned.reason);
+
+  const reason = updateRejectionReason(
+    owned.row,
+    { execute, applyPayment: applyPayment === true, reschedule },
+    Date.now(),
+    lookup.timeZone
+  );
+  if (reason) return updateRefusal(appointmentId, reason);
 
   try {
     const response = await client.post<any>('/appointment/updateappointment', {
@@ -235,11 +484,13 @@ export async function updateAppointmentTool(
         endDateTime: response.Appointment.EndDateTime,
         staffName: response.Appointment.Staff?.Name || `${response.Appointment.Staff?.FirstName || ''} ${response.Appointment.Staff?.LastName || ''}`.trim() || '',
       },
+      rejected: [],
       message: 'Appointment updated successfully',
     };
   } catch (error: any) {
     return {
       success: false,
+      rejected: [],
       message: error.message || 'Failed to update appointment',
     };
   }
@@ -249,14 +500,6 @@ export async function updateAppointmentTool(
 
 /** Hard ceiling on how many appointments one cancelAppointments call may touch. */
 export const MAX_CANCELLATIONS_PER_REQUEST = 3;
-
-/** Statuses from which a cancellation is refused. */
-const NON_CANCELLABLE_STATUSES = new Set(['Cancelled', 'LateCancelled', 'Completed', 'NoShow']);
-
-/** Lookup window: the site-local date today through two years out, so past days are excluded. */
-const CANCELLATION_LOOKUP_WINDOW_DAYS = 365 * 2;
-
-const NOT_FOUND_FOR_CLIENT = 'not found for this client';
 
 export interface CancelAppointmentsResult {
   success: boolean;
@@ -300,23 +543,11 @@ function validateCancellationRequest(
   return rejected;
 }
 
-/** Why a looked-up appointment may not be cancelled, or null if it may. */
-function cancellationRejectionReason(
-  rows: any[],
-  clientId: string,
-  nowMs: number,
-  timeZone: string
-): string | null {
-  if (rows.length === 0) return NOT_FOUND_FOR_CLIENT;
-  if (rows.length > 1) return 'appointment returned more than once by lookup; refusing ambiguous data';
-
-  const row = rows[0];
-  // Never reveal which client owns it; a mismatch looks exactly like "missing".
-  const rowClientId = row.ClientId ?? row.Client?.Id;
-  if (rowClientId === undefined || rowClientId === null || String(rowClientId) !== clientId) {
-    return NOT_FOUND_FOR_CLIENT;
-  }
-
+/**
+ * Why an OWNED appointment may not be cancelled, or null if it may. Ownership is
+ * already settled by `ownedAppointmentRow`; this is the timing and status half.
+ */
+function cancellationRejectionReason(row: any, nowMs: number, timeZone: string): string | null {
   // Mindbody returns StartDateTime as site-local wall time with no UTC offset.
   // It is converted to a UTC instant using the SITE's IANA zone (never this
   // process's zone), so the comparison with "now" is correct wherever the server
@@ -357,52 +588,34 @@ export async function cancelAppointmentsTool(
     };
   }
 
-  // Fail closed: without the site's zone, "today" and "already started" cannot
-  // be decided, so nothing is looked up or written.
-  let timeZone: string;
-  try {
-    timeZone = await getSiteTimeZone(client, cache);
-  } catch (error: any) {
+  // Fail closed, via the shared lookup: without the site's zone "today" and
+  // "already started" cannot be decided, so nothing is looked up or written.
+  const lookup = await lookupAppointmentsForClient(client, cache, clientId, appointmentIds, 0);
+  if (!lookup.ok) {
     return {
       success: false,
       cancelled: [],
-      rejected: [{ id: -1, reason: `site timezone unavailable: ${error?.message ?? 'unknown error'}` }],
-      message: 'Could not determine the site timezone; no appointments were cancelled.',
+      rejected: [{ id: -1, reason: lookup.reason }],
+      message: lookup.kind === 'site timezone'
+        ? 'Could not determine the site timezone; no appointments were cancelled.'
+        : 'Could not verify the appointments; no appointments were cancelled.',
     };
   }
 
-  const now = new Date();
-  let rows: any[];
-  try {
-    ({ items: rows } = await fetchAllPages<any>(
-      client,
-      '/appointment/staffappointments',
-      {
-        AppointmentIds: appointmentIds,
-        ClientId: clientId,
-        StartDate: siteDateString(now, timeZone),
-        EndDate: siteDateStringPlusDays(now, timeZone, CANCELLATION_LOOKUP_WINDOW_DAYS),
-      },
-      'Appointments'
-    ));
-  } catch (error: any) {
-    return {
-      success: false,
-      cancelled: [],
-      rejected: [{ id: -1, reason: `appointment lookup failed: ${error?.message ?? 'unknown error'}` }],
-      message: 'Could not verify the appointments; no appointments were cancelled.',
-    };
-  }
-
+  const { timeZone, rows } = lookup;
   const rejected: Array<{ id: number; reason: string }> = [];
   const verified = new Map<number, any>();
   for (const id of appointmentIds) {
-    const matches = rows.filter((row) => Number(row?.Id) === id);
-    const reason = cancellationRejectionReason(matches, clientId, Date.now(), timeZone);
+    const owned = ownedAppointmentRow(rows, id, clientId);
+    if ('reason' in owned) {
+      rejected.push({ id, reason: owned.reason });
+      continue;
+    }
+    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone);
     if (reason) {
       rejected.push({ id, reason });
     } else {
-      verified.set(id, matches[0]);
+      verified.set(id, owned.row);
     }
   }
 

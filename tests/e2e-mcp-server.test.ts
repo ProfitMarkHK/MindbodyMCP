@@ -1534,11 +1534,13 @@ describe('domain — appointments (read and write)', () => {
 
   itE2E('updateAppointment moves the appointment and reports the new status', async () => {
     stub.resetLog();
+    const appointmentId = CANCELLATION_FIXTURES.futureBookedA;
 
     const result = await client.callTool({
       name: 'updateAppointment',
       arguments: {
-        appointmentId: 8003,
+        clientId: CANCELLATION_FIXTURES.clientId,
+        appointmentId,
         staffId: 42,
         startDateTime: '2026-03-07T14:00:00',
         notes: 'Moved to afternoon',
@@ -1548,22 +1550,49 @@ describe('domain — appointments (read and write)', () => {
 
     const payload = resultJson(result);
     expect(payload.success).toBe(true);
+    expect(payload.rejected).toEqual([]);
     expect(payload.message).toBe('Appointment updated successfully');
-    expect(payload.appointment).toEqual({
-      id: 8003,
-      status: 'Changed',
+    expect(payload.appointment).toMatchObject({
+      id: appointmentId,
       startDateTime: '2026-03-07T14:00:00',
-      endDateTime: '2026-03-07T15:00:00',
       staffName: 'Ada Lovelace',
     });
 
+    // The ownership lookup happens before the write, and is scoped to this client.
+    const lookups = stub.requestsTo(STAFF_APPOINTMENTS_PATH, 'GET');
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0].query.ClientId).toBe(CANCELLATION_FIXTURES.clientId);
+
     const [post] = stub.requestsTo('/public/v6/appointment/updateappointment', 'POST');
     expect(post.body).toEqual({
-      AppointmentId: 8003,
+      AppointmentId: appointmentId,
       StaffId: 42,
       StartDateTime: '2026-03-07T14:00:00',
       Notes: 'Moved to afternoon',
     });
+  });
+
+  itE2E("updateAppointment refuses another client's appointment and makes no write", async () => {
+    stub.resetLog();
+    const appointmentId = CANCELLATION_FIXTURES.otherClientFutureBooked;
+
+    const result = await client.callTool({
+      name: 'updateAppointment',
+      arguments: {
+        clientId: CANCELLATION_FIXTURES.clientId,
+        appointmentId,
+        notes: 'Overwritten',
+        execute: 'complete',
+      },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const payload = resultJson(result);
+    expect(payload.success).toBe(false);
+    expect(payload.rejected).toEqual([{ id: appointmentId, reason: 'not found for this client' }]);
+    // The other client's id is never echoed back as a fact about them.
+    expect(JSON.stringify(payload)).not.toContain(CANCELLATION_FIXTURES.otherClientId);
+    expect(stub.requestsTo(UPDATE_APPOINTMENT_PATH, 'POST')).toHaveLength(0);
   });
 
   itE2E('updateAppointment with execute arrive sends Execute and reports Arrived', async () => {
@@ -1572,7 +1601,7 @@ describe('domain — appointments (read and write)', () => {
 
     const result = await client.callTool({
       name: 'updateAppointment',
-      arguments: { appointmentId, execute: 'arrive' },
+      arguments: { clientId: CANCELLATION_FIXTURES.clientId, appointmentId, execute: 'arrive' },
     });
     expect(result.isError).toBeFalsy();
 
@@ -1591,7 +1620,11 @@ describe('domain — appointments (read and write)', () => {
 
     const result = await client.callTool({
       name: 'updateAppointment',
-      arguments: { appointmentId: CANCELLATION_FIXTURES.futureBookedA, execute: 'cancel' },
+      arguments: {
+        clientId: CANCELLATION_FIXTURES.clientId,
+        appointmentId: CANCELLATION_FIXTURES.futureBookedA,
+        execute: 'cancel',
+      },
     });
     expect(result.isError).toBeFalsy();
 
