@@ -1,5 +1,6 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
 import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
+import { withDefaultDates } from './siteTime';
 import type {
   // Site & Location
   Site, Location, Resource,
@@ -42,18 +43,26 @@ const CLASS_LOOKUP_CHUNK = 50;
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 
 /**
- * Today through DEFAULT_ENROLLMENT_WINDOW_DAYS as YYYY-MM-DD, unless given.
- * Uses the host's UTC date like every other default range in this file (the
- * Next.js client has no site-timezone helper; the MCP server does).
+ * The weekday of a Mindbody SITE-LOCAL date-time ("2026-10-18T08:00:00", no
+ * offset), taken from the string's own calendar fields.
+ *
+ * `new Date(s).toLocaleDateString(...)` happens to name the same day — a string
+ * with no offset is parsed AND formatted in the host's zone, so its calendar date
+ * survives — but it is right by accident and leans on the host's locale data.
+ * Reading the weekday out of the date the studio gave is what the summary means
+ * (Mindbody's own weekday, not a re-derivation), and needs no zone at all: a
+ * Y-M-D names the same weekday everywhere. A string that is not site-local
+ * carries no calendar to read, so it keeps the old host reading.
  */
-function defaultEnrollmentWindow(startDate?: string, endDate?: string): { start: string; end: string } {
-  const start = startDate || new Date().toISOString().split('T')[0];
-  const end =
-    endDate ||
-    new Date(new Date(`${start}T00:00:00Z`).getTime() + DEFAULT_ENROLLMENT_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .split('T')[0];
-  return { start, end };
+function siteLocalWeekday(siteLocalDateTime: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(siteLocalDateTime?.trim() ?? '');
+  const [, y, mo, d] = match ?? [];
+  const parsed = y && new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d)));
+  // A rolled-over or impossible date (month 13, day 32) is not a calendar date.
+  if (!parsed || parsed.getUTCMonth() !== Number(mo) - 1 || parsed.getUTCDate() !== Number(d)) {
+    return new Date(siteLocalDateTime).toLocaleDateString('en-US', { weekday: 'long' });
+  }
+  return DAY_NAMES[parsed.getUTCDay()];
 }
 
 function staffDisplayName(staff: any): string {
@@ -106,6 +115,46 @@ export class MindbodyService {
     this.client = client || getMindbodyClient();
   }
 
+  /**
+   * The date window for a read. The caller's dates when both are given —
+   * unchanged, with no extra request — otherwise the SITE's own calendar window:
+   * `days >= 0` is [today, today + days], `days < 0` is [today + days, today].
+   *
+   * The window must be in the site's timezone: Mindbody reads StartDate/EndDate
+   * as site-local dates, so a host-UTC default gives a studio on the other side
+   * of the date line the wrong day (and, for a site west of the host, the wrong
+   * window entirely). The site zone comes from GET /site/sites via
+   * ./siteTime, cached for an hour; when it cannot be resolved the read falls
+   * back to UTC with one warning rather than failing.
+   */
+  private async defaultRange(
+    startDate: string | undefined,
+    endDate: string | undefined,
+    days: number
+  ): Promise<{ start: string; end: string }> {
+    return withDefaultDates(startDate, endDate, days, this.client);
+  }
+
+  /**
+   * The same window as `defaultRange`, as full site-local date-TIMES suitable
+   * for a `StartDateTime`/`EndDateTime` filter (`T00:00:00` to `T23:59:59`).
+   *
+   * Mindbody wants these as site-local strings with no offset, so the host's
+   * UTC clock cannot produce them: for a studio west of the server, "now" is
+   * the wrong day, and appending a `Z` asserts a zone the API does not want.
+   * Use this wherever a caller must fill in a date-time window itself — the
+   * sync job is the case in point. Falls back to UTC, with the same one-time
+   * warning, when the site zone cannot be resolved.
+   */
+  async defaultDateTimeRange(
+    startDate?: string,
+    endDate?: string,
+    days: number = 30
+  ): Promise<{ start: string; end: string }> {
+    const { start, end } = await this.defaultRange(startDate, endDate, days);
+    return { start: `${start}T00:00:00`, end: `${end}T23:59:59` };
+  }
+
   // ==========================================================================
   // SITE & LOCATION MANAGEMENT
   // ==========================================================================
@@ -127,6 +176,7 @@ export class MindbodyService {
     }));
     return { items: sites, total: sites.length };
   }
+
 
   async getLocations(): Promise<ListResult<Location>> {
     const { items: rows } = await fetchAllPages<any>(this.client, '/site/locations', {}, 'Locations');
@@ -399,16 +449,15 @@ export class MindbodyService {
   }
 
   async getClientVisits(params: GetClientVisitsParams): Promise<{ visits: ClientVisit[]; total: number; summary: VisitSummary }> {
-    const defaultStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const defaultEnd = new Date().toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, -30);
 
     const { items: rows } = await fetchAllPages<any>(
       this.client,
       '/client/clientvisits',
       {
         ClientId: params.clientId,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
       },
       'Visits'
     );
@@ -716,11 +765,7 @@ export class MindbodyService {
   // ==========================================================================
 
   async getTeacherSchedule(teacherId: number, startDate?: string, endDate?: string): Promise<TeacherSchedule> {
-    const today = new Date().toISOString().split('T')[0];
-    const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    const start = startDate || today;
-    const end = endDate || weekFromNow;
+    const { start, end } = await this.defaultRange(startDate, endDate, 7);
 
     const [staffResult, classesResult] = await Promise.all([
       this.getStaff({ staffIds: [teacherId] }),
@@ -740,7 +785,7 @@ export class MindbodyService {
     };
 
     classes.forEach((c) => {
-      const day = new Date(c.startDateTime).toLocaleDateString('en-US', { weekday: 'long' });
+      const day = siteLocalWeekday(c.startDateTime);
       summary.byDay[day] = (summary.byDay[day] || 0) + 1;
       summary.byLocation[c.location.name] = (summary.byLocation[c.location.name] || 0) + 1;
       summary.byClassType[c.classDescription.name] = (summary.byClassType[c.classDescription.name] || 0) + 1;
@@ -755,6 +800,10 @@ export class MindbodyService {
       dateRange: { start, end },
       totalClasses: classes.length,
       classes: classes.map((c) => {
+        // Both are site-local strings read in the SAME zone — whatever zone that
+        // is — so their difference is the true elapsed time; the only way it can
+        // be off is a DST transition between the two instants in that zone, which
+        // a class session of minutes cannot span.
         const startTime = new Date(c.startDateTime);
         const endTime = new Date(c.endDateTime);
         return {
@@ -779,8 +828,7 @@ export class MindbodyService {
   // ==========================================================================
 
   async getAppointments(params: GetAppointmentsParams): Promise<ListResult<Appointment>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, 7);
 
     const { items: rows, totalResults } = await fetchAllPages<any>(
       this.client,
@@ -788,8 +836,8 @@ export class MindbodyService {
       {
         StaffIds: params.staffIds,
         LocationIds: params.locationIds,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         AppointmentIds: params.appointmentIds,
         ClientIds: params.clientIds,
       },
@@ -903,8 +951,7 @@ export class MindbodyService {
   }
 
   async getBookableItems(params: GetBookableItemsParams): Promise<ListResult<BookableItem>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, 7);
 
     // The spec documents `Availabilities` as the one list key of
     // GetBookableItemsResponse; `BookableItems` is not in docs/openapi.json.
@@ -915,8 +962,8 @@ export class MindbodyService {
         SessionTypeIds: params.sessionTypeIds,
         LocationIds: params.locationIds,
         StaffIds: params.staffIds,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         AppointmentId: params.appointmentId,
       },
       'Availabilities'
@@ -940,8 +987,7 @@ export class MindbodyService {
   }
 
   async getScheduleItems(params?: { locationIds?: number[]; staffIds?: number[]; startDate?: string; endDate?: string; ignorePrepFinishBuffer?: boolean }): Promise<ListResult<ScheduleItem>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params?.startDate, params?.endDate, 7);
 
     const { items: rows } = await fetchAllPages<any>(
       this.client,
@@ -949,8 +995,8 @@ export class MindbodyService {
       {
         LocationIds: params?.locationIds,
         StaffIds: params?.staffIds,
-        StartDate: params?.startDate || defaultStart,
-        EndDate: params?.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         IgnorePrepFinishBuffer: params?.ignorePrepFinishBuffer,
       },
       'StaffMembers'
@@ -1035,7 +1081,7 @@ export class MindbodyService {
    * StartDate and EndDate; there is no semester or course filter here.
    */
   async getEnrollments(params?: GetEnrollmentsParams): Promise<ListResult<Enrollment>> {
-    const { start, end } = defaultEnrollmentWindow(params?.startDate, params?.endDate);
+    const { start, end } = await this.defaultRange(params?.startDate, params?.endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS);
     const { items: rows, totalResults } = await fetchAllPages<any>(
       this.client,
       '/enrollment/enrollments',
@@ -1121,7 +1167,7 @@ export class MindbodyService {
    * so past sessions appear only when startDate is given.
    */
   async getClientEnrollments(clientId: string, startDate?: string, endDate?: string): Promise<ListResult<ClientEnrollmentVisit>> {
-    const { start, end } = defaultEnrollmentWindow(startDate, endDate);
+    const { start, end } = await this.defaultRange(startDate, endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS);
     const { items: rows } = await fetchAllPages<any>(
       this.client,
       '/client/clientschedule',

@@ -60,12 +60,30 @@ class PagingServer implements PagedGetClient {
     return body as T;
   }
 
+  /**
+   * Calls to one endpoint only. A service that fills in a default date range
+   * first resolves the SITE's timezone with a GET /site/sites, which this
+   * server answers like any other path; a test asserting on paging must scope
+   * to its own endpoint or that lookup lands in the middle of the sequence.
+   */
   get offsets(): unknown[] {
     return this.calls.map((call) => call.params.Offset);
   }
 
   get limits(): unknown[] {
     return this.calls.map((call) => call.params.Limit);
+  }
+
+  callsTo(url: string): Array<{ url: string; params: Record<string, unknown> }> {
+    return this.calls.filter((call) => call.url === url);
+  }
+
+  offsetsFor(url: string): unknown[] {
+    return this.callsTo(url).map((call) => call.params.Offset);
+  }
+
+  limitsFor(url: string): unknown[] {
+    return this.callsTo(url).map((call) => call.params.Limit);
   }
 }
 
@@ -235,9 +253,9 @@ describe("nextjs-app MindbodyService — every list read walks all pages of its 
     it(`${c.method} → GET ${c.path} (${c.key}): 5 rows served 2 per page are read in full`, async () => {
       const server = new PagingServer({ total: 5, serverCap: 2, key: c.key, row });
       const result = await c.call(new MindbodyService(server as any));
-      expect(server.calls.map((call) => call.url)).toEqual([c.path, c.path, c.path]);
-      expect(server.limits).toEqual([200, 200, 200]);
-      expect(server.offsets).toEqual([0, 2, 4]);
+      expect(server.callsTo(c.path).map((call) => call.url)).toEqual([c.path, c.path, c.path]);
+      expect(server.limitsFor(c.path)).toEqual([200, 200, 200]);
+      expect(server.offsetsFor(c.path)).toEqual([0, 2, 4]);
       expect(result.items.map((item) => item.id ?? item.scheduledItemId)).toEqual(range(5));
       expect(result.total).toBe(5);
     });
@@ -247,7 +265,7 @@ describe("nextjs-app MindbodyService — every list read walks all pages of its 
     const visit = (id: number) => ({ ...row(id), SignedIn: id !== 5, LateCancelled: id === 5 });
     const server = new PagingServer({ total: 5, serverCap: 2, key: "Visits", row: visit });
     const result = await new MindbodyService(server as any).getClientVisits({ clientId: "c1" });
-    expect(server.offsets).toEqual([0, 2, 4]);
+    expect(server.offsetsFor("/client/clientvisits")).toEqual([0, 2, 4]);
     expect(result.total).toBe(5);
     expect(result.summary.totalAttended).toBe(4);
     expect(result.summary.totalLateCancels).toBe(1);
@@ -289,10 +307,10 @@ describe("nextjs-app MindbodyService reads whole lists through the pager", () =>
     const result = await service.getClasses({ locationIds: [1] });
     expect(result.items.map((c) => c.id)).toEqual(range(7));
     expect(result.total).toBe(7);
-    expect(server.limits).toEqual([200, 200, 200]);
-    expect(server.offsets).toEqual([0, 3, 6]);
-    expect(server.calls[0].params.LocationIds).toEqual([1]);
-    expect(server.calls[0].params).not.toHaveProperty("limit");
+    expect(server.limitsFor("/class/classes")).toEqual([200, 200, 200]);
+    expect(server.offsetsFor("/class/classes")).toEqual([0, 3, 6]);
+    expect(server.callsTo("/class/classes")[0].params.LocationIds).toEqual([1]);
+    expect(server.callsTo("/class/classes")[0].params).not.toHaveProperty("limit");
   });
 
   // getEnrollments, addClientToEnrollment and getClientEnrollments are covered

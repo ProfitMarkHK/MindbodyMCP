@@ -26,13 +26,20 @@ nextjs-app/
 │   │   ├── clients/         # Client management pages
 │   │   ├── classes/         # Class schedule pages
 │   │   ├── staff/           # Staff management pages
+│   │   ├── sites/           # Site records
+│   │   ├── locations/       # Studio locations
+│   │   ├── enrollments/     # Courses, workshops and series
+│   │   ├── appointments/    # Appointments and bookable items
+│   │   ├── sales/           # Services, packages, products, contracts
 │   │   └── page.tsx         # Dashboard
 │   ├── hooks/
 │   │   └── useMindbody.ts   # React hooks for all operations
 │   ├── lib/
 │   │   ├── mindbody/
 │   │   │   ├── client.ts    # HTTP client with auth
+│   │   │   ├── paging.ts    # fetchAllPages (mandatory for every list read)
 │   │   │   ├── service.ts   # Unified service class
+│   │   │   ├── siteTime.ts  # Site-local time (default date ranges)
 │   │   │   ├── types.ts     # Type definitions
 │   │   │   └── index.ts     # Public API
 │   │   ├── sync/
@@ -183,6 +190,46 @@ a paginated endpoint fails the build. Add new list reads through
 The tRPC client router is mounted as `trpc.clients` (not `trpc.client`, which
 collides with a built-in method of the tRPC React proxy).
 
+## Site-local time (default date ranges)
+
+Mindbody returns and accepts every date-time in the **site's** local timezone
+with no UTC offset (`"2026-10-18T08:00:00"`), so "today" at a Los Angeles studio
+is not `new Date().toISOString()` on a server in Hong Kong. Every default date
+range in `src/lib/mindbody/service.ts` — today's classes, a teacher's week,
+bookable items, client visits, the enrollment window — is therefore resolved in
+the site's calendar by `src/lib/mindbody/siteTime.ts`, a port of the MCP
+server's `src/utils/siteTime.ts` with the same exported names and semantics:
+
+- the site zone comes from `GET /site/sites` (read through `fetchAllPages`, like
+  every other list) and is cached for 60 minutes;
+- `withDefaultDates(start, end, days)` returns the caller's dates **unchanged and
+  with no extra request** when both are given, and otherwise fills in
+  [site today, site today + days] for `days >= 0`, [site today + days, site
+  today] for `days < 0`;
+- a day boundary is the site's: `2026-10-18T02:00:00Z` is still the 17th in
+  `America/Los_Angeles`, and that is the date the defaults use.
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `MINDBODY_SITE_ID` | Already required; also pins the `SiteIds` filter on the site lookup, so a multi-site API key resolves **its** site and never a neighbour's. An ambiguous key with no site chosen raises `SiteSelectionError` listing the reachable sites. |
+| `MINDBODY_SITE_TIMEZONE` | Optional IANA override, used **only** when the site record has no usable `TimeZone`. A valid one is honoured; an invalid one raises a clear error. |
+
+When neither source yields a usable zone, **reads do not fail**: they fall back
+to UTC and log one `console.error` per process
+(`[siteTime] … using UTC for default date ranges.`). Write operations and
+explicit caller dates are unaffected — an explicit window is always sent as
+given.
+
+### DST
+
+Wall times are disambiguated the way Temporal and `java.time` do in "compatible"
+mode: an ambiguous fall-back wall time (e.g. `2026-11-01T01:30` in Los Angeles)
+resolves to the **earlier** instant, and a nonexistent spring-forward wall time
+(e.g. `2026-03-08T02:30`) is read with the pre-transition offset, moving it
+forward by the gap.
+
 ## API Reference
 
 ### MindbodyService Methods
@@ -266,6 +313,7 @@ See `prisma/schema.prisma` for the complete schema.
 | `MINDBODY_SOURCE_NAME` | Source name | Yes |
 | `MINDBODY_SOURCE_PASSWORD` | Source password | Yes |
 | `MINDBODY_API_URL` | API URL (default: v6 API) | No |
+| `MINDBODY_SITE_TIMEZONE` | IANA zone used for default date ranges when the site record has none | No |
 | `NEXT_PUBLIC_APP_URL` | Public app URL | No |
 
 ## Scripts
