@@ -58,8 +58,8 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 
 | # | Gate | State | Command / note |
 |---|------|-------|----------------|
-| 1 | All tests pass | applies | `bun test` — 284 tests across 8 files, 0 failing, exits **0**. `bunfig.toml` sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. Includes `tests/nextjs-paging.test.ts`, the tests for the Next.js app's pager and service (the app has no test runner of its own). |
-| 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 73 tests, 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
+| 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. Includes `tests/nextjs-paging.test.ts`, the tests for the Next.js app's pager and service (the app has no test runner of its own). |
+| 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
 | 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured, in the root or in `nextjs-app/` (`next lint` has no config to run and only offers to create one). See gaps 3a, 3b and 3c below. |
 | 4 | New code covered by non-trivial tests | applies | manual review — the change's tests must exercise real logic paths, assert on outputs or state, and cover error paths, not just "returns without error". |
 | 5 | Documentation updated | applies | manual review — `README.md`, `Claude.md`, `AGENTS.md`, and `docs/` (notably `docs/quality-gates.md`) stay in sync with the change. |
@@ -70,7 +70,7 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export supplied by the project owner (`mindbody-public-api-v6.swagger.json`), copied in on 2026-10-17. Its SHA-256 is recorded in `docs/openapi.lock`, which must be updated whenever the file changes. The official portal did not expose a downloadable spec when this was checked. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
-| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). 58 call sites (32 in `src/`, 26 in `nextjs-app/src/`), 0 violations. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. |
+| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/` and `nextjs-app/src/` is scanned, 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. |
 | 14 | nextjs-app type checking passes | applies | `cd nextjs-app && ./node_modules/.bin/tsc --noEmit` — exits 0. Run by the runner; **fails, never skips, when `nextjs-app/node_modules` is absent** (it prints the `bun install` to run). See Gates 14 and 15 below. |
 | 15 | nextjs-app build succeeds | applies | `cd nextjs-app && next build` — exits 0, ~11s warm, 8 routes; writes `nextjs-app/.next/` and `tsconfig.tsbuildinfo`, both ignored by `nextjs-app/.gitignore`. Run by the runner with `NEXT_TELEMETRY_DISABLED=1` and no stdin so it can never block a hook; fail-closed on missing dependencies like Gate 14. |
 
@@ -84,7 +84,7 @@ and not needed" from "forgotten":
 
 - **Gate 1 — coverage threshold (applies, passes; read the units).**
   `bunfig.toml` sets `[test] coverageThreshold = 0.10` with `coverage = true`,
-  and `bun test` now exits **0** (284 pass, 0 fail). Four facts a reader must
+  and `bun test` now exits **0** (0 fail). Four facts a reader must
   have before touching that number:
 
   - **Units — the trap.** Bun 1.4.0 reads the value as a **fraction (0.0–1.0)**,
@@ -96,7 +96,7 @@ and not needed" from "forgotten":
   - **Both columns, not only % Funcs.** A single number sets the threshold for
     **% Funcs and % Lines alike**, and either column can trip it. Observed
     2026-10-17: with every file above 10% funcs, `bun test` still exited 1
-    (0 failing, 260 passing) because `nextjs-app/src/lib/mindbody/service.ts`
+    (0 tests failing) because `nextjs-app/src/lib/mindbody/service.ts`
     sat at 16.33% funcs but **7.10% lines**. Bun prints no message naming the
     file; the runner reports the exit as a probable threshold breach, and the
     reader must find the row below 10% in *either* column. An earlier version of
@@ -126,7 +126,7 @@ and not needed" from "forgotten":
    tests/live/mindbody-live.e2e.ts |   25.45 |   15.29 |
   ```
 
-  on a run that reported **0 pass, 26 skip, 0 fail**. Those figures describe
+  on a run that reported **0 pass, all skipped, 0 fail**. Those figures describe
   module-level top-level statements only; nothing in either file's bodies ran.
 
   Today this is harmless, because the default `bun test` never loads
@@ -224,7 +224,8 @@ and not needed" from "forgotten":
   fail-closed on all three: sentinel missing (suite did not run, or `beforeAll`
   threw) → FAIL; `failures > 0` → FAIL; `tests == 0` → FAIL; otherwise PASS.
   Demonstrated: sabotaging the stub's payload shape gives
-  `FAIL Gate 2 E2E acceptance suite (3 of 52 failing)` (when the suite had 52 tests) and a non-zero runner exit;
+  `FAIL Gate 2 E2E acceptance suite (N of M failing)` (M is whatever the suite
+  held at the time) and a non-zero runner exit;
   removing the file gives
   `FAIL Gate 2 E2E acceptance suite did not run …`.
 
@@ -252,11 +253,11 @@ and not needed" from "forgotten":
     descriptions is a `src/index.ts` change, i.e. Gate 11 work, not gate work.
 - **Live E2E tier against a real Mindbody sandbox (gap — opt-in, not in the runner).**
   A second, opt-in acceptance tier now exists at
-  [`tests/live/mindbody-live.e2e.ts`](../tests/live/mindbody-live.e2e.ts) — 27
-  tests — documented in [`tests/live/README.md`](../tests/live/README.md). It is
+  [`tests/live/mindbody-live.e2e.ts`](../tests/live/mindbody-live.e2e.ts),
+  documented in [`tests/live/README.md`](../tests/live/README.md). It is
   not a passing gate and not wired into the runner. It has now been run against
   the sandbox; its last recorded result is in the Status section of that README.
-  With `SKIP_LIVE_E2E=1` it reports `0 pass, 27 skip, 0 fail` (exit 0), which
+  With `SKIP_LIVE_E2E=1` it reports `0 pass, all skipped, 0 fail` (exit 0), which
   proves only the skip path, not the live calls.
 
   **What it is.** The same mechanics as Gate 2 — `src/index.ts` spawned as a real
@@ -389,7 +390,7 @@ and not needed" from "forgotten":
     `@modelcontextprotocol/sdk` 1.17.2 → 1.32.1 and `axios` 1.10.0 → 1.20.0; no
     direct dependency crossed a major version.
   - **Compatibility check after any bump.** A version bump is not done until these
-    are also green: `bun run typecheck`, `bun run lint`, `bun test` (195 pass / 0 fail).
+    are also green: `bun run typecheck`, `bun run lint`, `bun test` (0 fail).
   - **Secret scan.** The single source of truth is the committed script
     [`scripts/secret-scan.sh`](../scripts/secret-scan.sh). Both workflows call
     it; neither embeds the pattern:
@@ -553,15 +554,15 @@ and not needed" from "forgotten":
   that response per the spec, so it is not a cap.) It throws, never truncates:
   after `MAX_PAGES` = 100 pages (exported) with the path and the row count, and
   when a page's first row repeats the previous page's first row, which means the
-  server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`
-  (22 tests). The live API does honour a `Limit` above 200: `Limit=500` returned
+  server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`.
+  The live API does honour a `Limit` above 200: `Limit=500` returned
   `RequestedLimit 500, PageSize 141, TotalResults 141`.
 
   The Next.js port in `nextjs-app/src/lib/mindbody/paging.ts` has the same
   constants (`DEFAULT_PAGE_SIZE` 200, `MAX_PAGES` 100), termination rules and
-  two throws. `tests/nextjs-paging.test.ts` (39 tests, run by Gate 1) holds it to
+  two throws. `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to
   that contract and then drives the real `MindbodyService` against a paging fake
-  server: every one of its 21 list methods is asserted to send `Limit=200`, walk
+  server: every one of its list methods is asserted to send `Limit=200`, walk
   `Offset` 0 → 2 → 4 over a server that caps pages at 2 rows, hit the spec path
   under the spec's list key, and return all rows; `getClientVisits`,
   `getClientAccountBalances`, `getClientEnrollments` and the one legitimate
@@ -646,7 +647,8 @@ and not needed" from "forgotten":
   **Not gates, and why (nextjs-app).** `next lint` — see gap 3c. **Tests** — the
   app has no test runner, no test script (`npm test` → `Missing script: "test"`)
   and no test files; its pager and service are tested from the root suite
-  (`tests/nextjs-paging.test.ts`, Gate 1) so no second runner is needed. Adding
+  (`tests/nextjs-paging.test.ts`, `tests/nextjs-enrollment.test.ts`,
+   `tests/nextjs-sitetime.test.ts`, Gate 1) so no second runner is needed. Adding
   a runner inside `nextjs-app/` would also pull `bun:test` types into a tsconfig
   that `next build` type-checks. The app's own `README.md` says the same.
 - **Gate 12 — agent skill structure (no-op for Claude Code extension keys).**
@@ -659,7 +661,7 @@ and not needed" from "forgotten":
   fields: `name`, `description`, `license`, `allowed-tools`, `metadata`,
   `compatibility`. Claude Code's schema is a **strict superset** of that, and both
   extension keys are documented, current, non-deprecated Claude Code fields. The
-  validator is behaving consistently — the 24 passing skills have exactly `name` +
+  validator is behaving consistently — every passing skill has exactly `name` +
   `description` and no extension keys — so there is no validator bug either. Both
   sides are correct in their own domain.
 
