@@ -384,6 +384,25 @@ and not needed" from "forgotten":
     local variant, or an inline copy in a workflow, is exactly how copies drift
     apart; the pattern and the exclusion list now change in one place.
 
+    **Scope: the current checkout.** The scan covers the checkout it is run in,
+    not every directory beneath it. A linked git worktree nested inside the target
+    is a separate checkout on its own branch, so it is excluded. The script lists
+    `git worktree list --porcelain`, keeps the paths nested under the target, and
+    skips only those whose `.git` is a **file** (a linked worktree; a clone has a
+    `.git` directory and is not skipped). Each excluded worktree scans itself when
+    the script runs from its own root. Every exclusion is **printed** before the
+    result, so a pass is auditable: the log names what was not scanned. If the
+    worktree list cannot be read, nothing is excluded. This exists because one
+    branch's in-flight edit to `ci.yml` or `deploy/k8s-deployment.yaml` must not
+    turn another branch's gate red on a file that is not its own.
+
+    **Residual gap, stated plainly.** `grep --exclude-dir` matches on the
+    **basename** anywhere under the target. A directory elsewhere in the checkout
+    that shares a worktree's name is therefore skipped as well. The script finds
+    such directories and emits a `::warning::` naming them, so the gap is reported
+    rather than silent, but it is not closed: files inside one of them are not
+    scanned. This check is not gap-free.
+
     What it does, so the guarantees can be checked by reading it rather than
     trusted: it runs under `set -uo pipefail` (deliberately **no** `set -e`,
     because the `grep` exit code is the control signal and is captured with
@@ -391,7 +410,8 @@ and not needed" from "forgotten":
     `grep -rlE` — **filenames only**, so a matched secret value can never reach
     a terminal or a CI log — under an exclusion list that skips `.git`,
     `node_modules`, `dist`, `.next`, `coverage`, `*.md`, `.env` / `.env.*`,
-    `*.local` / `*.local.*`, `*.example` / `*.example.*`, and both lockfiles. The
+    `*.local` / `*.local.*`, `*.example` / `*.example.*`, both lockfiles, and the
+    nested linked worktrees described under Scope above. The
     `.env` exclusions are load-bearing in the other direction: real credentials
     are never scanned in the first place. A `case "$rc"` block then resolves the
     grep exit and **fails closed**: `1` → `[PASS] No hardcoded secrets found`,
@@ -399,8 +419,11 @@ and not needed" from "forgotten":
     credential.", anything else → `[FAIL] Secret scan could not complete`,
     because a *broken* scan must not pass silently. It prints `[PASS]`/`[FAIL]`
     and exits non-zero on failure.
-  - **Current result: passes.** `bash scripts/secret-scan.sh` exits 0 with
-    `[PASS] No hardcoded secrets found` (checked 2026-10-17). The script is **not
+  - **Current result: passes.** `bash scripts/secret-scan.sh` run from the repo root
+    exits 0 with `[PASS] No hardcoded secrets found`, after printing the one nested
+    worktree it excludes, `fix-sandbox-observed-behaviour/` (checked 2026-10-18).
+    The exclusion is listed in the output, not inferred from this line; re-run the
+    script rather than trusting the date. The script is **not
     run by `bun run check`** (`scripts/check-gates.sh`), so the local runner does
     not include it. CI (`ci.yml`, `security` job) and all five jobs in
     `release.yml` do call it.
@@ -642,7 +665,8 @@ and not needed" from "forgotten":
   dependency install, and it would give the same protection locally that CI already
   gives. The duplication blocker named here earlier has been **resolved**: the scan
   now lives in one committed script, `scripts/secret-scan.sh`, which both workflows
-  call. What remains is wiring it into `scripts/check-gates.sh` and `.githooks/pre-commit`.
+  call. Both workflows therefore inherit its scope: the current checkout, with
+  nested linked worktrees excluded and printed (see Gate 8, Secret scan). What remains is wiring it into `scripts/check-gates.sh` and `.githooks/pre-commit`.
 
 ## When a gate fails
 
