@@ -491,8 +491,15 @@ describe('OAuth user token — issue, attach, cache', () => {
 
     // The token it issued rides on every API request that followed, alongside the
     // API-key headers that are always present.
+    //
+    // Six requests, not three: `getClientVisits` resolves each visit's location
+    // and instructor by reading the `/site/locations` and `/staff/staff`
+    // catalogues, because a `Visit` carries only `LocationId`/`StaffId`. The staff
+    // catalogue costs two requests rather than one because the stub caps that
+    // route at one row per page. The claim under test is that the token reaches
+    // every one of them.
     const apiRequests = apiRequestsOf(stub);
-    expect(apiRequests).toHaveLength(3);
+    expect(apiRequests).toHaveLength(6);
     for (const request of apiRequests) {
       expect(request.headers.authorization).toBe(`Bearer ${STUB_FIXTURES.accessToken}`);
       expect(request.headers['api-key']).toBe(STUB_FIXTURES.apiKey);
@@ -545,15 +552,29 @@ describe('OAuth user token — expiry skew (60s)', () => {
     }
 
     // One issue per API call — the cached token is never reused. (With an expiry
-    // beyond the skew, the sibling test below sees 1 issue for the same 3 calls.)
-    expect(skewStub.tokenRequests.length - before).toBe(3);
+    // beyond the skew, the sibling test below sees 1 issue for the same calls.)
+    //
+    // Six issues, matching the six API requests below: `getClientVisits` also
+    // reads the `/site/locations` and `/staff/staff` catalogues to resolve the
+    // ids a Visit carries, and a token this close to expiry is re-issued for every
+    // one of them. The claim under test — never reuse a token inside the skew —
+    // holds for all six.
+    expect(skewStub.tokenRequests.length - before).toBe(6);
 
+    // Six requests for three tool calls: the two catalogue reads `getClientVisits`
+    // needs to turn `LocationId`/`StaffId` into names, plus the staff catalogue's
+    // second page (the stub caps that route at one row per page).
     const apiRequests = apiRequestsOf(skewStub);
-    expect(apiRequests).toHaveLength(3);
+    expect(apiRequests).toHaveLength(6);
+    // Every API call carries a token, and no token is ever used twice: the
+    // six requests take the six freshly issued tokens in order.
     expect(apiRequests.map((request) => request.headers.authorization)).toEqual([
       `Bearer ${STUB_FIXTURES.accessToken}-1`,
       `Bearer ${STUB_FIXTURES.accessToken}-2`,
       `Bearer ${STUB_FIXTURES.accessToken}-3`,
+      `Bearer ${STUB_FIXTURES.accessToken}-4`,
+      `Bearer ${STUB_FIXTURES.accessToken}-5`,
+      `Bearer ${STUB_FIXTURES.accessToken}-6`,
     ]);
 
     // Every re-issue still authenticates with the API key and the same body.
@@ -614,7 +635,7 @@ describe('OAuth user token — 23-hour fallback when Expires is absent', () => {
     expect(fallbackStub.tokenRequests.length - before).toBe(1);
 
     const apiRequests = apiRequestsOf(fallbackStub);
-    expect(apiRequests).toHaveLength(3);
+    expect(apiRequests).toHaveLength(6);
     for (const request of apiRequests) {
       expect(request.headers.authorization).toBe(`Bearer ${STUB_FIXTURES.accessToken}-1`);
     }
@@ -667,7 +688,7 @@ describe('OAuth user token — failure fallback', () => {
     expect(failedStub.tokenRequests.length - before).toBe(1);
 
     const apiRequests = apiRequestsOf(failedStub);
-    expect(apiRequests).toHaveLength(5);
+    expect(apiRequests).toHaveLength(8);
     for (const request of apiRequests) {
       expect(request.headers['api-key']).toBe(STUB_FIXTURES.apiKey);
       expect(request.headers.siteid).toBe(STUB_FIXTURES.siteId);
@@ -1061,12 +1082,10 @@ describe('domain — clients (read and write)', () => {
     expect(result.isError).toBeFalsy();
 
     // Note the negative: a truthiness bug (`balance || 0`) would turn -42.5 into 0.
+    // One stored card, not a list: the API has no per-card balance to report.
     expect(resultJson(result)).toEqual({
       accountBalance: -42.5,
-      creditCardBalances: [
-        { amount: -30, cardType: 'Visa', lastFour: '4242' },
-        { amount: -12.5, cardType: 'Mastercard', lastFour: '4444' },
-      ],
+      creditCard: { cardType: 'Visa', lastFour: '4242' },
     });
 
     const [request] = stub.requestsTo('/public/v6/client/clientaccountbalances', 'GET');
@@ -1094,7 +1113,7 @@ describe('domain — clients (read and write)', () => {
 });
 
 describe('domain — orders (read and write)', () => {
-  itE2E('getPackages maps Count onto classCount and nests the bundled services', async () => {
+  itE2E('getPackages sums classCount and price from the bundled services', async () => {
     stub.resetLog();
 
     const result = await client.callTool({ name: 'getPackages', arguments: { locationId: 1 } });
@@ -1102,19 +1121,24 @@ describe('domain — orders (read and write)', () => {
 
     const payload = resultJson(result);
     expect(payload.totalPackages).toBe(1);
+    // A `Package` has no Count/Price of its own: both are summed from Services[].
     expect(payload.packages[0]).toEqual({
       id: 601,
       name: 'Unlimited Month',
-      // `classCount` reads the fixture's `Count`, which is 0 — not the id, and
-      // not undefined, so both a wrong key and a dropped field fail here.
-      classCount: 0,
+      discountPercentage: 0,
+      classCount: 10,
       price: 149,
-      onlinePrice: 149,
-      taxIncluded: true,
-      active: true,
-      productId: 701,
       sellOnline: true,
-      services: [{ id: 501, name: '10 Class Pack', count: 10 }],
+      services: [
+        {
+          id: 501,
+          name: '10 Class Pack',
+          count: 10,
+          price: 149,
+          onlinePrice: 149,
+        },
+      ],
+      products: [{ id: 701, name: 'Cork Yoga Mat' }],
     });
 
     const [request] = stub.requestsTo('/public/v6/sale/packages', 'GET');
@@ -1122,7 +1146,7 @@ describe('domain — orders (read and write)', () => {
     expect(request.query.Limit).toBe('200');
   });
 
-  itE2E('getProducts maps the subcategory, colour and size objects', async () => {
+  itE2E('getProducts maps the descriptions, category ids and colour/size objects', async () => {
     stub.resetLog();
 
     const result = await client.callTool({
@@ -1135,19 +1159,21 @@ describe('domain — orders (read and write)', () => {
     // The total comes from PaginationResponse, not from the array length.
     expect(payload.totalProducts).toBe(1);
     expect(payload.products).toHaveLength(1);
+    // Categories are ids, not names: the API returns no category names.
     expect(payload.products[0]).toEqual({
       id: 701,
       name: 'Cork Yoga Mat',
       price: 60,
       onlinePrice: 55,
       description: 'Natural cork, three-ply',
-      category: 'Equipment',
-      subCategory: 'Mats',
+      longDescription: 'A three-ply natural cork mat, 4mm thick.',
+      categoryId: 32,
+      subCategoryId: 33,
       color: 'Natural',
       size: 'Standard',
-      taxIncluded: false,
+      // The spec's TaxIncluded is the tax AMOUNT, not a flag.
+      taxIncludedAmount: 0,
       taxRate: 0.07,
-      sellOnline: true,
     });
 
     const [request] = stub.requestsTo('/public/v6/sale/products', 'GET');
@@ -1158,9 +1184,10 @@ describe('domain — orders (read and write)', () => {
   itE2E('getContracts flattens the autopay schedule and the intro offer', async () => {
     stub.resetLog();
 
+    // locationId is required: the endpoint answers 400 without it.
     const result = await client.callTool({
       name: 'getContracts',
-      arguments: { soldOnline: true },
+      arguments: { locationId: 1, soldOnline: true },
     });
     expect(result.isError).toBeFalsy();
 
@@ -1173,17 +1200,22 @@ describe('domain — orders (read and write)', () => {
       assignsMembershipId: 77,
       assignsMembershipName: 'Gold Membership',
       soldOnline: true,
-      contractType: 'Recurring',
       agreementTerms: 'Cancel with 30 days notice',
-      // FrequencyType -> frequency, FrequencyValue -> duration: two distinct
-      // renames in one nested object.
-      autopaySchedule: { frequency: 'Monthly', duration: 1, paymentAmount: 149 },
-      introOffer: { id: 'io-1', name: 'Intro 99', price: 99 },
-      locationId: 1,
+      // The spec's AutopaySchedule is {FrequencyType, FrequencyValue,
+      // FrequencyTimeUnit}; the money lives on the contract, not on the schedule.
+      autopaySchedule: {
+        frequencyType: 'Monthly',
+        frequencyValue: 1,
+        frequencyTimeUnit: 'Month',
+        recurringPaymentAmountTotal: 149,
+      },
+      // IntroOffer is a string, not an object.
+      introOffer: 'NewAndReturningConsumer',
     });
 
     const [request] = stub.requestsTo('/public/v6/sale/contracts', 'GET');
     expect(request.query.SoldOnline).toBe('true');
+    expect(request.query.LocationId).toBe('1');
     expect(request.query.Limit).toBe('200');
   });
 
@@ -1208,31 +1240,37 @@ describe('domain — orders (read and write)', () => {
     const payload = resultJson(result);
     expect(payload.success).toBe(true);
     expect(payload.message).toBe('Checkout completed successfully');
+    // `CartItem` carries {Item, DiscountAmount, Quantity, Id, VisitIds,
+    // AppointmentIds, Appointments}: name and price live on `Item`, and there is no
+    // server line tax, so `taxRate` is passed through raw rather than invented.
     expect(payload.shoppingCart).toEqual({
       id: 'cart-1',
       subTotal: 280,
       taxTotal: 0,
       discountTotal: 20,
       grandTotal: 260,
-      // `price` is the fixture's `UnitPrice`; `Quantity`/`Total` are carried through.
+      // `price`/`name` come from `Item`; `total` is price × quantity − discount.
+      // `appointments` is empty here because this cart reconciled nothing.
       items: [
         {
-          id: 501,
+          id: 'ci-1',
           name: '10 Class Pack',
           price: 220,
           quantity: 1,
           discountAmount: 20,
-          tax: 0,
+          taxRate: 0,
           total: 200,
+          appointments: [],
         },
         {
-          id: 701,
+          id: 'ci-2',
           name: 'Cork Yoga Mat',
           price: 60,
           quantity: 1,
           discountAmount: 0,
-          tax: 0,
+          taxRate: 0,
           total: 60,
+          appointments: [],
         },
       ],
     });
@@ -1283,15 +1321,18 @@ describe('domain — orders (read and write)', () => {
     const payload = resultJson(result);
     expect(payload.success).toBe(true);
     expect(payload.message).toBe('Contract purchased successfully');
+    // The spec's PurchaseContractResponse is FLAT: {ClientId, UniqueClientId,
+    // LocationId, ContractId, ClientContractId, Totals, PaymentProcessingFailures}.
+    // There is no nested ClientContract object, so reading one is what used to
+    // make a committed purchase report `success: false`.
     expect(payload.clientContract).toEqual({
       id: 902,
       clientId: STUB_FIXTURES.clientId,
-      contractName: 'Gold Unlimited',
-      startDate: '2026-04-01',
-      endDate: '2027-03-31',
-      paymentAmount: 149,
-      frequency: 1,
-      remainingPayments: 12,
+      contractId: 801,
+      locationId: 1,
+      subTotal: 149,
+      tax: 0,
+      total: 149,
     });
 
     const [post] = stub.requestsTo('/public/v6/sale/purchasecontract', 'POST');
@@ -1325,7 +1366,8 @@ describe('domain — orders (read and write)', () => {
     const payload = resultJson(result);
     expect(payload.success).toBe(true);
     expect(payload.shoppingCart.items).toHaveLength(1);
-    expect(payload.shoppingCart.items[0].id).toBe(501);
+    // The id is the cart item's own id; the item it buys is on `itemId`.
+    expect(payload.shoppingCart.items[0].id).toBe('ci-1');
     expect(payload.shoppingCart.items[0].appointments).toEqual([appointmentId]);
     expect(payload.appointments).toEqual([
       {
@@ -1368,10 +1410,13 @@ describe('domain — appointments (read and write)', () => {
     // totalAppointments is read from PaginationResponse.TotalResults.
     expect(payload.totalAppointments).toBe(1);
     expect(payload.appointments).toHaveLength(1);
-    // clientName is composed from FirstName + LastName inside the tool.
+    // An `Appointment` carries only `ClientId`: no client object, so there is no
+    // clientName/Email/Phone to report. `confirmed` is derived from Status, because
+    // there is no `Confirmed` field. `sessionTypeName` and `locationName` are
+    // resolved from the /site/sessiontypes and /site/locations catalogues.
     expect(payload.appointments[0]).toEqual({
       id: 8001,
-      status: 'Booked',
+      status: 'Confirmed',
       staffId: 42,
       staffName: 'Ada Lovelace',
       sessionTypeId: 9,
@@ -1381,9 +1426,6 @@ describe('domain — appointments (read and write)', () => {
       startDateTime: '2026-03-05T10:00:00',
       endDateTime: '2026-03-05T11:00:00',
       clientId: STUB_FIXTURES.clientId,
-      clientName: 'Grace Hopper',
-      clientEmail: STUB_FIXTURES.client.Email,
-      clientPhone: STUB_FIXTURES.client.MobilePhone,
       notes: 'Bring a mat',
       staffRequested: true,
       providerId: 'prov-1',
@@ -1485,7 +1527,10 @@ describe('domain — appointments (read and write)', () => {
     expect(request.queryAll['SessionTypeIds[]']).toEqual(['23', '9']);
     expect(request.query.StartTime).toBe('06:00:00');
     expect(request.query.EndTime).toBe('08:00:00');
-    expect(request.queryAll['Days[]']).toEqual(['Monday', 'Tuesday']);
+    // `Days` is not a parameter of this endpoint and the sandbox ignores an
+    // unknown one silently, so the tool must not send it at all.
+    expect(request.queryAll['Days[]']).toBeUndefined();
+    expect(request.query.Days).toBeUndefined();
   });
 
   itE2E('addAppointment POSTs the booking and surfaces the response message', async () => {
@@ -1516,8 +1561,10 @@ describe('domain — appointments (read and write)', () => {
       endDateTime: '2026-03-06T10:00:00',
       duration: 60,
       staffName: 'Ada Lovelace',
-      sessionTypeName: 'Personal Training',
-      locationName: 'E2E Annex',
+      // The booked Appointment carries SessionTypeId/LocationId, not the objects,
+      // so the ids are returned rather than names the response never sent.
+      sessionTypeId: 9,
+      locationId: 1,
     });
 
     const [post] = stub.requestsTo('/public/v6/appointment/addappointment', 'POST');
@@ -1877,7 +1924,9 @@ describe('pagination — multi-page walks through the real server', () => {
     stub.resetLog();
 
     const locations = resultJson(await client.callTool({ name: 'getLocations', arguments: {} }));
-    expect(locations.totalLocations).toBe(1);
+    // Two rows: the main studio and the annex, which `getClientVisits` needs in
+    // order to resolve a visit's LocationId to a name.
+    expect(locations.totalLocations).toBe(2);
     expect(locations.locations[0]).toMatchObject({
       id: 1,
       name: 'E2E Main Studio',
@@ -2202,12 +2251,13 @@ describe('domain — site', () => {
       acceptsDiscover: false,
       acceptsAmex: true,
       contactEmail: 'studio@example.invalid',
-      esi: 'stub-esi',
       taxInclusivePrices: false,
+      // The spec's field is CurrencyIsoCode (surfaced as `currency`), and Site has no
+      // ESI and no TotalLocations: the count is derived from GET /site/locations.
       currency: 'USD',
       countryCode: 'US',
       timeZone: 'America/Los_Angeles',
-      totalLocations: 1,
+      totalLocations: 2,
     });
   });
 });
@@ -2229,16 +2279,18 @@ describe('domain — service definitions', () => {
       name: '10 Class Pack',
       price: 220,
       onlinePrice: 199,
-      taxIncluded: true,
+      // TaxIncluded is the tax amount the spec documents, not a flag.
+      taxIncludedAmount: 25,
       taxRate: 0.07,
       programId: 3,
-      sessionTypeId: 9,
       count: 10,
       expirationUnit: 'Months',
       expirationLength: 6,
       membershipId: 77,
-      priority: 1,
-      prerequisite: 'None',
+      // "High" | "Medium" | "Low" — a string in the spec.
+      priority: 'High',
+      // No sessionTypeId and no prerequisite: a Service has neither field.
+      // Session-type applicability is the `sessionTypeIds` request filter above.
     });
 
     const [request] = stub.requestsTo('/public/v6/sale/services', 'GET');
@@ -2260,14 +2312,15 @@ describe('domain — service definitions', () => {
 
     const payload = resultJson(result);
     expect(payload.totalSessionTypes).toBe(1);
-    // `defaultDuration`/`defaultDurationType` are the tool's renames of
-    // `DefaultTimeLength`/`DefaultTimeLengthType`; a fixture using the output
-    // names instead would leave these undefined.
+    // `defaultDuration` is the tool's rename of `DefaultTimeLength`. There is no
+    // `DefaultTimeLengthType` on the spec's SessionType, so no `defaultDurationType`
+    // is reported; `staffTimeLength` and `resourceRequired` are the real fields.
     expect(payload.sessionTypes[0]).toEqual({
       id: 9,
       name: 'Personal Training',
       defaultDuration: 60,
-      defaultDurationType: 'Minutes',
+      staffTimeLength: 60,
+      resourceRequired: false,
       numDeducted: 1,
       programId: 3,
       category: 'Appointment',

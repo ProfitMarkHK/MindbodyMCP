@@ -490,6 +490,35 @@ interface UpdateEventParams {
 }
 ```
 
+## Deliberate deviations from the spec
+
+[`docs/openapi.json`](openapi.json) is the specification this server is written
+against, and [`docs/adr/0001-write-to-observed-sandbox-behaviour.md`](adr/0001-write-to-observed-sandbox-behaviour.md)
+records the rule this section exists to serve: **where the specification and
+the live API disagree, the API wins and the disagreement is written down here,
+at the call site, and in the ADR.** Every entry below is deliberate. Anything
+not listed here is expected to match the specification exactly.
+
+Evidence for each row — the request, the HTTP status and the response — is in
+[`docs/mindbody-spec-discrepancies.md`](mindbody-spec-discrepancies.md), which
+names the section quoted in the last column.
+
+| Endpoint | The spec says | The sandbox does | What the code does |
+|---|---|---|---|
+| `GET /appointment/activesessiontimes` | `GetActiveSessionTimesResponse` documents `PaginationResponse`, `ActiveSessionTimes: string[]` and `SessionTypeActiveSessionTimes`, described as "omitted when `SessionTypeIds` is not supplied". | `SessionTypeActiveSessionTimes: [{SessionTypeId, ActiveSessionTimes}]` is present when `SessionTypeIds` is sent and absent otherwise, exactly as described. `ActiveSessionTimes` are `HH:MM:SS` strings, not objects. | Handles both shapes and merges the per-session-type grid across pages rather than reading page one. Marked at the call site. | D-1 |
+| `GET /site/resources` | The 200 body is typed `{"type": "object"}`. No `Resource` model is referenced, so there is no documented list key. | Returns `{PaginationResponse, Resources: [{Id, Name}]}`. The documented `locationIds` and `resourceIds` filters return the full list. An unrecognised `SessionTypeIds` returns **HTTP 500** instead of being ignored. | Sends only documented parameters, reads the undocumented `Resources` key, and says so at the call site. | D-2 |
+| `GET /appointment/staffappointments` | `Appointment.Status` documents `Cancelled` and `LateCancelled`; no status filter or exclusion is documented. | Never returns either status. A just-cancelled appointment disappears from the list instead of coming back as `Cancelled`. | Reads back a cancellation as *absent*. `cancelAppointments` verifies ownership, time and status against this list, so an absent row is the expected result. Marked at the call site. | D-4 |
+| `POST /client/addclient` | `AddClientRequest` requires only `FirstName` and `LastName`. Its date-of-birth field is `BirthDate`; there is no `Birthday`. Required fields are not described as site-configurable. | Answers `The following are required: Birthday (Code: MissingRequiredFields)` when no date of birth is sent. | Sends `BirthDate` **and** `Birthday`, plus the undocumented aliases `Street` and `MobileNumber`. `addClient` therefore always creates a real client — see the next row. | D-5 |
+| `POST /client/updateclient` | `CrossRegionalUpdate` is documented as propagating to every site in the region, falling back to a single-site update for a region that is not enabled. No default is stated. | Defaults to true and answers HTTP 400 `The current site does not belong to a region. If you are attempting to update a client at a single site, set CrossRegionalUpdate to false.` | Always sends `CrossRegionalUpdate: false`. Marked at the call site. | D-6 |
+| `POST /sale/checkoutshoppingcart` | `CartItem.Appointments` is described as "the IDs of the appointments that were reconciled by this cart item" but typed as `Appointment[]`. The sibling `AppointmentIds` has the placeholder description "Gets or sets the item." | A committed sale that sent `AppointmentIds: [<id>]` did reconcile the appointment (it read back `Completed`), yet `CartItems[].Appointments`, `CartItems[].AppointmentIds` and the top-level `Appointments` all came back empty. | Accepts both shapes of `Appointments`, and states that an absent reconciliation list does not mean the sale failed. **To confirm which appointment a sale paid for, re-read the appointment.** | D-8 |
+| `POST /client/addclient` and `POST /sale/purchasecontract` | Both request definitions document `Test: boolean` — "input information is validated, but not committed". | `addclient` with `Test: true` answers HTTP 400 `Test mode is not allowed for this endpoint.` `purchasecontract` with `Test: true` and no card demands a payment instrument the sandbox cannot supply. | Sends no `Test` flag to either. **`addClient` and `purchaseContract` have no dry-run mode and always commit.** | D-10 |
+| `GET /sale/services` | Only the array filter `request.sessionTypeIds` is documented; there is no singular form. | `SessionTypeId=23` returns the unfiltered 21 services; `SessionTypeIds=23` returns 1. Unknown query names are dropped without error, as they are across the API. | Sends the documented plural only. Worth knowing when a filter appears to do nothing: a mis-pluralised filter degrades to a full-table read with a 200, not an error. | D-7 |
+
+Adding a new entry is not a judgement call. The ADR states the five conditions
+— the specification and the sandbox must genuinely disagree, there must be
+captured evidence, the sandbox must be the only authority, the accommodation
+must be load-bearing, and all three records must change together.
+
 ## Type Definitions
 
 ### Core Types

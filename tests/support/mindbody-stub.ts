@@ -195,12 +195,13 @@ export const STUB_FIXTURES = {
     AcceptsDiscover: false,
     AcceptsAmericanExpress: true,
     ContactEmail: 'studio@example.invalid',
-    ESI: 'stub-esi',
     TaxInclusivePrices: false,
-    Currency: 'USD',
+    // Spec-shaped: the currency field is `CurrencyIsoCode`, and there is no
+    // `ESI` and no `TotalLocations` on Site. totalLocations is counted from
+    // GET /site/locations.
+    CurrencyIsoCode: 'USD',
     CountryCode: 'US',
     TimeZone: 'America/Los_Angeles',
-    TotalLocations: 1,
   },
 
   // ── Clients ────────────────────────────────────────────────────────────────
@@ -220,7 +221,9 @@ export const STUB_FIXTURES = {
     Country: 'US',
     IsProspect: false,
     SendAccountEmails: true,
-    LiabilityRelease: { IsReleased: true, AgreementDate: '2024-01-15' },
+    // Spec-shaped: `LiabilityRelease` is a BOOLEAN and the object is `Liability`.
+    LiabilityRelease: true,
+    Liability: { AgreementDate: '2024-01-15', IsReleased: true, ReleasedBy: 42 },
     EmergencyContactInfoName: 'Alan Turing',
     EmergencyContactInfoPhone: '555-0199',
     EmergencyContactInfoRelationship: 'Spouse',
@@ -251,15 +254,18 @@ export const STUB_FIXTURES = {
 
   // Visits: one attended, one late-cancelled. `getClientVisitsTool` derives three
   // different counts from `SignedIn`/`LateCancelled`, so a fixture that set only
-  // one flag could not tell those branches apart.
+  // one flag could not tell those branches apart. Spec-shaped: a `Visit` carries
+  // `LocationId`/`StaffId` only — there is no `Location` or `Staff` object — so
+  // the tool resolves the names from the /site/locations and /staff/staff
+  // catalogues.
   visitAttended: {
     Id: 7001,
     ClassId: 101,
     Name: 'Vinyasa Flow',
     StartDateTime: '2026-03-02T09:00:00',
     EndDateTime: '2026-03-02T10:00:00',
-    Location: { Name: 'E2E Main Studio' },
-    Staff: { Name: 'Ada Lovelace' },
+    LocationId: 1,
+    StaffId: 42,
     SignedIn: true,
     WebSignup: false,
     LateCancelled: false,
@@ -272,8 +278,8 @@ export const STUB_FIXTURES = {
     Name: 'Power Reformer',
     StartDateTime: '2026-03-03T18:00:00',
     EndDateTime: '2026-03-03T19:00:00',
-    Location: { Name: 'E2E Annex' },
-    Staff: { Name: 'Ada Lovelace' },
+    LocationId: 2,
+    StaffId: 42,
     SignedIn: false,
     WebSignup: true,
     LateCancelled: true,
@@ -286,10 +292,8 @@ export const STUB_FIXTURES = {
       {
         Id: 'c-1001',
         AccountBalance: -42.5,
-        ClientCreditCards: [
-          { Balance: -30, CardType: 'Visa', LastFour: '4242' },
-          { Balance: -12.5, CardType: 'Mastercard', LastFour: '4444' },
-        ],
+        // Spec-shaped: ONE stored card object, and no per-card balance anywhere.
+        ClientCreditCard: { CardId: 'cc-1', CardType: 'Visa', LastFour: '4242' },
       },
     ],
   },
@@ -298,11 +302,12 @@ export const STUB_FIXTURES = {
   sessionType: {
     Id: 9,
     Name: 'Personal Training',
-    // The tool maps these to `defaultDuration`/`defaultDurationType`, not to
-    // `defaultDuration`-shaped names: a fixture using the wrong name here would
-    // silently produce `undefined`.
+    // The tool maps `DefaultTimeLength` to `defaultDuration`; there is no
+    // `DefaultTimeLengthType` on the spec's SessionType, so a fixture using one
+    // would silently produce a field the API does not send.
     DefaultTimeLength: 60,
-    DefaultTimeLengthType: 'Minutes',
+    StaffTimeLength: 60,
+    ResourceRequired: false,
     NumDeducted: 1,
     ProgramId: 3,
     Category: 'Appointment',
@@ -317,49 +322,56 @@ export const STUB_FIXTURES = {
     Name: '10 Class Pack',
     Price: 220,
     OnlinePrice: 199,
-    TaxIncluded: true,
+    TaxIncluded: 25,
     TaxRate: 0.07,
     ProgramId: 3,
-    SessionTypeId: 9,
+    // No SessionTypeId and no Prerequisite: the spec's `Service` has neither.
+    // Session-type applicability is a request filter, not a field on the row.
     Count: 10,
     ExpirationUnit: 'Months',
     ExpirationLength: 6,
     MembershipId: 77,
-    Priority: 1,
-    Prerequisite: 'None',
+    // The spec types Service.Priority as the string "High"/"Medium"/"Low".
+    Priority: 'High',
   },
 
   // ── Orders ─────────────────────────────────────────────────────────────────
+  // Spec-shaped `Package`: {DiscountPercentage, Id, Name, Products[], SellOnline,
+  // Services[]}. There is no package-level Count/Price/OnlinePrice/TaxIncluded/
+  // Active/ProductId; classCount and price are summed from Services[].
   package: {
     Id: 601,
     Name: 'Unlimited Month',
-    // `Count` is surfaced as `classCount`, so it must not be confused with `Id`.
-    Count: 0,
-    Price: 149,
-    OnlinePrice: 149,
-    TaxIncluded: true,
-    Active: true,
-    ProductId: 701,
+    DiscountPercentage: 0,
     SellOnline: true,
-    Services: [{ Id: 501, Name: '10 Class Pack', Count: 10 }],
+    Services: [
+      { Id: 501, Name: '10 Class Pack', Count: 10, Price: 149, OnlinePrice: 149, TaxIncluded: true },
+    ],
+    Products: [{ Id: 701, Name: 'Cork Yoga Mat', Count: 1 }],
   },
 
+  // Spec-shaped `Product`: ShortDescription/LongDescription and CategoryId/
+  // SubCategoryId. There is no `Description`, no `Category`/`Subcategory` name,
+  // and no per-row `SellOnline` (it is a request filter).
   product: {
     Id: 701,
     Name: 'Cork Yoga Mat',
     Price: 60,
     OnlinePrice: 55,
-    Description: 'Natural cork, three-ply',
-    Category: 'Equipment',
-    // Note the capital S: the tool reads `product.Subcategory`, not `subCategory`.
-    Subcategory: 'Mats',
+    ShortDescription: 'Natural cork, three-ply',
+    LongDescription: 'A three-ply natural cork mat, 4mm thick.',
+    CategoryId: 32,
+    SubCategoryId: 33,
     Color: { Name: 'Natural' },
     Size: { Name: 'Standard' },
-    TaxIncluded: false,
+    // TaxIncluded is the tax AMOUNT the spec documents, not a flag.
+    TaxIncluded: 0,
     TaxRate: 0.07,
-    SellOnline: true,
   },
 
+  // Spec-shaped `Contract`: no ContractType, no LocationId, `IntroOffer` is a
+  // STRING, and `AutopaySchedule` is {FrequencyType, FrequencyValue,
+  // FrequencyTimeUnit} with the money on the contract itself.
   contract: {
     Id: 801,
     Name: 'Gold Unlimited',
@@ -367,15 +379,16 @@ export const STUB_FIXTURES = {
     AssignsMembershipId: 77,
     AssignsMembershipName: 'Gold Membership',
     SoldOnline: true,
-    ContractType: 'Recurring',
     AgreementTerms: 'Cancel with 30 days notice',
     AutopaySchedule: {
       FrequencyType: 'Monthly',
       FrequencyValue: 1,
-      PaymentAmount: 149,
+      FrequencyTimeUnit: 'Month',
     },
-    IntroOffer: { Id: 'io-1', Name: 'Intro 99', Price: 99 },
-    LocationId: 1,
+    FirstPaymentAmountTotal: 149,
+    RecurringPaymentAmountTotal: 149,
+    TotalContractAmountTotal: 1788,
+    IntroOffer: 'NewAndReturningConsumer',
   },
 
   shoppingCart: {
@@ -386,24 +399,42 @@ export const STUB_FIXTURES = {
       DiscountTotal: 20,
       GrandTotal: 260,
       CartItems: [
-        // `UnitPrice` is what the tool maps to `price`; `Price` would be ignored.
+        // Spec-shaped `CartItem`: {Item, DiscountAmount, Quantity, Id, VisitIds,
+        // AppointmentIds, Appointments}. Name and price live on `Item`, not on
+        // the cart item.
         {
-          Id: 501,
-          Name: '10 Class Pack',
-          UnitPrice: 220,
+          Id: 'ci-1',
           Quantity: 1,
           DiscountAmount: 20,
-          TaxAmount: 0,
-          Total: 200,
+          VisitIds: [],
+          AppointmentIds: [],
+          Appointments: [],
+          Item: {
+            Id: 501,
+            Name: '10 Class Pack',
+            Price: 220,
+            OnlinePrice: 199,
+            TaxRate: 0,
+            TaxIncluded: true,
+            Count: 10,
+          },
         },
         {
-          Id: 701,
-          Name: 'Cork Yoga Mat',
-          UnitPrice: 60,
+          Id: 'ci-2',
           Quantity: 1,
           DiscountAmount: 0,
-          TaxAmount: 0,
-          Total: 60,
+          VisitIds: [],
+          AppointmentIds: [],
+          Appointments: [],
+          Item: {
+            Id: 701,
+            Name: 'Cork Yoga Mat',
+            Price: 60,
+            OnlinePrice: 55,
+            TaxRate: 0,
+            TaxIncluded: false,
+            Count: 1,
+          },
         },
       ],
     },
@@ -418,17 +449,17 @@ export const STUB_FIXTURES = {
     ],
   },
 
-  clientContract: {
-    ClientContract: {
-      Id: 902,
-      ClientId: 'c-1001',
-      ContractName: 'Gold Unlimited',
-      StartDate: '2026-04-01',
-      EndDate: '2027-03-31',
-      PaymentAmount: 149,
-      Frequency: 1,
-      RemainingPayments: 12,
-    },
+  // Spec-shaped `PurchaseContractResponse`: FLAT, with no nested ClientContract
+  // object. Reading `response.ClientContract.Id` is what made a successful
+  // purchase report failure.
+  purchasedContract: {
+    ClientId: 'c-1001',
+    UniqueClientId: 1001,
+    LocationId: 1,
+    ContractId: 801,
+    ClientContractId: 902,
+    Totals: { SubTotal: 149, Tax: 0, Total: 149 },
+    PaymentProcessingFailures: [],
   },
 
   // ── Appointments ───────────────────────────────────────────────────────────
@@ -436,26 +467,20 @@ export const STUB_FIXTURES = {
     Id: 8001,
     Status: 'Booked',
     StaffId: 42,
-    Staff: { Id: 42, Name: 'Ada Lovelace' },
+    // An embedded `AppointmentStaff` documents only Id/FirstName/LastName/DisplayName.
+    Staff: { Id: 42, Name: 'Ada Lovelace', FirstName: 'Ada', LastName: 'Lovelace', DisplayName: 'Ada Lovelace' },
     SessionTypeId: 9,
-    SessionType: { Id: 9, Name: 'Personal Training' },
     LocationId: 1,
-    Location: { Id: 1, Name: 'E2E Main Studio' },
     StartDateTime: '2026-03-05T10:00:00',
     EndDateTime: '2026-03-05T11:00:00',
     ClientId: 'c-1001',
-    Client: {
-      Id: 'c-1001',
-      FirstName: 'Grace',
-      LastName: 'Hopper',
-      Email: 'grace@example.invalid',
-      MobilePhone: '555-0111',
-    },
     Notes: 'Bring a mat',
     StaffRequested: true,
     ProviderId: 'prov-1',
     Duration: 60,
-    Confirmed: true,
+    // Confirmation is Status === 'Confirmed'; `Appointment` has no `Confirmed`
+    // field, so the fixture states it the way the API does.
+    Status: 'Confirmed',
     FirstAppointment: false,
   },
 
@@ -466,9 +491,9 @@ export const STUB_FIXTURES = {
       StartDateTime: '2026-03-06T09:00:00',
       EndDateTime: '2026-03-06T10:00:00',
       Duration: 60,
-      Staff: { Id: 42, Name: 'Ada Lovelace' },
-      SessionType: { Name: 'Personal Training' },
-      Location: { Name: 'E2E Annex' },
+      Staff: { Id: 42, Name: 'Ada Lovelace', FirstName: 'Ada', LastName: 'Lovelace' },
+      SessionTypeId: 9,
+      LocationId: 1,
     },
     // A distinct Message proves the tool surfaced the response's message rather
     // than its own `|| 'Appointment booked successfully'` default.
@@ -516,7 +541,7 @@ export const STUB_FIXTURES = {
     { Id: 42, Name: 'Ada Lovelace', FirstName: 'Ada', LastName: 'Lovelace', Email: 'ada@example.invalid' },
   ],
   classDescriptions: [
-    { Id: 10, Name: 'Vinyasa Flow', Description: 'A dynamic class', ImageUrl: 'https://example.invalid/v.png', Prereq: 'None', Level: { Name: 'All Levels' } },
+    { Id: 10, Name: 'Vinyasa Flow', Description: 'A dynamic class', ImageURL: 'https://example.invalid/v.png', Prereq: 'None', Level: { Name: 'All Levels' } },
     { Id: 11, Name: 'Power Reformer', Description: 'Reformer strength', Prereq: 'Intro to Reformer', Level: { Name: 'Intermediate' } },
   ],
   waitlistEntry: {
@@ -524,15 +549,27 @@ export const STUB_FIXTURES = {
     ClassId: 101,
     ClassDate: '2026-03-09T00:00:00',
     RequestDateTime: '2026-03-01T08:00:00',
+    EnrollmentDateForward: '2026-03-02T00:00:00',
     Web: true,
+    VisitRefNo: 0,
     Client: { Id: 'c-1001', FirstName: 'Grace', LastName: 'Hopper' },
+    // The tool derives className from the nested schedule, which is where the
+    // spec puts it — `WaitlistEntry` has no `ClassName` of its own.
+    ClassSchedule: { Id: 301, ClassDescription: { Id: 10, Name: 'Vinyasa Flow' } },
   },
   classSchedule: {
     Id: 301,
     ClassDescription: { Id: 10, Name: 'Vinyasa Flow' },
     Staff: { Id: 42, Name: 'Ada Lovelace', FirstName: 'Ada', LastName: 'Lovelace' },
     Location: { Id: 1, Name: 'E2E Main Studio' },
+    DaySunday: false,
     DayMonday: true,
+    DayTuesday: false,
+    DayWednesday: false,
+    DayThursday: false,
+    DayFriday: false,
+    DaySaturday: false,
+    IsAvailable: true,
     StartTime: '09:00:00',
     EndTime: '10:00:00',
     StartDate: '2026-01-05',
@@ -575,6 +612,21 @@ export const STUB_FIXTURES = {
     StateProvCode: 'CA',
     PostalCode: '90000',
     Phone: '555-0100',
+    // Spec-shaped: AdditionalImageURLs is a string[] (not a list of objects),
+    // Amenities is {Id, Name}, and there is no BusinessHours on a Location.
+    AdditionalImageURLs: ['https://example.invalid/studio.jpg'],
+    Amenities: [{ Id: 1, Name: 'Showers' }],
+  },
+  location2: {
+    Id: 2,
+    Name: 'E2E Annex',
+    Description: 'The annex room',
+    HasClasses: true,
+    Address: '2 Loopback Lane',
+    City: 'Localhost',
+    StateProvCode: 'CA',
+    PostalCode: '90000',
+    Phone: '555-0101',
   },
   program: { Id: 3, Name: 'Yoga', ScheduleType: 'Class', CancelOffset: 12, ContentFormats: ['InPerson'] },
 } as const;
@@ -599,7 +651,7 @@ export const STUB_CLASSES: ReadonlyArray<Record<string, any>> = Array.from({ len
     TotalBooked: 5 + i,
     IsWaitlistAvailable: true,
     IsCanceled: false,
-    IsSubstitute: false,
+    Substitute: false,
   };
 });
 
@@ -1203,7 +1255,7 @@ export class MindbodyStub {
     );
 
     this.route('GET', '/site/locations', (request) =>
-      listResponse('Locations', [STUB_FIXTURES.location], request.query)
+      listResponse('Locations', [STUB_FIXTURES.location, STUB_FIXTURES.location2], request.query)
     );
 
     this.route('GET', '/site/programs', (request) =>
@@ -1280,11 +1332,10 @@ export class MindbodyStub {
       return {
         status: 200,
         body: {
-          ClientContract: {
-            ...STUB_FIXTURES.clientContract.ClientContract,
-            // Echo the ids the caller sent, so a dropped field cannot pass.
-            ClientId: body.ClientId,
-          },
+          ...STUB_FIXTURES.purchasedContract,
+          // Echo the ids the caller sent, so a dropped field cannot pass.
+          ClientId: body.ClientId,
+          ContractId: body.ContractId,
         },
       };
     });

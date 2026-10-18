@@ -416,6 +416,35 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Sandbox:** `addclient` with `Test: true` → 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`. `purchasecontract` with `Test: true` and no card → 400 `At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`, so validation-only runs need payment details the sandbox cannot supply.
 - **Write-up:** "`AddClientRequest.Test` is documented but the endpoint answers `Test mode is not allowed for this endpoint`. Please either honour the flag or remove it from the schema. For `PurchaseContractRequest`, a `Test: true` request still requires a payment instrument, which makes dry-run validation impossible on the sandbox; a sandbox-only payment method or a relaxed Test path would help."
 
+## F. Follow-ups found after this audit (not fixed here)
+
+### F-1. `nextjs-app/` reads the same phantom fields section C fixed in `src/`
+
+**File:** `nextjs-app/src/lib/mindbody/service.ts`
+
+The audit's scope was the 46 call sites in `src/**/*.ts`. The Next.js app is a
+second, independent Mindbody client in this repository that was not in that
+scope, and it still reads fields section C established do not exist:
+
+| Reads | Spec field | Same defect as |
+|---|---|---|
+| `c.LiabilityRelease.IsReleased` / `.AgreementDate` | `c.Liability`; `LiabilityRelease` is a boolean | C-14 |
+| `client?.ClientCreditCards` | `client.ClientCreditCard`, a single object | C-17 |
+| `ImageUrl` | `ImageURL` | C-7 |
+| `c.IsSubstitute` | `c.Substitute` | C-6 |
+| `isMale` | `IsMale` | C-30 |
+| `IntroOffer.Id` / `.Name` / `.Price` | `IntroOffer` is a string | C-25 |
+
+**Why it is recorded rather than fixed.** The same shapes are consumed
+downstream: `nextjs-app/src/lib/sync/index.ts` and the Prisma schema depend on
+them, and Gates 14 and 15 type-check and build that app. Changing them is a
+migration with its own test surface, not a mechanical field rename, and it
+deserves its own change rather than landing silently inside a fix to `src/`.
+
+**Consequence if unfixed.** The Next.js app renders the same always-empty
+fields this audit removed from the MCP server. Both code bases are wrong in the
+same way, so a fix applied to one should be applied to the other.
+
 ## E. Unverified items
 
 | # | Item | Why it could not be verified |

@@ -44,6 +44,10 @@ async function findTeacherByName(
   return teacher || null;
 }
 
+/**
+ * A teacher's classes for a date range. `substitute` comes from `Class.Substitute`
+ * (there is no `Class.IsSubstitute`), so the output field is named `substitute`.
+ */
 export async function getTeacherScheduleTool(
   teacherName: string,
   startDate?: string,
@@ -93,7 +97,7 @@ export async function getTeacherScheduleTool(
     endTime: cls.EndDateTime,
     duration: getDurationInMinutes(cls.StartDateTime, cls.EndDateTime),
     location: cls.Location?.Name || '',
-    isSubstitute: cls.IsSubstitute,
+    substitute: cls.Substitute,
     isCanceled: cls.IsCanceled,
     spotsAvailable: cls.MaxCapacity - cls.TotalBooked,
     totalSpots: cls.MaxCapacity,

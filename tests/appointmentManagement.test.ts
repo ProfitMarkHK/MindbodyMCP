@@ -3,12 +3,13 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import type { AxiosRequestConfig } from "axios";
 import type { IMindbodyClient } from "../src/api/client.js";
-import { SpecValidatingClient } from "./spec-validating-client.js";
+import { SpecValidatingClient, SpecValidationError } from "./spec-validating-client.js";
 import {
   MAX_CANCELLATIONS_PER_REQUEST,
   addAppointmentTool,
   cancelAppointmentsTool,
   getActiveSessionTimesTool,
+  getScheduleItemsTool,
   getStaffAppointmentsTool,
   updateAppointmentTool,
 } from "../src/tools/appointmentManagement.js";
@@ -767,7 +768,7 @@ describe("getActiveSessionTimesTool", () => {
 
   it("maps the plain time strings overall and per session type", async () => {
     const client = new FixedResponseClient(realShape);
-    const result = await getActiveSessionTimesTool("Appointment", [23, 24], undefined, undefined, undefined, client);
+    const result = await getActiveSessionTimesTool("Appointment", [23, 24], undefined, undefined, client);
     expect(result).toEqual({
       activeTimes: ["06:00:00", "06:30:00", "07:00:00"],
       bySessionType: [
@@ -780,29 +781,37 @@ describe("getActiveSessionTimesTool", () => {
     expect(client.gets[0].url).toBe("/appointment/activesessiontimes");
   });
 
-  it("passes every query param through, including Days, and defaults ScheduleType to All", async () => {
+  it("sends only the documented query params and never a Days filter, defaulting ScheduleType to All", async () => {
     const client = new FixedResponseClient(realShape);
-    await getActiveSessionTimesTool(undefined, [23], "06:00:00", "09:00:00", ["Monday"], client);
+    await getActiveSessionTimesTool(undefined, [23], "06:00:00", "09:00:00", client);
     expect(client.gets[0].params).toEqual({
       ScheduleType: "All",
       SessionTypeIds: [23],
       StartTime: "06:00:00",
       EndTime: "09:00:00",
-      Days: ["Monday"],
       Limit: 200,
       Offset: 0,
     });
+    expect("Days" in client.gets[0].params).toBe(false);
   });
 
-  it("sends only spec-defined params when Days is not given", async () => {
+  it("passes spec validation, and the validator rejects the Days filter it used to send", async () => {
+    // The request the tool itself builds must satisfy docs/openapi.json ...
     const validator = new SpecValidatingClient(spec, realShape);
-    const result = await getActiveSessionTimesTool("Class", [23], "06:00:00", "09:00:00", undefined, validator);
+    const result = await getActiveSessionTimesTool("Class", [23], "06:00:00", "09:00:00", validator);
     expect(result.totalActiveTimes).toBe(3);
+    // ... and `Days`, which the sandbox silently ignored, is not a parameter.
+    await expect(
+      new SpecValidatingClient(spec, realShape).get("/appointment/activesessiontimes", { params: { Days: ["Monday"] } })
+    ).rejects.toThrow(SpecValidationError);
+    await expect(
+      new SpecValidatingClient(spec, realShape).get("/appointment/activesessiontimes", { params: { Days: ["Monday"] } })
+    ).rejects.toThrow('Unrecognised query parameter "Days"');
   });
 
   it("returns empty lists when the response omits both arrays", async () => {
     const client = new FixedResponseClient({ PaginationResponse: { TotalResults: 0 } });
-    const result = await getActiveSessionTimesTool(undefined, undefined, undefined, undefined, undefined, client);
+    const result = await getActiveSessionTimesTool(undefined, undefined, undefined, undefined, client);
     expect(result).toEqual({ activeTimes: [], bySessionType: [], totalActiveTimes: 0 });
   });
 
@@ -812,7 +821,7 @@ describe("getActiveSessionTimesTool", () => {
       ActiveSessionTimes: ["06:00:00", { Id: 1 }, null],
       SessionTypeActiveSessionTimes: [{ SessionTypeId: 23, ActiveSessionTimes: ["06:00:00", 7] }, { SessionTypeId: 24 }],
     });
-    const result = await getActiveSessionTimesTool(undefined, undefined, undefined, undefined, undefined, client);
+    const result = await getActiveSessionTimesTool(undefined, undefined, undefined, undefined, client);
     expect(result).toEqual({
       activeTimes: ["06:00:00"],
       bySessionType: [
@@ -851,7 +860,7 @@ describe("getActiveSessionTimesTool", () => {
       },
       post: async () => { throw new Error("unused"); },
     };
-    const result = await getActiveSessionTimesTool("Appointment", [23, 24], undefined, undefined, undefined, client);
+    const result = await getActiveSessionTimesTool("Appointment", [23, 24], undefined, undefined, client);
     expect(offsets).toEqual([0, 2]);
     expect(result).toEqual({
       activeTimes: ["06:00:00", "06:30:00", "07:00:00", "07:30:00"],
@@ -869,6 +878,456 @@ describe("getActiveSessionTimesTool", () => {
       get: async () => { throw new Error("Mindbody API Error: boom (Code: InternalError)"); },
       post: async () => { throw new Error("unused"); },
     };
-    await expect(getActiveSessionTimesTool(undefined, undefined, undefined, undefined, undefined, client)).rejects.toThrow("boom");
+    await expect(getActiveSessionTimesTool(undefined, undefined, undefined, undefined, client)).rejects.toThrow("boom");
+  });
+});
+
+// ── C-1, C-2, C-4, C-5: the spec's own models, read field by field ─────────────
+
+/**
+ * `SpecValidatingClient` that also records what it validated, so one client
+ * proves both halves of a request: it satisfies docs/openapi.json (the
+ * validator throws otherwise) and it sent the parameters the test asserts on.
+ */
+class RecordingValidatingClient implements IMindbodyClient {
+  readonly gets: Array<{ url: string; params: Record<string, unknown> }> = [];
+  readonly posts: Array<{ url: string; data: any }> = [];
+  readonly cache = new SimpleCache(5);
+  private readonly validator: SpecValidatingClient;
+
+  constructor(fixture: unknown) {
+    this.validator = new SpecValidatingClient(spec, fixture);
+  }
+
+  async request<T>(): Promise<T> {
+    throw new Error("request() is not used by these tools");
+  }
+
+  async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    // Validate first: a rejected request is never recorded as sent.
+    const response = await this.validator.get<T>(url, config);
+    this.gets.push({ url, params: config?.params ?? {} });
+    return response;
+  }
+
+  async post<T>(url: string, data?: any): Promise<T> {
+    const response = await this.validator.post<T>(url, data);
+    this.posts.push({ url, data });
+    return response;
+  }
+
+  /** Every GET except the site lookup, which these tests never need. */
+  get dataGets() {
+    return this.gets.filter((get) => get.url !== "/site/sites");
+  }
+}
+
+/**
+ * One row from each catalogue the tools resolve names through, with ids that
+ * match the appointment rows below. `sessionTypeNames()` reads `SessionTypes`,
+ * `locationNames()` reads `Locations` and `staffNames()` reads `StaffMembers`.
+ */
+const CATALOGUES = {
+  SessionTypes: [{ Id: 9, Name: "Personal Training", DefaultTimeLength: 60, NumDeducted: 1 }],
+  Locations: [{ Id: 1, Name: "Main Studio" }],
+  StaffMembers: [{ Id: 42, Name: "Ada Lovelace", FirstName: "Ada", LastName: "Lovelace", DisplayName: "Ada Lovelace" }],
+};
+
+/**
+ * An `Appointment` with exactly the keys `Appointment` documents in
+ * docs/openapi.json — which is also exactly what the sandbox returned in the
+ * audit. No `Client`, `SessionType`, `Location` or `Confirmed` key, because the
+ * model has none.
+ */
+const APPOINTMENT_ROW = {
+  GenderPreference: "None",
+  Duration: 60,
+  ProviderId: "prov-1",
+  Id: 8001,
+  Status: "Confirmed",
+  StartDateTime: "2026-03-05T10:00:00",
+  EndDateTime: "2026-03-05T11:00:00",
+  Notes: "Bring a mat",
+  StaffRequested: true,
+  ProgramId: 12,
+  SessionTypeId: 9,
+  LocationId: 1,
+  StaffId: 42,
+  Staff: { Id: 42, FirstName: "Ada", LastName: "Lovelace", DisplayName: "Ada Lovelace" },
+  ClientId: "c-1001",
+  FirstAppointment: false,
+  IsWaitlist: false,
+  WaitlistEntryId: 0,
+  ClientServiceId: 100234199,
+  Resources: [{ Id: 7, Name: "Mat" }],
+  AddOns: [],
+  OnlineDescription: null,
+};
+
+/** Explicit dates keep these calls off `/site/sites`. */
+const WINDOW = { startDate: "2026-03-05", endDate: "2026-03-06" } as const;
+
+describe("getStaffAppointmentsTool — maps the spec's Appointment model (C-1)", () => {
+  function appointmentsFixture(rows: unknown[]) {
+    return {
+      ...CATALOGUES,
+      Appointments: rows,
+      PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: rows.length, TotalResults: rows.length },
+    };
+  }
+
+  it("resolves session type and location names from the catalogues and reports the client by id alone", async () => {
+    const client = new RecordingValidatingClient(appointmentsFixture([APPOINTMENT_ROW]));
+    const result = await getStaffAppointmentsTool(
+      [42], [1], WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache
+    );
+
+    expect(result).toEqual({
+      appointments: [
+        {
+          id: 8001,
+          status: "Confirmed",
+          staffId: 42,
+          staffName: "Ada Lovelace",
+          sessionTypeId: 9,
+          sessionTypeName: "Personal Training",
+          locationId: 1,
+          locationName: "Main Studio",
+          startDateTime: "2026-03-05T10:00:00",
+          endDateTime: "2026-03-05T11:00:00",
+          clientId: "c-1001",
+          notes: "Bring a mat",
+          staffRequested: true,
+          providerId: "prov-1",
+          duration: 60,
+          confirmed: true,
+          firstAppointment: false,
+          resources: [{ id: 7, name: "Mat" }],
+        },
+      ],
+      totalAppointments: 1,
+    });
+
+    // `Appointment` carries ClientId and nothing else about the client, so the
+    // three fields that read a client object are gone rather than empty.
+    const [appointment] = result.appointments;
+    expect(appointment.clientId).toBe("c-1001");
+    for (const dropped of ["clientName", "clientEmail", "clientPhone"]) {
+      expect(dropped in appointment).toBe(false);
+    }
+  });
+
+  it("reads both catalogues through the documented, paged endpoints", async () => {
+    const client = new RecordingValidatingClient(appointmentsFixture([APPOINTMENT_ROW]));
+    await getStaffAppointmentsTool([42], [1], WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache);
+
+    expect(client.gets.map((get) => get.url).sort()).toEqual([
+      "/appointment/staffappointments",
+      "/site/locations",
+      "/site/sessiontypes",
+    ]);
+    expect(client.gets.find((get) => get.url === "/site/sessiontypes")?.params).toEqual({ Limit: 200, Offset: 0 });
+    expect(client.gets.find((get) => get.url === "/site/locations")?.params).toEqual({ Limit: 200, Offset: 0 });
+    // Only spec-defined query parameters: the validator throws on anything else.
+    expect(client.dataGets[0].params).toEqual({
+      StaffIds: [42],
+      LocationIds: [1],
+      StartDate: WINDOW.startDate,
+      EndDate: WINDOW.endDate,
+      Limit: 200,
+      Offset: 0,
+    });
+  });
+
+  it("derives `confirmed` from Status; there is no Confirmed flag to read", async () => {
+    const statuses = ["Booked", "Confirmed", "Arrived", "Completed", "NoShow", "Cancelled"];
+    const client = new RecordingValidatingClient(
+      appointmentsFixture(statuses.map((status, index) => ({ ...APPOINTMENT_ROW, Id: 9000 + index, Status: status })))
+    );
+    const result = await getStaffAppointmentsTool([42], undefined, WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache);
+    expect(result.appointments.map((appointment) => appointment.confirmed)).toEqual([
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("prefers DisplayName, falls back to first + last, and reports undefined — never '' — when neither is there", async () => {
+    const { StaffId: _droppedStaffId, Staff: _droppedStaff, ...withoutStaff } = APPOINTMENT_ROW;
+    const client = new RecordingValidatingClient(
+      appointmentsFixture([
+        { ...APPOINTMENT_ROW, Id: 1, Staff: { Id: 42, FirstName: "Ada", LastName: "Lovelace" } },
+        { ...APPOINTMENT_ROW, Id: 2, Staff: { Id: 42, FirstName: "Ada" } },
+        { ...APPOINTMENT_ROW, Id: 3, Staff: { Id: 42, DisplayName: "  Ada L.  " } },
+        { ...APPOINTMENT_ROW, Id: 4, Staff: { Id: 42 } },
+        { ...withoutStaff, Id: 5 },
+      ])
+    );
+    const result = await getStaffAppointmentsTool([42], undefined, WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache);
+    expect(result.appointments.map((appointment) => appointment.staffName)).toEqual([
+      "Ada Lovelace",
+      "Ada",
+      "Ada L.",
+      undefined,
+      undefined,
+    ]);
+    // StaffId still falls back to the embedded Staff.Id when the row omits it.
+    expect(result.appointments.map((appointment) => appointment.staffId)).toEqual([42, 42, 42, 42, undefined]);
+  });
+
+  it("leaves the names undefined when a catalogue does not contain the id, and still reports the id", async () => {
+    const client = new RecordingValidatingClient(
+      appointmentsFixture([{ ...APPOINTMENT_ROW, SessionTypeId: 777, LocationId: 888 }])
+    );
+    const result = await getStaffAppointmentsTool([42], undefined, WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache);
+    const [appointment] = result.appointments;
+    expect(appointment.sessionTypeId).toBe(777);
+    expect(appointment.locationId).toBe(888);
+    expect(appointment.sessionTypeName).toBeUndefined();
+    expect(appointment.locationName).toBeUndefined();
+  });
+
+  it("still returns the appointments when a catalogue read fails", async () => {
+    const client = new RecordingValidatingClient(appointmentsFixture([APPOINTMENT_ROW]));
+    const validated = client.get.bind(client);
+    client.get = async <T,>(url: string, config?: AxiosRequestConfig): Promise<T> => {
+      if (url === "/site/locations") throw new Error("Mindbody API Error: locations down (Code: 500)");
+      return validated<T>(url, config);
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await getStaffAppointmentsTool([42], undefined, WINDOW.startDate, WINDOW.endDate, undefined, undefined, client, client.cache);
+      expect(result.appointments).toHaveLength(1);
+      expect(result.appointments[0].sessionTypeName).toBe("Personal Training");
+      expect(result.appointments[0].locationName).toBeUndefined();
+      expect(result.appointments[0].locationId).toBe(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("addAppointmentTool — maps the spec's Appointment model (C-2)", () => {
+  /** A booked appointment as AddAppointmentResponse returns it: ids, no name objects. */
+  const booked = {
+    Appointment: {
+      Id: 8003,
+      Status: "Booked",
+      StartDateTime: "2026-03-06T09:00:00",
+      EndDateTime: "2026-03-06T10:00:00",
+      Duration: 60,
+      StaffId: 42,
+      Staff: { Id: 42, FirstName: "Ada", LastName: "Lovelace", DisplayName: "Ada Lovelace" },
+      SessionTypeId: 9,
+      LocationId: 1,
+      ClientId: "c-1001",
+    },
+    Message: "Appointment created for Grace",
+  };
+
+  it("returns sessionTypeId and locationId, because the response carries no names", async () => {
+    // `SpecValidatingClient` checks the path and method of a POST but not its
+    // body, which is all C-2 needs: the defect was in the response mapping.
+    const client = new RecordingValidatingClient(booked);
+    const result = await addAppointmentTool(
+      "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, client
+    );
+
+    expect(result).toEqual({
+      success: true,
+      appointment: {
+        id: 8003,
+        status: "Booked",
+        startDateTime: "2026-03-06T09:00:00",
+        endDateTime: "2026-03-06T10:00:00",
+        duration: 60,
+        staffName: "Ada Lovelace",
+        sessionTypeId: 9,
+        locationId: 1,
+      },
+      message: "Appointment created for Grace",
+    });
+    for (const dropped of ["sessionTypeName", "locationName"]) {
+      expect(dropped in (result.appointment ?? {})).toBe(false);
+    }
+    // No catalogue read: the tool echoes the ids the caller sent.
+    expect(client.gets).toHaveLength(0);
+  });
+
+  it("reads the staff name off the embedded Staff and leaves it undefined when the row has none", async () => {
+    const rows = [
+      { ...booked.Appointment, Id: 1, Staff: { Id: 42, FirstName: "Ada", LastName: "Lovelace" } },
+      { ...booked.Appointment, Id: 2, Staff: undefined },
+    ];
+    for (const [index, appointment] of rows.entries()) {
+      const client = new RecordingValidatingClient({ ...booked, Appointment: appointment });
+      const result = await addAppointmentTool(
+        "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, client
+      );
+      expect(result.appointment?.staffName).toBe(index === 0 ? "Ada Lovelace" : undefined);
+      expect(result.appointment?.sessionTypeId).toBe(9);
+      expect(result.appointment?.locationId).toBe(1);
+    }
+  });
+});
+
+describe("getScheduleItemsTool — emits the spec's three lists (C-4, C-5)", () => {
+  /**
+   * `StaffMembers[]` is `Staff`, so its `Appointments`, `Availabilities` and
+   * `Unavailabilities` are `Appointment`, `Availability` and `Unavailability`.
+   * The staff name comes from the member's own `Name`, so no staff catalogue is
+   * read here; the session type and location catalogues are.
+   */
+  function scheduleItemsFixture(staffMembers: unknown[]) {
+    return {
+      ...CATALOGUES,
+      StaffMembers: staffMembers,
+      PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: staffMembers.length, TotalResults: staffMembers.length },
+    };
+  }
+
+  const member = {
+    Id: 42,
+    Name: "Ada Lovelace",
+    FirstName: "Ada",
+    LastName: "Lovelace",
+    DisplayName: "Ada Lovelace",
+    Appointments: [
+      {
+        Id: 8001,
+        Status: "NoShow",
+        StartDateTime: "2026-03-05T10:00:00",
+        EndDateTime: "2026-03-05T11:00:00",
+        SessionTypeId: 9,
+        LocationId: 1,
+        StaffId: 42,
+        ClientId: "c-1001",
+      },
+    ],
+    Availabilities: [
+      {
+        Id: 5001,
+        StartDateTime: "2026-03-05T09:00:00",
+        EndDateTime: "2026-03-05T17:00:00",
+        BookableEndDateTime: "2026-03-05T16:00:00",
+        PrepTime: 15,
+        FinishTime: 5,
+        IsMasked: false,
+        ShowPublic: true,
+      },
+    ],
+    Unavailabilities: [
+      { Id: 6001, StartDateTime: "2026-03-05T12:00:00", EndDateTime: "2026-03-05T13:00:00", Description: "Lunch" },
+    ],
+  };
+
+  it("emits appointments, availabilities and unavailabilities from the three spec lists", async () => {
+    const client = new RecordingValidatingClient(scheduleItemsFixture([member]));
+    const result = await getScheduleItemsTool([1], [42], WINDOW.startDate, WINDOW.endDate, false, client, client.cache);
+
+    expect(result).toEqual({
+      appointments: [
+        {
+          id: 8001,
+          status: "NoShow",
+          staffId: 42,
+          staffName: "Ada Lovelace",
+          sessionTypeId: 9,
+          sessionTypeName: "Personal Training",
+          locationId: 1,
+          locationName: "Main Studio",
+          startDateTime: "2026-03-05T10:00:00",
+          endDateTime: "2026-03-05T11:00:00",
+        },
+      ],
+      availabilities: [
+        {
+          id: 5001,
+          staffId: 42,
+          staffName: "Ada Lovelace",
+          startDateTime: "2026-03-05T09:00:00",
+          endDateTime: "2026-03-05T17:00:00",
+          bookableEndDateTime: "2026-03-05T16:00:00",
+          prepTime: 15,
+          finishTime: 5,
+          isMasked: false,
+          showPublic: true,
+        },
+      ],
+      unavailabilities: [
+        {
+          id: 6001,
+          staffId: 42,
+          staffName: "Ada Lovelace",
+          startDateTime: "2026-03-05T12:00:00",
+          endDateTime: "2026-03-05T13:00:00",
+          description: "Lunch",
+        },
+      ],
+      // The paged total is the number of staff members the endpoint returned.
+      totalItems: 1,
+    });
+    // The one flattened row type is gone, and with it the fields `Appointment`
+    // does not have.
+    expect("scheduleItems" in result).toBe(false);
+    const [appointment] = result.appointments;
+    for (const dropped of ["isAvailable", "isUnavailable"]) {
+      expect(dropped in appointment).toBe(false);
+    }
+  });
+
+  it("sends IgnorePrepFinishTimes, the parameter the spec names, and the request passes validation", async () => {
+    const client = new RecordingValidatingClient(scheduleItemsFixture([member]));
+    await getScheduleItemsTool([1], [42], WINDOW.startDate, WINDOW.endDate, true, client, client.cache);
+    const request = client.dataGets[0];
+    expect(request.url).toBe("/appointment/scheduleitems");
+    expect(request.params).toEqual({
+      LocationIds: [1],
+      StaffIds: [42],
+      StartDate: WINDOW.startDate,
+      EndDate: WINDOW.endDate,
+      IgnorePrepFinishTimes: true,
+      Limit: 200,
+      Offset: 0,
+    });
+    expect("IgnorePrepFinishBuffer" in request.params).toBe(false);
+  });
+
+  it("the old IgnorePrepFinishBuffer key is rejected by the spec validator", async () => {
+    await expect(
+      new SpecValidatingClient(spec, {}).get("/appointment/scheduleitems", { params: { IgnorePrepFinishBuffer: true } })
+    ).rejects.toThrow(SpecValidationError);
+    await expect(
+      new SpecValidatingClient(spec, {}).get("/appointment/scheduleitems", { params: { IgnorePrepFinishBuffer: true } })
+    ).rejects.toThrow('Unrecognised query parameter "IgnorePrepFinishBuffer"');
+    await expect(
+      new SpecValidatingClient(spec, {}).get("/appointment/scheduleitems", { params: { IgnorePrepFinishTimes: true } })
+    ).resolves.toBeDefined();
+  });
+
+  it("emits an empty list for a staff member with none of that kind of item", async () => {
+    const client = new RecordingValidatingClient(
+      scheduleItemsFixture([member, { Id: 43, Name: "Grace Hopper", FirstName: "Grace", LastName: "Hopper" }])
+    );
+    const result = await getScheduleItemsTool(undefined, [42, 43], WINDOW.startDate, WINDOW.endDate, false, client, client.cache);
+    expect(result.appointments).toHaveLength(1);
+    expect(result.availabilities).toHaveLength(1);
+    expect(result.unavailabilities).toHaveLength(1);
+    expect(result.totalItems).toBe(2);
+  });
+
+  it("leaves the names undefined when the catalogues do not contain the ids, and still reports the ids", async () => {
+    const client = new RecordingValidatingClient(
+      scheduleItemsFixture([{ ...member, Appointments: [{ ...member.Appointments[0], SessionTypeId: 777, LocationId: 888 }] }])
+    );
+    const result = await getScheduleItemsTool(undefined, [42], WINDOW.startDate, WINDOW.endDate, false, client, client.cache);
+    const [appointment] = result.appointments;
+    expect(appointment.sessionTypeId).toBe(777);
+    expect(appointment.locationId).toBe(888);
+    expect(appointment.sessionTypeName).toBeUndefined();
+    expect(appointment.locationName).toBeUndefined();
   });
 });

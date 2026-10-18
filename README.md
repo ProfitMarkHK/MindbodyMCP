@@ -150,9 +150,9 @@ The server provides 41 tools across 6 categories:
 - `getClassSchedules` - View recurring schedules
 - `addClientToClass` - Book clients into classes
 - `removeClientFromClass` - Cancel bookings
-- `getWaitlistEntries` - Manage waitlists
-- `substituteClassTeacher` - Handle substitutions
-- `getClassVisits` - Attendance and sign-in status for a class
+- `getWaitlistEntries` - Manage waitlists. **At least one of `classScheduleIds`, `classIds` or `clientIds` is required**: the API rejects a request with none of them. Entries carry no queue position — the endpoint has no such field
+- `substituteClassTeacher` - Handle substitutions. Takes the **incoming** teacher's staff id as `substituteTeacherId`; the original teacher is implied by the class. The response shape is unverified against the sandbox (the endpoint has no `Test` flag)
+- `getClassVisits` - Attendance and sign-in status for a class. Returns client ids, not client names: the endpoint returns no client object
 
 ### 👥 Client Management
 - `getClients` - Search and retrieve clients
@@ -165,31 +165,31 @@ The server provides 41 tools across 6 categories:
 - `getClientContracts` - View contracts
 
 ### 💰 Sales & Commerce
-- `getServices` - View available services
-- `getPackages` - List class packages
-- `getProducts` - Browse retail products
-- `getContracts` - View membership options
+- `getServices` - View available services. `priority` is the string "High"/"Medium"/"Low" and `taxIncludedAmount` is a money amount, because that is what the API defines
+- `getPackages` - List class packages. A package has no price of its own: `classCount` and `price` are summed from the services it contains
+- `getProducts` - Browse retail products. Categories are exposed as ids; the API returns no category names
+- `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
 - `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds`
-- `purchaseContract` - Sell memberships
+- `purchaseContract` - Sell memberships. **No dry run:** this always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
 - `getSites` - Get business information for the configured site. Optional `siteId`. With a multi-site API key and no default or explicit site, it returns `availableSites` instead of guessing
 - `getLocations` - List all locations
 - `getPrograms` - View programs offered
-- `getResources` - Manage resources
+- `getResources` - Manage resources. Only the documented filters are sent (`locationIds`, `programIds`, `resourceIds`, `scheduleTypes`, `includeInactive`); the endpoint has no session-type or date filter
 - `getSessionTypes` - List session types
-- `getStaff` - View all staff members
+- `getStaff` - View all staff members. `sessionTypeId` and `locationId` are **single** ids — the API has no plural form — and only narrow when `startDateTime` is also given
 - `getTeacherSchedule` - Teacher schedules
 - `getActivationCode` - Get the site activation code
 
 ### 📆 Appointments
-- `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client
-- `addAppointment` - Book appointments
+- `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client. Session-type and location **names** are resolved from the cached site catalogue; the client name, email and phone are not returned by this endpoint, so only `clientId` is available
+- `addAppointment` - Book appointments. Returns `sessionTypeId`/`locationId` rather than names — the response carries ids, not objects
 - `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `getBookableItems` - Find available slots
-- `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that
-- `getScheduleItems` - View schedules
+- `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that. The endpoint documents no day-of-week filter, so there is no `days` parameter
+- `getScheduleItems` - View schedules. Returns three lists — `appointments`, `availabilities` and `unavailabilities` — because the API keeps them separate
 
 **Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed or NoShow. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
 

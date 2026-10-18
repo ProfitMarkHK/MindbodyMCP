@@ -9,6 +9,18 @@ import { getSelectedSite, SiteSelectionError, type SiteSummary } from '../utils/
  * one site, no site data is returned unless a site was chosen, either by the
  * configured default `MINDBODY_SITE_ID` or by an explicit `siteId` argument.
  * In that case `site` is absent and `error` + `availableSites` say what to pick.
+ *
+ * Every field below is a real `Site` property in docs/openapi.json. There is no
+ * `esi`: `Site` has neither `ESI` nor `TotalLocations`, and the sandbox returns
+ * neither, so `esi` is not exposed at all (rather than exposed as `''` or
+ * `undefined`). `currency` is `Site.CurrencyIsoCode` (e.g. "USD") — the plain
+ * `Currency` name this tool used to read does not exist.
+ *
+ * `totalLocations` is derived, not read: `Site` carries no count, so it is
+ * counted from `GET /site/locations` through the same injected `client` and
+ * `cache`, i.e. the same 'locations' cache entry `getLocationsTool` reads. If
+ * that read fails, `totalLocations` is `undefined` (never 0, which would be a
+ * false claim) and the rest of the site record is still returned.
  */
 export async function getSitesTool(
   siteId?: string | number,
@@ -31,12 +43,12 @@ export async function getSitesTool(
     acceptsDiscover: boolean;
     acceptsAmex: boolean;
     contactEmail?: string;
-    esi?: string;
     taxInclusivePrices: boolean;
     currency: string;
     countryCode: string;
     timeZone?: string;
-    totalLocations: number;
+    /** Counted from GET /site/locations; undefined when that read fails. */
+    totalLocations?: number;
   };
 }> {
   // Shared with getSiteTimeZone: one cached site record (60 minutes), resolved
@@ -49,6 +61,17 @@ export async function getSitesTool(
       return { error: error.message, availableSites: error.availableSites };
     }
     throw error;
+  }
+
+  // Derived, not read: `Site` has no TotalLocations. One documented, already
+  // cached endpoint supplies the count, through the injected client and cache, so
+  // this shares the 'locations' entry with getLocationsTool instead of issuing a
+  // second query. Fails open — undefined, never 0.
+  let totalLocations: number | undefined;
+  try {
+    totalLocations = (await getLocationsTool(client, cache)).totalLocations;
+  } catch {
+    totalLocations = undefined;
   }
 
   return {
@@ -66,17 +89,30 @@ export async function getSitesTool(
       acceptsDiscover: site.AcceptsDiscover,
       acceptsAmex: site.AcceptsAmericanExpress,
       contactEmail: site.ContactEmail,
-      esi: site.ESI,
       taxInclusivePrices: site.TaxInclusivePrices,
-      currency: site.Currency,
+      currency: site.CurrencyIsoCode,
       countryCode: site.CountryCode,
       timeZone: site.TimeZone,
-      totalLocations: site.TotalLocations,
+      totalLocations,
     },
   };
 }
 
-// Get locations (studio locations)
+/**
+ * Get locations (studio locations).
+ *
+ * `imageUrls` is `Location.AdditionalImageURLs`, which is a `string[]` in
+ * docs/openapi.json and in the sandbox. This tool used to map it as a list of
+ * `{id, name}` objects, which silently produced `{id: undefined, name: undefined}`
+ * for every row; there is no `facilities` field any more.
+ *
+ * `amenities` is `Location.Amenities`, a list of `{Id, Name}` — unchanged.
+ *
+ * There is no business-hours field: `Location` in docs/openapi.json has no
+ * `BusinessHours`, and the sandbox does not return one. A location's active
+ * hours come from `GET /appointment/activesessiontimes`, not from the location
+ * record, so `businessHours` has been dropped rather than left always undefined.
+ */
 export async function getLocationsTool(
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
@@ -95,19 +131,11 @@ export async function getLocationsTool(
     latitude?: number;
     longitude?: number;
     phone?: string;
-    facilities?: Array<{
-      id: number;
-      name: string;
-    }>;
+    /** Location.AdditionalImageURLs — image URLs, not facility records. */
+    imageUrls?: string[];
     amenities?: Array<{
       id: number;
       name: string;
-    }>;
-    businessHours?: Array<{
-      day: string;
-      startTime?: string;
-      endTime?: string;
-      isClosed: boolean;
     }>;
   }>;
   totalLocations: number;
@@ -134,20 +162,11 @@ export async function getLocationsTool(
     latitude: location.Latitude,
     longitude: location.Longitude,
     phone: location.Phone,
-    facilities: location.AdditionalImageURLs?.map((f: any) => ({
-      id: f.Id,
-      name: f.Name,
-    })),
+    imageUrls: location.AdditionalImageURLs,
     amenities: location.Amenities?.map((a: any) => ({
       id: a.Id,
       name: a.Name,
     })),
-    businessHours: location.BusinessHours ? Object.keys(location.BusinessHours).map(day => ({
-      day,
-      startTime: location.BusinessHours[day].StartTime,
-      endTime: location.BusinessHours[day].EndTime,
-      isClosed: location.BusinessHours[day].IsClosed,
-    })) : undefined,
   }));
 
   return {
@@ -195,12 +214,22 @@ export async function getProgramsTool(
   };
 }
 
-// Get resources (rooms, equipment, etc.)
+/**
+ * Get resources (rooms, equipment, etc.)
+ *
+ * Only the parameters docs/openapi.json defines for this path are sent
+ * (`locationIds`, `programIds`, `resourceIds`, `scheduleTypes`,
+ * `includeInactive`). The session-type and date-time filters this tool used to
+ * take (`sessionTypeIds`, `locationId`, `startDateTime`, `endDateTime`) are not
+ * defined here and have been removed: the sandbox answers HTTP 500 on
+ * `SessionTypeIds` alone and silently ignores the other three.
+ */
 export async function getResourcesTool(
-  sessionTypeIds?: number[],
-  locationId?: number,
-  startDateTime?: string,
-  endDateTime?: string,
+  locationIds?: number[],
+  programIds?: number[],
+  resourceIds?: number[],
+  scheduleTypes?: string[],
+  includeInactive?: boolean,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   resources: Array<{
@@ -213,14 +242,17 @@ export async function getResourcesTool(
     client,
     '/site/resources',
     {
-      SessionTypeIds: sessionTypeIds,
-      LocationId: locationId,
-      StartDateTime: startDateTime,
-      EndDateTime: endDateTime,
+      LocationIds: locationIds,
+      ProgramIds: programIds,
+      ResourceIds: resourceIds,
+      ScheduleTypes: scheduleTypes,
+      IncludeInactive: includeInactive,
     },
     // docs/openapi.json types this 200 response only as `{"type": "object"}` (no
     // schema, so no documented list key). 'Resources' is the key the live API
     // returns; it cannot be checked against the spec until the spec documents it.
+    // SANDBOX-OBSERVED (differs from spec): the 200 response is untyped in docs/openapi.json; the sandbox returns {PaginationResponse, Resources: [{Id, Name}]}, and undocumented SessionTypeIds on this path returns HTTP 500 rather than being ignored.
+    // See docs/mindbody-spec-discrepancies.md section D-2.
     'Resources'
   );
 
@@ -244,8 +276,12 @@ export async function getSessionTypesTool(
   sessionTypes: Array<{
     id: number;
     name: string;
+    /** SessionType.DefaultTimeLength, in minutes. */
     defaultDuration?: number;
-    defaultDurationType?: string;
+    /** SessionType.StaffTimeLength — the per-staff length, where it differs. */
+    staffTimeLength?: number;
+    /** SessionType.ResourceRequired — a resource must be booked with this type. */
+    resourceRequired?: boolean;
     numDeducted?: number;
     programId: number;
     category?: string;
@@ -270,7 +306,8 @@ export async function getSessionTypesTool(
     id: session.Id,
     name: session.Name,
     defaultDuration: session.DefaultTimeLength,
-    defaultDurationType: session.DefaultTimeLengthType,
+    staffTimeLength: session.StaffTimeLength,
+    resourceRequired: session.ResourceRequired,
     numDeducted: session.NumDeducted,
     programId: session.ProgramId,
     category: session.Category,
@@ -286,12 +323,27 @@ export async function getSessionTypesTool(
   };
 }
 
-// Get staff (all staff members)
+/**
+ * Get staff (all staff members)
+ *
+ * `sessionTypeId` and `locationId` are single ids, because that is all this
+ * endpoint has: docs/openapi.json defines `request.sessionTypeId` and
+ * `request.locationId`, both requiring `startDateTime`, and there is no plural
+ * form. The plural `sessionTypeIds`/`locationIds` this tool used to send were
+ * dropped by the API, so those two filters never narrowed anything; they have
+ * been replaced with the singular ids. Pass `startDateTime` alongside them — the
+ * two filters only narrow the list when a date-time is also supplied.
+ *
+ * `includeInactive` is deliberately not exposed here. The path documents
+ * `request.includeInactive`, but exposing it was not part of this tool's work and
+ * an unused parameter on a filter that the sandbox ignores for the plural forms is
+ * a liability, not a feature. `getResources` does expose it.
+ */
 export async function getStaffTool(
   staffIds?: number[],
   filters?: string[],
-  sessionTypeIds?: number[],
-  locationIds?: number[],
+  sessionTypeId?: number,
+  locationId?: number,
   startDateTime?: string,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
@@ -311,6 +363,8 @@ export async function getStaffTool(
     country?: string;
     imageUrl?: string;
     bio?: string;
+    /** Staff.IsMale. The API returns `IsMale`; the lower-cased `isMale` this
+     *  tool used to read is always absent, so it is always undefined. */
     isMale?: boolean;
     appointmentInstructor?: boolean;
     alwaysAllowDoubleBooking?: boolean;
@@ -326,8 +380,8 @@ export async function getStaffTool(
     {
       StaffIds: staffIds,
       Filters: filters,
-      SessionTypeIds: sessionTypeIds,
-      LocationIds: locationIds,
+      SessionTypeId: sessionTypeId,
+      LocationId: locationId,
       StartDateTime: startDateTime,
     },
     'StaffMembers'
@@ -349,7 +403,7 @@ export async function getStaffTool(
     country: member.Country,
     imageUrl: member.ImageUrl,
     bio: member.Bio,
-    isMale: member.isMale,
+    isMale: member.IsMale,
     appointmentInstructor: member.AppointmentInstructor,
     alwaysAllowDoubleBooking: member.AlwaysAllowDoubleBooking,
     independentContractor: member.IndependentContractor,

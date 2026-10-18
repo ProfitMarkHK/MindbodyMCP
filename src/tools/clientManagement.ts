@@ -1,8 +1,39 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
 import { withDefaultDates } from '../utils/siteTime.js';
+import { locationNames, staffNames } from './lookups.js';
 
-// Get clients with search and filtering
+/**
+ * Name for a catalogue id, or `undefined` when the catalogue does not hold it.
+ *
+ * `Visit` carries foreign keys only, so a name can come from exactly one place:
+ * the cached catalogue. A miss is reported as `undefined` — never `''` and never
+ * a placeholder such as `'Unknown'`, which reads like a real location to a caller.
+ * The id itself stays on the row, so "no such id" is always distinguishable from
+ * a resolved name.
+ */
+function nameFor(index: Map<number, string>, id: unknown): string | undefined {
+  return typeof id === 'number' && Number.isFinite(id) ? index.get(id) : undefined;
+}
+
+/**
+ * Roll-up key for a summary map: the resolved name when there is one, otherwise
+ * the raw id as a string. A visit with neither a name nor a numeric id cannot be
+ * grouped and is skipped rather than filed under a placeholder.
+ */
+function rollupKey(name: string | undefined, id: unknown): string | undefined {
+  if (name !== undefined) return name;
+  return typeof id === 'number' && Number.isFinite(id) ? String(id) : undefined;
+}
+
+/**
+ * Search and filter clients (`GET /client/clients`, read through every page).
+ *
+ * `LiabilityRelease` is a boolean on `Client`; the agreement details are the
+ * separate `Liability { AgreementDate, IsReleased, ReleasedBy }` object, which is
+ * what the `liability` block reads. The boolean is not surfaced — it carries no
+ * information the `liability` block does not.
+ */
 export async function getClientsTool(
   searchText?: string,
   clientIds?: string[],
@@ -65,9 +96,9 @@ export async function getClientsTool(
     country: client.Country,
     isProspect: client.IsProspect || false,
     isOptedIn: client.SendAccountEmails || false,
-    liability: client.LiabilityRelease ? {
-      isReleased: client.LiabilityRelease.IsReleased,
-      agreedDate: client.LiabilityRelease.AgreementDate,
+    liability: client.Liability ? {
+      isReleased: client.Liability.IsReleased,
+      agreedDate: client.Liability.AgreementDate,
     } : undefined,
     emergencyContact: client.EmergencyContactInfoName ? {
       name: client.EmergencyContactInfoName,
@@ -85,7 +116,13 @@ export async function getClientsTool(
   };
 }
 
-// Add a new client
+/**
+ * Create a client (`POST /client/addclient`).
+ *
+ * This tool commits a real client record: the API has no dry-run mode (no `Test`
+ * flag is sent, because the endpoint refuses `Test: true`), so there is no way
+ * to validate a payload without writing it.
+ */
 export async function addClientTool(
   firstName: string,
   lastName: string,
@@ -132,10 +169,15 @@ export async function addClientTool(
       ReferredBy: referredBy ?? 'MindbodyMCP',
     };
 
+    // SANDBOX-OBSERVED (differs from spec): addclient on site -99 rejects a request with no Birthday, a field AddClientRequest does not define (the schema field is BirthDate), so both spellings are sent.
+    // See docs/mindbody-spec-discrepancies.md section D-5.
+    // `Street` and `MobileNumber` are likewise undocumented aliases the sandbox tolerates for `AddressLine1` and `MobilePhone`.
     if (addressLine1) payload.Street = addressLine1;
     if (mobilePhone) payload.MobileNumber = mobilePhone;
     if (birthDate) payload.Birthday = birthDate;
 
+    // SANDBOX-OBSERVED (differs from spec): addclient refuses Test: true ("Test mode is not allowed for this endpoint"), so no Test flag is sent and this tool always commits a real client.
+    // See docs/mindbody-spec-discrepancies.md section D-10.
     const response = await client.post<any>('/client/addclient', payload);
 
     return {
@@ -205,8 +247,8 @@ export async function updateClientTool(
     if (updates.emergencyContactPhone) updateData.EmergencyContactInfoPhone = updates.emergencyContactPhone;
     if (updates.sendAccountEmails !== undefined) updateData.SendAccountEmails = updates.sendAccountEmails;
 
-    // CrossRegionalUpdate defaults to true, which a site outside a region refuses
-    // ("The current site does not belong to a region"), so always update locally.
+    // SANDBOX-OBSERVED (differs from spec): updateclient on a non-regional site answers "The current site does not belong to a region" unless CrossRegionalUpdate is explicitly false; the spec documents no default.
+    // See docs/mindbody-spec-discrepancies.md section D-6.
     const response = await client.post<any>('/client/updateclient', {
       Client: updateData,
       CrossRegionalUpdate: false,
@@ -230,7 +272,18 @@ export async function updateClientTool(
   }
 }
 
-// Get client visits (attendance history)
+/**
+ * Client attendance history (`GET /client/clientvisits`).
+ *
+ * `Visit` carries `LocationId` and `StaffId` and no embedded location or staff
+ * object, so `location` and `instructor` are resolved against the cached
+ * `/site/locations` and `/staff/staff` catalogues and are `undefined` when the
+ * catalogue does not hold the id. Each row also exposes `locationId` and
+ * `staffId`, so a caller can always tell "no such id in the catalogue" from a
+ * real name. The `byLocation` and `byInstructor` roll-ups group by the resolved
+ * name when there is one and by the raw id as a string when there is not;
+ * `byClassType` groups by the visit's own `Name`.
+ */
 export async function getClientVisitsTool(
   clientId: string,
   startDate?: string,
@@ -244,8 +297,10 @@ export async function getClientVisitsTool(
     className: string;
     startTime: string;
     endTime: string;
-    location: string;
-    instructor: string;
+    locationId?: number;
+    location?: string;
+    staffId?: number;
+    instructor?: string;
     signedIn: boolean;
     webSignup: boolean;
     lateCancel: boolean;
@@ -275,14 +330,27 @@ export async function getClientVisitsTool(
     'Visits'
   );
 
+  // Both catalogues are cached and fail open to an empty index, so a catalogue
+  // that cannot be read leaves the names undefined instead of failing the read.
+  // Neither is fetched when no visit carries the id it would resolve, so a
+  // response with nothing to look up costs no extra requests.
+  const wantsLocations = visitsRaw.some((visit: any) => typeof visit?.LocationId === 'number');
+  const wantsStaff = visitsRaw.some((visit: any) => typeof visit?.StaffId === 'number');
+  const [locations, staff] = await Promise.all([
+    wantsLocations ? locationNames(client, cache) : new Map<number, string>(),
+    wantsStaff ? staffNames(client, cache) : new Map<number, string>(),
+  ]);
+
   const visits = visitsRaw.map((visit: any) => ({
     id: visit.Id,
     classId: visit.ClassId,
     className: visit.Name,
     startTime: visit.StartDateTime,
     endTime: visit.EndDateTime,
-    location: visit.Location?.Name || 'Unknown',
-    instructor: visit.Staff?.Name || 'Unknown',
+    locationId: visit.LocationId,
+    location: nameFor(locations, visit.LocationId),
+    staffId: visit.StaffId,
+    instructor: nameFor(staff, visit.StaffId),
     signedIn: visit.SignedIn,
     webSignup: visit.WebSignup,
     lateCancel: visit.LateCancelled,
@@ -301,10 +369,17 @@ export async function getClientVisitsTool(
   };
 
   visits.forEach((visit) => {
-    if (visit.signedIn) {
-      summary.byLocation[visit.location] = (summary.byLocation[visit.location] || 0) + 1;
+    if (!visit.signedIn) return;
+    const location = rollupKey(visit.location, visit.locationId);
+    const instructor = rollupKey(visit.instructor, visit.staffId);
+    if (location !== undefined) {
+      summary.byLocation[location] = (summary.byLocation[location] || 0) + 1;
+    }
+    if (visit.className !== undefined) {
       summary.byClassType[visit.className] = (summary.byClassType[visit.className] || 0) + 1;
-      summary.byInstructor[visit.instructor] = (summary.byInstructor[visit.instructor] || 0) + 1;
+    }
+    if (instructor !== undefined) {
+      summary.byInstructor[instructor] = (summary.byInstructor[instructor] || 0) + 1;
     }
   });
 
@@ -315,7 +390,15 @@ export async function getClientVisitsTool(
   };
 }
 
-// Get active client memberships
+/**
+ * A client's active memberships (`GET /client/activeclientmemberships`).
+ *
+ * `ClientMembership.Program` is a `Program` object, not a label, so the two
+ * fields a caller can use are exposed separately: `programName` from
+ * `Program.Name` and `programId` from `Program.Id`. `Program` also carries
+ * `ScheduleType`, which is not exposed here; read the membership record
+ * directly if you need it.
+ */
 export async function getClientMembershipsTool(
   clientId: string,
   locationId?: number,
@@ -328,7 +411,8 @@ export async function getClientMembershipsTool(
     activeDate: string;
     expirationDate?: string;
     paymentDate?: string;
-    program: string;
+    programName?: string;
+    programId?: number;
     siteId: number;
     iconCode?: number;
     action?: string;
@@ -352,7 +436,8 @@ export async function getClientMembershipsTool(
     activeDate: membership.ActiveDate,
     expirationDate: membership.ExpirationDate,
     paymentDate: membership.PaymentDate,
-    program: membership.Program,
+    programName: membership.Program?.Name,
+    programId: membership.Program?.Id,
     siteId: membership.SiteId,
     iconCode: membership.IconCode,
     action: membership.Action,
@@ -394,17 +479,25 @@ export async function addClientArrivalTool(
   }
 }
 
-// Get client account balances
+/**
+ * A client's account balance (`GET /client/clientaccountbalances`).
+ *
+ * The API exposes no per-card balance: `Client.ClientCreditCard` is a single
+ * stored card, not a list, and neither `Client` nor `ClientCreditCard` carries a
+ * money field for it. What is available is the client's own `AccountBalance`
+ * and the stored card's identity (`CardType`, `LastFour`), so
+ * `creditCardBalances` is not reported — a balance per card cannot be derived
+ * from this endpoint.
+ */
 export async function getClientAccountBalancesTool(
   clientId: string,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   accountBalance: number;
-  creditCardBalances: Array<{
-    amount: number;
-    cardType: string;
-    lastFour: string;
-  }>;
+  creditCard?: {
+    cardType?: string;
+    lastFour?: string;
+  };
 }> {
   const { items: balanceRows } = await fetchAllPages<any>(
     client,
@@ -413,32 +506,43 @@ export async function getClientAccountBalancesTool(
     'Clients'
   );
 
-  const clientData = balanceRows[0];
+  const clientData = balanceRows[0] ?? {};
+  const card = clientData.ClientCreditCard;
   return {
     accountBalance: clientData.AccountBalance || 0,
-    creditCardBalances: clientData.ClientCreditCards?.map((card: any) => ({
-      amount: card.Balance || 0,
+    creditCard: card ? {
       cardType: card.CardType,
       lastFour: card.LastFour,
-    })) || [],
+    } : undefined,
   };
 }
 
-// Get client contracts (memberships/packages)
+/**
+ * A client's contracts (`GET /client/clientcontracts`).
+ *
+ * `soldDate` is read from `AgreementDate`, the closest documented equivalent —
+ * `ClientContract` has no `SoldDate`.
+ *
+ * Three fields the tool used to report are not available and are dropped:
+ * `description`, `balance` and `contractType`. `ClientContract` has no
+ * `Description`, `Balance` or `ContractType` property, and none can be derived
+ * from the ones it does carry.
+ */
 export async function getClientContractsTool(
   clientId: string,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   contracts: Array<{
     id: number;
+    contractId?: number;
     name: string;
-    description?: string;
-    soldDate: string;
+    soldDate?: string;
     startDate: string;
     endDate?: string;
     autopayStatus?: string;
-    balance?: number;
-    contractType: string;
+    autoRenewing?: boolean;
+    isMonthToMonth?: boolean;
+    terminationDate?: string;
     siteId: number;
   }>;
   totalContracts: number;
@@ -452,14 +556,15 @@ export async function getClientContractsTool(
 
   const contracts = contractsRaw.map((contract: any) => ({
     id: contract.Id,
+    contractId: contract.ContractID,
     name: contract.ContractName,
-    description: contract.Description,
-    soldDate: contract.SoldDate,
+    soldDate: contract.AgreementDate,
     startDate: contract.StartDate,
     endDate: contract.EndDate,
     autopayStatus: contract.AutopayStatus,
-    balance: contract.Balance,
-    contractType: contract.ContractType,
+    autoRenewing: contract.AutoRenewing,
+    isMonthToMonth: contract.IsMonthToMonth,
+    terminationDate: contract.TerminationDate,
     siteId: contract.SiteId,
   }));
 

@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { locationNames, sessionTypeNames } from './lookups.js';
 import {
   getSiteTimeZone,
   siteDateStringPlusDays,
@@ -7,7 +8,49 @@ import {
   withDefaultDates,
 } from '../utils/siteTime.js';
 
+/**
+ * The name on an embedded `AppointmentStaff`: `DisplayName` if present, else
+ * first and last name joined. `AppointmentStaff` documents only `Id`,
+ * `FirstName`, `LastName` and `DisplayName`, so anything else is undefined —
+ * never an empty string, which would read as a name the API gave us.
+ */
+function appointmentStaffName(staff: any): string | undefined {
+  const displayName = typeof staff?.DisplayName === 'string' ? staff.DisplayName.trim() : '';
+  if (displayName !== '') return displayName;
+  const first = typeof staff?.FirstName === 'string' ? staff.FirstName.trim() : '';
+  const last = typeof staff?.LastName === 'string' ? staff.LastName.trim() : '';
+  const joined = `${first} ${last}`.trim();
+  return joined === '' ? undefined : joined;
+}
+
+/**
+ * A name index for `idField`, read only when at least one row carries a usable
+ * id for it. Keeps a read that needs no cross-reference from paying for one.
+ */
+async function lazyNames(
+  rows: any[],
+  idField: string,
+  load: () => Promise<Map<number, string>>
+): Promise<Map<number, string>> {
+  const needed = rows.some((row) => {
+    const id = row?.[idField];
+    return typeof id === 'number' && Number.isFinite(id);
+  });
+  return needed ? load() : new Map<number, string>();
+}
+
 // Get appointments
+/**
+ * Appointments for the given staff and date range.
+ *
+ * `GET /appointment/staffappointments` returns `Appointment` rows, which carry
+ * only `ClientId`: the client name, email and phone are not returned by this
+ * endpoint and are deliberately absent from this result — join `clientId`
+ * through `GET /client/clients` if they are needed. `sessionTypeName` and
+ * `locationName` are resolved from `SessionTypeId`/`LocationId` against the
+ * cached `/site/sessiontypes` and `/site/locations` catalogues, and are
+ * undefined when the catalogue does not contain that id.
+ */
 export async function getStaffAppointmentsTool(
   staffIds: number[],
   locationIds?: number[],
@@ -22,28 +65,27 @@ export async function getStaffAppointmentsTool(
     id: number;
     status: string;
     staffId: number;
-    staffName: string;
+    staffName?: string;
     sessionTypeId: number;
-    sessionTypeName: string;
+    sessionTypeName?: string;
     locationId: number;
-    locationName: string;
+    locationName?: string;
     startDateTime: string;
     endDateTime: string;
     clientId?: string;
-    clientName?: string;
-    clientEmail?: string;
-    clientPhone?: string;
     notes?: string;
     staffRequested: boolean;
     providerId?: string;
     duration: number;
-    confirmed?: boolean;
+    confirmed: boolean;
     firstAppointment: boolean;
     resources?: Array<{ id: number; name: string }>;
   }>;
   totalAppointments: number;
 }> {
   const dates = await withDefaultDates(startDate, endDate, 7, client, cache);
+  // SANDBOX-OBSERVED (differs from spec): rows with Status Cancelled or LateCancelled are never returned, although Appointment.Status documents both values.
+  // Recorded in docs/mindbody-spec-discrepancies.md section D-4.
   const { items: appointmentRows, totalResults } = await fetchAllPages<any>(
     client,
     '/appointment/staffappointments',
@@ -59,26 +101,35 @@ export async function getStaffAppointmentsTool(
     'Appointments'
   );
 
+  // `Appointment` has no `SessionType`/`Location` object to read a name from, so
+  // both names come from the cached catalogues (fail-open: a failed catalogue read
+  // leaves the names undefined and the ids intact). Each catalogue is fetched
+  // ONLY when some row actually carries the id it would resolve, so a call whose
+  // rows have no SessionTypeId or no LocationId costs exactly the one request it
+  // always did.
+  const [sessionTypes, locations] = await Promise.all([
+    lazyNames(appointmentRows, 'SessionTypeId', () => sessionTypeNames(client, cache)),
+    lazyNames(appointmentRows, 'LocationId', () => locationNames(client, cache)),
+  ]);
+
   const appointments = appointmentRows.map((apt: any) => ({
     id: apt.Id,
     status: apt.Status,
-    staffId: apt.StaffId || apt.Staff?.Id,
-    staffName: apt.Staff?.Name || `${apt.Staff?.FirstName} ${apt.Staff?.LastName}`,
-    sessionTypeId: apt.SessionTypeId || apt.SessionType?.Id,
-    sessionTypeName: apt.SessionType?.Name || '',
-    locationId: apt.LocationId || apt.Location?.Id,
-    locationName: apt.Location?.Name || '',
+    staffId: apt.StaffId ?? apt.Staff?.Id,
+    staffName: appointmentStaffName(apt.Staff),
+    sessionTypeId: apt.SessionTypeId,
+    sessionTypeName: sessionTypes.get(apt.SessionTypeId),
+    locationId: apt.LocationId,
+    locationName: locations.get(apt.LocationId),
     startDateTime: apt.StartDateTime,
     endDateTime: apt.EndDateTime,
-    clientId: apt.ClientId || apt.Client?.Id,
-    clientName: apt.Client ? `${apt.Client.FirstName} ${apt.Client.LastName}` : undefined,
-    clientEmail: apt.Client?.Email,
-    clientPhone: apt.Client?.MobilePhone,
+    clientId: apt.ClientId,
     notes: apt.Notes,
     staffRequested: apt.StaffRequested,
     providerId: apt.ProviderId,
     duration: apt.Duration,
-    confirmed: apt.Confirmed,
+    // `Appointment` has no `Confirmed` flag; confirmation is the status.
+    confirmed: apt.Status === 'Confirmed',
     firstAppointment: apt.FirstAppointment,
     resources: apt.Resources?.map((r: any) => ({ id: r.Id, name: r.Name })),
   }));
@@ -113,9 +164,9 @@ export async function addAppointmentTool(
     startDateTime: string;
     endDateTime: string;
     duration: number;
-    staffName: string;
-    sessionTypeName: string;
-    locationName: string;
+    staffName?: string;
+    sessionTypeId: number;
+    locationId: number;
   };
   message: string;
 }> {
@@ -133,6 +184,8 @@ export async function addAppointmentTool(
       ApplyPayment: applyPayment,
     });
 
+    // The returned `Appointment` carries no `SessionType`/`Location` object, only
+    // their ids, so the ids are what this result reports.
     return {
       success: true,
       appointment: {
@@ -141,9 +194,9 @@ export async function addAppointmentTool(
         startDateTime: response.Appointment.StartDateTime,
         endDateTime: response.Appointment.EndDateTime,
         duration: response.Appointment.Duration,
-        staffName: response.Appointment.Staff?.Name || `${response.Appointment.Staff?.FirstName || ''} ${response.Appointment.Staff?.LastName || ''}`.trim() || '',
-        sessionTypeName: response.Appointment.SessionType?.Name || '',
-        locationName: response.Appointment.Location?.Name || '',
+        staffName: appointmentStaffName(response.Appointment.Staff),
+        sessionTypeId: response.Appointment.SessionTypeId,
+        locationId: response.Appointment.LocationId,
       },
       message: response.Message || 'Appointment booked successfully',
     };
@@ -736,12 +789,15 @@ export async function getBookableItemsTool(
 // per-session-type breakdown rides along on every page, so it is merged across
 // pages by SessionTypeId (first-seen order, each type's times de-duplicated)
 // rather than read from page one only.
+//
+// There is no day-of-week filter: the endpoint documents only `scheduleType`,
+// `sessionTypeIds`, `startTime` and `endTime`, and the sandbox ignores any other
+// name, so this tool takes no `days` argument.
 export async function getActiveSessionTimesTool(
   scheduleType?: 'All' | 'Class' | 'Enrollment' | 'Appointment',
   sessionTypeIds?: number[],
   startTime?: string,
   endTime?: string,
-  days?: string[],
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   activeTimes: string[];
@@ -749,6 +805,8 @@ export async function getActiveSessionTimesTool(
   totalActiveTimes: number;
 }> {
   const merged = new Map<unknown, Set<string>>();
+  // SANDBOX-OBSERVED (differs from spec): SessionTypeActiveSessionTimes is present only when SessionTypeIds is sent, which the published schema documents as "omitted when SessionTypeIds is not supplied".
+  // Recorded in docs/mindbody-spec-discrepancies.md section D-1.
   const { items: timeRows } = await fetchAllPages<unknown>(
     client,
     '/appointment/activesessiontimes',
@@ -757,7 +815,6 @@ export async function getActiveSessionTimesTool(
       SessionTypeIds: sessionTypeIds,
       StartTime: startTime,
       EndTime: endTime,
-      Days: days,
     },
     'ActiveSessionTimes',
     undefined,
@@ -796,22 +853,41 @@ export async function getScheduleItemsTool(
   staffIds?: number[],
   startDate?: string,
   endDate?: string,
-  ignorePrepFinishBuffer: boolean = false,
+  ignorePrepFinishTimes: boolean = false,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<{
-  scheduleItems: Array<{
+  appointments: Array<{
     id: number;
-    isAvailable: boolean;
-    isUnavailable: boolean;
+    status: string;
     staffId: number;
-    staffName: string;
+    staffName?: string;
     sessionTypeId: number;
-    sessionTypeName: string;
+    sessionTypeName?: string;
     locationId: number;
-    locationName: string;
+    locationName?: string;
     startDateTime: string;
     endDateTime: string;
+  }>;
+  availabilities: Array<{
+    id: number;
+    staffId: number;
+    staffName?: string;
+    startDateTime: string;
+    endDateTime: string;
+    bookableEndDateTime: string;
+    prepTime: number;
+    finishTime: number;
+    isMasked: boolean;
+    showPublic: boolean;
+  }>;
+  unavailabilities: Array<{
+    id: number;
+    staffId: number;
+    staffName?: string;
+    startDateTime: string;
+    endDateTime: string;
+    description: string;
   }>;
   totalItems: number;
 }> {
@@ -824,29 +900,69 @@ export async function getScheduleItemsTool(
       StaffIds: staffIds,
       StartDate: dates.start,
       EndDate: dates.end,
-      IgnorePrepFinishBuffer: ignorePrepFinishBuffer,
+      IgnorePrepFinishTimes: ignorePrepFinishTimes,
     },
     'StaffMembers'
   );
 
-  const scheduleItems = scheduleRows.flatMap((staff: any) => 
-    (staff.Appointments ?? []).map((apt: any) => ({
+  // `Appointment` rows carry `SessionTypeId`/`LocationId` but no `SessionType` or
+  // `Location` object, so the names come from the cached catalogues (fail-open: a
+  // failed catalogue read leaves the names undefined and the ids intact). Read
+  // lazily, so a window with no appointments costs no extra requests.
+  const nestedAppointments = scheduleRows.flatMap((member: any) => member.Appointments ?? []);
+  const [sessionTypes, locations] = await Promise.all([
+    lazyNames(nestedAppointments, 'SessionTypeId', () => sessionTypeNames(client, cache)),
+    lazyNames(nestedAppointments, 'LocationId', () => locationNames(client, cache)),
+  ]);
+
+  // The three lists are separate in the spec's model (`Staff.Appointments`,
+  // `Staff.Availabilities`, `Staff.Unavailabilities`), so they stay separate here
+  // rather than being flattened into one row type.
+  const appointments = scheduleRows.flatMap((member: any) =>
+    (member.Appointments ?? []).map((apt: any) => ({
       id: apt.Id,
-      isAvailable: apt.IsAvailable,
-      isUnavailable: apt.Unavailable,
-      staffId: staff.Id,
-      staffName: staff.Name,
-      sessionTypeId: apt.SessionType?.Id,
-      sessionTypeName: apt.SessionType?.Name,
-      locationId: apt.Location?.Id,
-      locationName: apt.Location?.Name,
+      status: apt.Status,
+      staffId: member.Id,
+      staffName: member.Name,
+      sessionTypeId: apt.SessionTypeId,
+      sessionTypeName: sessionTypes.get(apt.SessionTypeId),
+      locationId: apt.LocationId,
+      locationName: locations.get(apt.LocationId),
       startDateTime: apt.StartDateTime,
       endDateTime: apt.EndDateTime,
     }))
   );
 
+  const availabilities = scheduleRows.flatMap((member: any) =>
+    (member.Availabilities ?? []).map((slot: any) => ({
+      id: slot.Id,
+      staffId: member.Id,
+      staffName: member.Name,
+      startDateTime: slot.StartDateTime,
+      endDateTime: slot.EndDateTime,
+      bookableEndDateTime: slot.BookableEndDateTime,
+      prepTime: slot.PrepTime,
+      finishTime: slot.FinishTime,
+      isMasked: slot.IsMasked,
+      showPublic: slot.ShowPublic,
+    }))
+  );
+
+  const unavailabilities = scheduleRows.flatMap((member: any) =>
+    (member.Unavailabilities ?? []).map((block: any) => ({
+      id: block.Id,
+      staffId: member.Id,
+      staffName: member.Name,
+      startDateTime: block.StartDateTime,
+      endDateTime: block.EndDateTime,
+      description: block.Description,
+    }))
+  );
+
   return {
-    scheduleItems,
-    totalItems: totalResults || scheduleItems.length,
+    appointments,
+    availabilities,
+    unavailabilities,
+    totalItems: totalResults || appointments.length,
   };
 }

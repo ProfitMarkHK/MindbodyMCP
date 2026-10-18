@@ -50,7 +50,12 @@ export interface Class {
   IsCanceled: boolean;
   IsWaitlistAvailable: boolean;
   IsAvailable: boolean;
-  IsSubstitute: boolean;
+  /**
+   * The wire field is `Substitute`, not `IsSubstitute` (C-6). The TypeScript
+   * field is spelled `Substitute` so the two cannot drift again; the tool
+   * output field is `substitute`.
+   */
+  Substitute: boolean;
   MaxCapacity: number;
   TotalBooked: number;
   WebCapacity: number;
@@ -105,7 +110,8 @@ export interface TeacherSchedule {
     endTime: string;
     duration: number; // in minutes
     location: string;
-    isSubstitute: boolean;
+    /** From `Class.Substitute`; the output field is named after the wire field (C-6). */
+    substitute: boolean;
     isCanceled: boolean;
     spotsAvailable: number;
     totalSpots: number;
