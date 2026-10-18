@@ -62,7 +62,12 @@ fail() { printf 'FAIL   %s\n' "$1"; FAILURES+=("$1"); }
 # because the second must never be mistaken for "tests are fine, ignore it".
 echo "=== Gate 1: bun test ==="
 TEST_LOG="$LOG_DIR/test.log"
-bun test >"$TEST_LOG" 2>&1
+# Scoped to ./tests deliberately. A bare `bun test` walks the whole working
+# tree, so any stray nested checkout or scratch copy left in the repo root gets
+# its own duplicate suite run — and a stale copy of this very repo fails its own
+# gates, turning Gate 1 red for work that is actually green. This repo's suites
+# all live in tests/, so name that directory.
+bun test ./tests >"$TEST_LOG" 2>&1
 TEST_RC=$?
 sed 's/^/    /' "$TEST_LOG"
 
