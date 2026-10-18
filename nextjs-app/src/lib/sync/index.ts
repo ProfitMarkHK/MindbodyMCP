@@ -446,13 +446,14 @@ export class MindbodySyncService {
     const result: SyncResult = { entity: 'classes', created: 0, updated: 0, deleted: 0, errors: [], duration: 0 };
 
     try {
-      // Sync classes for the next 30 days
-      const startDate = new Date().toISOString();
-      const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      // Sync classes for the next 30 days, in the SITE's calendar. The host's
+      // UTC clock would pick the wrong day for a studio in another zone and
+      // would stamp a `Z` the API does not expect on a site-local string.
+      const window = await this.mindbody.defaultDateTimeRange(undefined, undefined, 30);
 
       const { items } = await this.mindbody.getClasses({
-        startDateTime: startDate,
-        endDateTime: endDate,
+        startDateTime: window.start,
+        endDateTime: window.end,
       });
 
       for (const cls of items) {
