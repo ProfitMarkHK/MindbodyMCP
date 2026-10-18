@@ -22,6 +22,15 @@ pre-commit hook with one command per clone:
 git config core.hooksPath .githooks
 ```
 
+That command is also the repo's `prepare` script, so `bun install` sets it on a
+fresh clone without anyone typing it. It is idempotent (`git config` overwrites
+one key) and it is a no-op outside a git checkout — the `prepare` line guards
+with `git rev-parse --git-dir` and swallows the error — so an install inside a
+Docker build that has no `.git` still succeeds. `core.hooksPath` is repo-local
+config and is **not** copied by a clone, which is exactly why the `prepare`
+script exists; run the command by hand if you ever clone with `--no-scripts`.
+The path is relative, so git resolves it against each worktree's own root.
+
 The hook file itself is committed at [`.githooks/pre-commit`](../.githooks/pre-commit),
 so it survives a fresh clone and needs no dependency install. It is wired with
 `core.hooksPath` rather than `husky` on purpose: husky would add a devDependency
@@ -30,6 +39,14 @@ Bun and TypeScript, and `core.hooksPath` is a single local `git config` line
 that needs no network access. Enforcement is local by design; the GitHub Actions
 workflow in `.github/workflows/ci.yml` is not the enforcement mechanism for
 these gates and is out of scope for this checklist.
+
+The hook execs `scripts/check-gates.sh`, so the runner is the only place a gate
+is wired and nothing is duplicated between hook and runner. It runs the whole
+suite on every commit; a warm run measured **13.7s wall** on 2026-10-18 (Gate 8
+alone is ~1.5s), which is why it is deliberately not split into a faster hook:
+a second entry point would be a second source of truth, and the suite is cheap
+enough that the trade buys nothing. It is the same command as `bun run check`,
+so nothing a commit passes can fail a manual check and vice versa.
 
 `bun run build` writes to `dist/`, which is gitignored, and Gate 15's
 `next build` writes to `nextjs-app/.next/`, ignored by `nextjs-app/.gitignore`.
@@ -48,7 +65,7 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 | 5 | Documentation updated | applies | manual review — `README.md`, `Claude.md`, `AGENTS.md`, and `docs/` (notably `docs/quality-gates.md`) stay in sync with the change. |
 | 6 | Type checking passes | applies | `bun run typecheck` (`tsc --noEmit`) — currently exits 0. Run by the runner. |
 | 7 | Build / compile succeeds | applies | `bun run build` (`tsc && chmod +x dist/index.js`) — currently exits 0, writes gitignored `dist/`. Run by the runner. |
-| 8 | Security / secrets checks pass | applies | `npm audit --audit-level=moderate` → **found 0 vulnerabilities** (exit 0), plus the fail-closed secret scan below. The audit was verified green 2026-10-15; the secret scan passed on 2026-10-17 (see Gate 8). |
+| 8 | Security / secrets checks pass | applies | `npm audit --audit-level=moderate` → **found 0 vulnerabilities** (exit 0), plus the fail-closed secret scan below. The audit was verified green 2026-10-15; the secret scan passed on 2026-10-17 (see Gate 8). **The secret scan half is wired into the runner and runs on every `bun run check` and every commit** — `bash scripts/secret-scan.sh .`, then an index-only guard that refuses a staged `.env*` file. The scan prints filenames only and fails closed. `npm audit` stays CI-only: it needs the registry, and a pre-commit hook must not depend on the network. |
 | 9 | Change reviewed | applies | manual — peer review via `.github/PULL_REQUEST_TEMPLATE.md`. Never a gate that always passes. |
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export supplied by the project owner (`mindbody-public-api-v6.swagger.json`), copied in on 2026-10-17. Its SHA-256 is recorded in `docs/openapi.lock`, which must be updated whenever the file changes. The official portal did not expose a downloadable spec when this was checked. |
@@ -423,10 +440,40 @@ and not needed" from "forgotten":
     exits 0 with `[PASS] No hardcoded secrets found`, after printing the one nested
     worktree it excludes, `fix-sandbox-observed-behaviour/` (checked 2026-10-18).
     The exclusion is listed in the output, not inferred from this line; re-run the
-    script rather than trusting the date. The script is **not
-    run by `bun run check`** (`scripts/check-gates.sh`), so the local runner does
-    not include it. CI (`ci.yml`, `security` job) and all five jobs in
+    script rather than trusting the date. The script **is** run by
+    `bun run check` (`scripts/check-gates.sh`), as Gate 8 and the first thing the
+    runner does, and therefore on every commit — see the Gate 8 runner section
+    below. CI (`ci.yml`, `security` job) and all five jobs in
     `release.yml` do call it.
+
+  - **In the runner: two parts, both offline and fail-closed.**
+    `scripts/check-gates.sh` runs Gate 8 first, before any build, so a credential
+    is refused in the first seconds of a commit instead of after a full suite:
+
+    ```bash
+    bash scripts/secret-scan.sh .        # part 1 — the CI script, verbatim
+    git diff --cached --name-only        # part 2 — names only, never contents
+    ```
+
+    Part 2 exists because of a gap part 1 has **by design**: the scan excludes
+    `.env` and `.env.*`, since a scanner must never read a real credential file to
+    prove it cannot contain one. That makes `.gitignore` the only thing keeping
+    `.env.production` out of a commit, and `git add -f` defeats `.gitignore`
+    silently. Part 2 refuses any staged path matching `.env` / `.env.*`, with
+    `.env.example` (the one tracked `.env*` file) allowed. It reads the index
+    only, prints names only, and passes on an empty list — with nothing staged,
+    a bare `bun run check` has nothing to check.
+
+    Wiring the scan in is also what surfaced its strictness: the first version of
+    this gate named its own log file `SECRET_LOG="$LOG_DIR/secret-scan.log"`, and
+    the scan correctly flagged the runner, because `SECRET_LOG=` plus a quoted
+    8+ character value is credential-shaped. It is now `SCAN_LOG`. CI never saw
+    that, because CI calls the scan directly and not the runner.
+  - **Not in the runner: `npm audit`.** `npm audit --audit-level=moderate` needs
+    the npm registry, so a pre-commit hook that ran it would depend on the
+    network and would fail closed on someone being offline — blocking every
+    commit for a check that CI already performs and that is green. The scan is
+    wired; the audit is not, by choice.
   - **Coverage.** The scan runs in `.github/workflows/ci.yml` (`security` job,
     "Check for secrets") **and** in all five jobs of `.github/workflows/release.yml`
     (`preflight`, `publish-npm`, `publish-github`, `publish-bun`, `create-docker`) —
@@ -647,26 +694,30 @@ and not needed" from "forgotten":
   "fix it upstream" is not available for 2 of the 5.
 - **Not in the runner, and why.** Gates 4, 5, 9, 10 and 11 need human judgement
   and are enforced by the done-done block in `AGENTS.md`, `Claude.md`, and
-  `.github/copilot-instructions.md` pointing at this file. Gates 3, 8 and 12 are
+  `.github/copilot-instructions.md` pointing at this file. Gates 3 and 12 are
   excluded for different reasons: Gate 3 is still red (no linter, no complexity
-  budget); Gate 8's audit and secret scan are both green, but
-  neither is wired in. Wiring the scan in needs it callable from both the local
-  runner and CI without the two copies drifting; Gate 12's check needs `npx --yes` network access and, for
-  the skills that matter, the Claude Code schema rather than `skills-ref`. The
-  runner covers Gates 1, 2, 6, 7, 13, 14 and 15, which are green today. Gates 2
+  budget); Gate 12's check needs `npx --yes` network access and, for
+  the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
+  is **half** in: its secret scan and staged-`.env` guard run as the first gate of
+  the runner, so every commit is covered; only `npm audit` is left out, because it
+  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13, 14
+  and 15, which are green today. Gates 2
   and 13 are executed by Gate 1's single `bun test` run and their verdicts read
   out of that run's log; see the Gate 2 and Gate 13 entries for why neither is
   invoked a second time. Gates 14 and 15 run inside `nextjs-app/` and need its
   own `bun install` once per clone; they fail, not skip, without it. The opt-in live
   E2E tier is likewise not in the runner; see its own entry above for why it is
   credential-gated and cannot run unattended.
-- **Follow-up, tracked.** Adding the Gate 8 secret scan to the local runner and the
-  pre-commit hook is a sensible next step — it is green, it needs no network and no
-  dependency install, and it would give the same protection locally that CI already
-  gives. The duplication blocker named here earlier has been **resolved**: the scan
-  now lives in one committed script, `scripts/secret-scan.sh`, which both workflows
-  call. Both workflows therefore inherit its scope: the current checkout, with
-  nested linked worktrees excluded and printed (see Gate 8, Secret scan). What remains is wiring it into `scripts/check-gates.sh` and `.githooks/pre-commit`.
+- **Follow-up, tracked — closed.** Wiring the Gate 8 secret scan into the local
+  runner and the pre-commit hook is **done** (2026-10-18): the scan runs as Gate 8
+  in `scripts/check-gates.sh`, the hook execs that same script, and `bun install`
+  installs the hook through the `prepare` script. The duplication blocker named
+  here earlier stays resolved: the scan still lives in one committed script,
+  `scripts/secret-scan.sh`, called by the runner and by both workflows, so the
+  pattern and the exclusion list change in exactly one place. Nothing further is
+  outstanding on this item. What is still **not** covered, deliberately: `npm
+  audit` (needs the registry; CI runs it) and the basename-collision residual gap
+  named under Gate 8, which the script reports as a warning but does not close.
 
 ## When a gate fails
 

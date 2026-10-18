@@ -5,6 +5,9 @@
 # automated failure, so the same command serves the pre-commit hook and any
 # local or remote automation.
 #
+#   Gate 8  scripts/secret-scan.sh + staged .env guard — offline, fail-closed,
+#                                 run first so a credential is refused in the
+#                                 first seconds, not after the two builds
 #   Gate 6  bun run typecheck   — tsc --noEmit
 #   Gate 1  bun test            — full suite (tests + hermetic E2E tier)
 #   Gate 2  (derived from Gate 1)— end-to-end acceptance suite, see below
@@ -14,11 +17,14 @@
 #   Gate 14 nextjs-app typecheck— tsc --noEmit in nextjs-app/ (needs nextjs-app/node_modules)
 #   Gate 15 nextjs-app build    — next build in nextjs-app/ (writes nextjs-app/.next/, gitignored)
 #
-# Gates 3, 4, 5, 8, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
+# Gates 3, 4, 5, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
 # need human judgement. Gate 3 is a gap (no linter or complexity rule is wired;
 # nextjs-app has no ESLint config either, `next lint` only offers to create one).
-# Gates 8 and 12 are green but deliberately not yet wired in; both are documented
-# in docs/quality-gates.md rather than run here.
+# Gate 12 is green but deliberately not yet wired in; it is documented in
+# docs/quality-gates.md rather than run here. Gate 8 is wired, but only its
+# offline half: `npm audit --audit-level=moderate` needs the registry, so it is
+# left to CI; the secret scan — the fail-closed half, and the half that can
+# actually block a commit — runs here on every invocation.
 #
 # The opt-in live E2E tier (tests/live/mindbody-live.e2e.ts) is also not run here:
 # it needs real sandbox credentials and is excluded from `bun test` by filename on
@@ -51,6 +57,47 @@ FAILURES=()
 
 pass() { printf 'PASS   %s\n' "$1"; }
 fail() { printf 'FAIL   %s\n' "$1"; FAILURES+=("$1"); }
+
+# ── Gate 8: no committed credentials ─────────────────────────────────────────
+# Two offline parts, ~2s together, and deliberately the FIRST thing that runs so
+# a credential is refused in the first seconds of a commit instead of after two
+# builds and a full test suite.
+#
+# Part 1 — the secret scan. `scripts/secret-scan.sh`, byte for byte the same
+# script both CI workflows call, so there is exactly one pattern and one
+# exclusion list. It is fail-closed itself (a broken scan exits non-zero) and
+# prints filenames only.
+#
+# Part 2 — the staged .env guard. The scan deliberately EXCLUDES `.env` and
+# `.env.*`: a scanner must never read a real credential file to prove it cannot
+# contain one. That makes .gitignore the only thing between `.env.production`
+# and a commit, and `git add -f` defeats it silently. This part reads only the
+# index (`git diff --cached --name-only`) — names, never contents — and refuses
+# the file outright. `.env.example` is the one tracked `.env*` file and stays
+# allowed. With nothing staged (a bare `bun run check`) this part has nothing to
+# check and passes on an empty list.
+echo
+echo "=== Gate 8: secret scan (scripts/secret-scan.sh) + staged .env guard ==="
+SCAN_LOG="$LOG_DIR/secret-scan.log"
+if bash scripts/secret-scan.sh . >"$SCAN_LOG" 2>&1; then
+  sed 's/^/    /' "$SCAN_LOG"
+  # Count read from the checkout at run time, not a number in this script.
+  SCAN_SCOPE=$(git ls-files | wc -l | tr -d ' ')
+  pass "Gate 8  secret scan  (no match across ${SCAN_SCOPE} tracked path(s) in scope)"
+else
+  sed 's/^/    /' "$SCAN_LOG"
+  fail "Gate 8  secret scan  (see the filenames above; values are never printed)"
+fi
+
+STAGED_ENV=$(git diff --cached --name-only | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$' || true)
+if [ -n "$STAGED_ENV" ]; then
+  STAGED_COUNT=$(printf '%s\n' "$STAGED_ENV" | grep -c .)
+  # Names only. The staged .env* file is never read.
+  printf '%s\n' "$STAGED_ENV" | sed 's/^/    staged: /'
+  fail "Gate 8  staged .env guard  (${STAGED_COUNT} gitignored credential file(s) staged; .gitignore does not stop git add -f)"
+else
+  pass "Gate 8  staged .env guard  (no .env* file staged; .env.example allowed)"
+fi
 
 # ── Gate 1: all tests pass ───────────────────────────────────────────────────
 # bunfig.toml sets [test] coverageThreshold = 0.10. Bun 1.4.0 reads that as a

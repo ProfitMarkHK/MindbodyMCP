@@ -225,6 +225,9 @@ cd MindbodyMCP
 # Install dependencies
 bun install  # or npm install
 
+# If you cloned with --no-scripts, install the pre-commit quality gate by hand:
+git config core.hooksPath .githooks
+
 # Run in development mode
 bun run dev  # or npm run dev
 
@@ -315,6 +318,19 @@ bun run benchmark
 # Type checking
 bun run typecheck
 ```
+
+### Quality gates
+
+```bash
+bun run check   # every automated gate: tests, typecheck, builds, secret scan
+```
+
+The same script runs as a pre-commit hook. `bun install` installs it
+automatically (`prepare` sets `git config core.hooksPath .githooks`); if you
+cloned with `--no-scripts`, run that command by hand. Every commit then runs the
+full suite (~13s warm), including `scripts/secret-scan.sh`, which blocks a commit
+that introduces a credential-shaped string and never prints a matched value.
+Full checklist: [docs/quality-gates.md](docs/quality-gates.md).
 
 ## 📦 Publishing
 

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Pre-commit quality-gate hook for MindbodyMCP.
+#
+# Install once per clone:
+#   git config core.hooksPath .githooks
+#
+# Runs every automated quality gate. Exits non-zero on any automated failure, so
+# the commit is blocked until they pass. The runner does not read stdin and does
+# not skip, so a hook can never pass silently.
+#
+# Full checklist: docs/quality-gates.md
+
+set -uo pipefail
+
+exec bash "$(git rev-parse --show-toplevel)/scripts/check-gates.sh"
