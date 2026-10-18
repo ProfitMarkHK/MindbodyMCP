@@ -54,6 +54,7 @@
     "start:prod": "MCP_TRANSPORT=sse MCP_PORT=3000 bun run src/index.ts",
     "build": "tsc && chmod +x dist/index.js",
     "test": "bun test",
+    "check": "bash scripts/check-gates.sh",
     "test:tool": "bun run tests/test-tool.ts",
     "test:sse": "bun run tests/test-sse-client.ts",
     "benchmark": "bun run tests/benchmark.ts",
