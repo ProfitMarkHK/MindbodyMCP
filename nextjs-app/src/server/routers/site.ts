@@ -10,6 +10,18 @@ export const siteRouter = router({
     return ctx.mindbody.getSites();
   }),
 
+  /**
+   * The studio's IANA timezone, so the pages can render every timestamp in the
+   * studio's own zone instead of the viewer's browser zone. The site record is
+   * cached for an hour server-side, so this is one lookup per process at worst.
+   *
+   * Deliberately NOT `getSites().items[0].timeZone`: with a multi-site API key
+   * that would silently label one studio's schedule with another's zone.
+   */
+  getTimeZone: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.mindbody.getSiteTimeZone();
+  }),
+
   getLocations: protectedProcedure.query(async ({ ctx }) => {
     return ctx.mindbody.getLocations();
   }),

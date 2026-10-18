@@ -1,6 +1,6 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
 import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
-import { withDefaultDates } from './siteTime';
+import { getSiteTimeZone, withDefaultDates } from './siteTime';
 import type {
   // Site & Location
   Site, Location, Resource,
@@ -177,6 +177,18 @@ export class MindbodyService {
     return { items: sites, total: sites.length };
   }
 
+  /**
+   * The site's IANA timezone, for rendering timestamps in the studio's own zone.
+   *
+   * Goes through `getSiteTimeZone` rather than reading `Sites[0].TimeZone`, so
+   * the multi-site policy in ./siteTime holds: the site must resolve to exactly
+   * one (by `requestedSiteId`, else `MINDBODY_SITE_ID`), and the
+   * `MINDBODY_SITE_TIMEZONE` override applies when the record has none. Throws
+   * rather than guessing, because a wrong zone mislabels every time on screen.
+   */
+  async getSiteTimeZone(): Promise<string> {
+    return getSiteTimeZone(this.client);
+  }
 
   async getLocations(): Promise<ListResult<Location>> {
     const { items: rows } = await fetchAllPages<any>(this.client, '/site/locations', {}, 'Locations');

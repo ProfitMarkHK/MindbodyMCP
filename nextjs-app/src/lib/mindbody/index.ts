@@ -31,6 +31,17 @@ export {
 } from './siteTime';
 export type { SiteSummary, TtlCache } from './siteTime';
 
+// Studio-time rendering (client-safe: pure, no API calls). Prefer these over
+// `new Date(...).toLocale*()`, which renders in the VIEWER's browser zone.
+export {
+  formatSiteDate,
+  formatSiteDateTime,
+  formatSiteDateTimeLong,
+  formatSiteDateWithWeekday,
+  formatSiteDateWithWeekdayLong,
+  formatSiteTimeOfDay,
+} from './formatSiteTime';
+export type { SiteFormatOptions, SiteWallClock } from './formatSiteTime';
 
 // Types - Core Entities
 export type {

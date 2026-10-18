@@ -14,6 +14,16 @@ export function useSites() {
   return trpc.site.getSites.useQuery();
 }
 
+/**
+ * The studio's IANA timezone, for the formatters in
+ * @/lib/mindbody/formatSiteTime. `undefined` while loading or if the site
+ * record cannot be resolved; the formatters take that as "render unlabelled
+ * rather than in the viewer's zone", which is still correct.
+ */
+export function useSiteTimeZone(): string | undefined {
+  return trpc.site.getTimeZone.useQuery()?.data;
+}
+
 export function useLocations() {
   return trpc.site.getLocations.useQuery();
 }

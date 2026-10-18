@@ -2,7 +2,11 @@
 
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { useStaffById, useTeacherSchedule } from '@/hooks/useMindbody';
+import { useStaffById, useTeacherSchedule, useSiteTimeZone } from '@/hooks/useMindbody';
+import {
+  formatSiteDateWithWeekday,
+  formatSiteTimeOfDay,
+} from '@/lib/mindbody/formatSiteTime';
 
 // ============================================================================
 // STAFF DETAIL PAGE
@@ -14,6 +18,8 @@ export default function StaffDetailPage() {
 
   const { data: staff, isLoading: loadingStaff } = useStaffById(staffId);
   const { data: schedule, isLoading: loadingSchedule } = useTeacherSchedule(staffId);
+  // A teacher's class times are the studio's, labelled with its zone.
+  const timeZone = useSiteTimeZone();
 
   if (loadingStaff) {
     return (
@@ -122,17 +128,12 @@ export default function StaffDetailPage() {
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-medium">
-                            {new Date(cls.startTime).toLocaleDateString('en-US', {
-                              weekday: 'short',
-                              month: 'short',
-                              day: 'numeric',
+                            {formatSiteDateWithWeekday(cls.startTime, timeZone, {
+                              fallback: '—',
                             })}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {new Date(cls.startTime).toLocaleTimeString('en-US', {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })}
+                            {formatSiteTimeOfDay(cls.startTime, timeZone, { fallback: '—' })}
                           </p>
                         </div>
                       </div>

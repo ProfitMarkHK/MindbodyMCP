@@ -6,6 +6,10 @@ bun.lockb
 .env
 .env.local
 .env.*.local
+# Production credentials. Deliberately NOT covered by the `.env.*.local` rule
+# above, so it has to be listed: this file holds live Mindbody OAuth secrets and
+# must never reach a commit.
+.env.production
 
 # Build output
 dist/

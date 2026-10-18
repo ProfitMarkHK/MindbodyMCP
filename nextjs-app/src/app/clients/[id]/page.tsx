@@ -8,7 +8,9 @@ import {
   useClientMemberships,
   useClientContracts,
   useClientAccountBalances,
+  useSiteTimeZone,
 } from '@/hooks/useMindbody';
+import { formatSiteDate, formatSiteDateWithWeekday } from '@/lib/mindbody/formatSiteTime';
 
 // ============================================================================
 // CLIENT DETAIL PAGE
@@ -23,6 +25,9 @@ export default function ClientDetailPage() {
   const { data: memberships } = useClientMemberships(clientId);
   const { data: contracts } = useClientContracts(clientId);
   const { data: balances } = useClientAccountBalances(clientId);
+  // Birth dates, expiries and visit times are the studio's calendar, rendered in
+  // its zone rather than the viewer's.
+  const timeZone = useSiteTimeZone();
 
   if (loadingClient) {
     return (
@@ -119,7 +124,7 @@ export default function ClientDetailPage() {
                   <dt className="text-muted-foreground">Birth Date</dt>
                   <dd>
                     {client.birthDate
-                      ? new Date(client.birthDate).toLocaleDateString()
+                      ? formatSiteDate(client.birthDate, timeZone, { fallback: '-' })
                       : '-'}
                   </dd>
                 </div>
@@ -165,7 +170,7 @@ export default function ClientDetailPage() {
                       </div>
                       <div className="text-right">
                         <p className="text-sm">
-                          {new Date(visit.startTime).toLocaleDateString()}
+                          {formatSiteDateWithWeekday(visit.startTime, timeZone, { fallback: '-' })}
                         </p>
                         <span
                           className={`text-xs px-2 py-1 rounded ${
@@ -221,7 +226,7 @@ export default function ClientDetailPage() {
                       {membership.expirationDate && (
                         <p className="text-sm text-muted-foreground">
                           Expires:{' '}
-                          {new Date(membership.expirationDate).toLocaleDateString()}
+                          {formatSiteDate(membership.expirationDate, timeZone, { fallback: '-' })}
                         </p>
                       )}
                     </div>
@@ -243,7 +248,7 @@ export default function ClientDetailPage() {
                       </p>
                       {contract.endDate && (
                         <p className="text-sm text-muted-foreground">
-                          Ends: {new Date(contract.endDate).toLocaleDateString()}
+                          Ends: {formatSiteDate(contract.endDate, timeZone, { fallback: '-' })}
                         </p>
                       )}
                     </div>

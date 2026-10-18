@@ -209,6 +209,44 @@ server's `src/utils/siteTime.ts` with the same exported names and semantics:
 - a day boundary is the site's: `2026-10-18T02:00:00Z` is still the 17th in
   `America/Los_Angeles`, and that is the date the defaults use.
 
+### Displaying times: studio zone, always
+
+**Product rule: every timestamp in the UI renders in the studio's timezone,
+never the viewer's.** Do not use `new Date(value).toLocale*()` in a component —
+those run in the browser's zone, so the clock silently becomes the reader's while
+looking like the studio's. Use `src/lib/mindbody/formatSiteTime.ts`, reached
+through the `useSiteTimeZone()` hook:
+
+```tsx
+const timeZone = useSiteTimeZone();               // string | undefined
+formatSiteDateTime(appointment.startDateTime, timeZone, { withZone: true });
+```
+
+`withZone: true` appends the studio's zone (`PDT`) so the clock cannot be
+misread as local; `formatSiteTimeOfDay` defaults it on, because a bare clock with
+no date is where the zone matters most.
+
+The formatters handle the three shapes Mindbody returns, and never consult the
+viewer zone for any of them:
+
+| Shape | Example | Handling |
+|-------|---------|----------|
+| Site-local, no offset (the common case) | `2026-10-18T08:00:00` | The wall clock is **already** the studio's, so those fields are printed unchanged — no conversion, no DST guesswork. |
+| Explicit offset (an instant) | `2026-10-18T15:00:00Z`, `...+09:00` | Converted into the studio's zone, then labelled. |
+| Bare date | `1990-05-03` | The studio's calendar fields are printed as-is, and **no time of day is invented** for it. |
+
+The bare-date case was a real off-by-one-day: `new Date('1990-05-03')` parses as
+UTC midnight, so a viewer in `America/Los_Angeles` or `Pacific/Kiritimati` saw the
+**previous** day. `tests/nextjs-format-sitetime.test.ts` asserts the fix by
+rendering in child processes under four host `TZ` values and requiring
+byte-identical output.
+
+The zone reaches the browser via a dedicated `site.getTimeZone` tRPC query, not
+`getSites().items[0].timeZone` — with a multi-site API key the latter would label
+one studio's schedule with another studio's zone. When the zone cannot be
+resolved the formatters render the studio's clock **unlabelled** rather than
+falling back to the viewer's zone.
+
 ### Environment variables
 
 | Variable | Purpose |
