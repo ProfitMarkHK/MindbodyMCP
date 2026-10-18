@@ -29,6 +29,9 @@ export interface Site {
   description?: string;
   logoUrl?: string;
   contactEmail?: string;
+  /** The site's IANA zone, e.g. "America/Los_Angeles". Every Mindbody
+   *  date-time is in this zone; see lib/mindbody/siteTime.ts. */
+  timeZone?: string;
   acceptsVisa: boolean;
   acceptsMastercard: boolean;
   acceptsAmex: boolean;

@@ -167,6 +167,7 @@ export class MindbodyService {
       description: site.Description,
       logoUrl: site.LogoUrl,
       contactEmail: site.ContactEmail,
+      timeZone: site.TimeZone,
       acceptsVisa: site.AcceptsVisa ?? true,
       acceptsMastercard: site.AcceptsMastercard ?? true,
       acceptsAmex: site.AcceptsAmex ?? true,
