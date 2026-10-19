@@ -29,7 +29,9 @@ bun run typecheck
 - `bun run dev:sse` - Run in SSE mode (web-based, production-like)
 
 ### Testing
-- `bun test` - Run all tests
+- `bun test` - Run all tests (discovery is scoped to `tests/` by `bunfig.toml`;
+  do not widen it — nested worktrees in the repo root would each run the whole
+  suite and print their own GATE2/GATE13 sentinels)
 - `bun run test:tool` - Manual tool testing (for debugging individual tools)
 - `bun run test:sse` - Test SSE transport connection
 - `bun run benchmark` - Run performance benchmarks

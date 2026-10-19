@@ -109,11 +109,14 @@ fi
 # because the second must never be mistaken for "tests are fine, ignore it".
 echo "=== Gate 1: bun test ==="
 TEST_LOG="$LOG_DIR/test.log"
-# Scoped to ./tests deliberately. A bare `bun test` walks the whole working
-# tree, so any stray nested checkout or scratch copy left in the repo root gets
-# its own duplicate suite run — and a stale copy of this very repo fails its own
-# gates, turning Gate 1 red for work that is actually green. This repo's suites
-# all live in tests/, so name that directory.
+# Discovery is scoped twice, on purpose. bunfig.toml sets `[test] root = "./tests"`,
+# so even a bare `bun test` (and `bun run test`) no longer walks nested sibling
+# worktrees or scratch checkouts sitting in the repo root — each of which would
+# otherwise run a second copy of the whole suite and print its own GATE2/GATE13
+# sentinels. Bun does not honour .gitignore for discovery, so the bunfig setting is
+# the real fix. The explicit path here is the belt-and-braces layer: it pins this
+# runner to tests/ even if that config is lost. Every suite in this repo lives in
+# tests/.
 bun test ./tests >"$TEST_LOG" 2>&1
 TEST_RC=$?
 sed 's/^/    /' "$TEST_LOG"
