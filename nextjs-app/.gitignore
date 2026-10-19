@@ -1,0 +1,7 @@
+# Next.js build output (written by `next build`, i.e. by Gate 15 in scripts/check-gates.sh)
+.next/
+# tsc incremental state (tsconfig.json sets "incremental": true)
+tsconfig.tsbuildinfo
+node_modules/
+.env
+.env.local

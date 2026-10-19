@@ -1,21 +1,19 @@
-import { mindbodyClient, type IMindbodyClient } from '../api/client';
-import { teacherCache, classCache, SimpleCache } from '../cache/index';
+import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { teacherCache, classCache, SimpleCache } from '../cache/index.js';
 import {
-  GetStaffRequest,
-  GetStaffResponse,
   GetClassesRequest,
-  GetClassesResponse,
+  Class,
   Staff,
   TeacherSchedule,
-} from '../types/mindbody';
+} from '../types/mindbody.js';
 import {
-  getToday,
   getWeekFromDate,
   getDayOfWeek,
   formatTime,
   getDurationInMinutes,
   getDateOnly,
-} from '../utils/dates';
+} from '../utils/dates.js';
+import { resolveReadTimeZone, siteDateString } from '../utils/siteTime.js';
 
 async function findTeacherByName(
   name: string,
@@ -29,17 +27,12 @@ async function findTeacherByName(
     return cached;
   }
 
-  // Search for staff members
-  const request: GetStaffRequest = {
-    Limit: 100,
-  };
-
-  const response = await client.get<GetStaffResponse>('/staff/staff', {
-    params: request,
-  });
+  // Every staff member, across all pages: a teacher beyond the first page must
+  // still be found.
+  const { items: staffMembers } = await fetchAllPages<Staff>(client, '/staff/staff', {}, 'StaffMembers');
 
   // Find matching teacher (case-insensitive)
-  const teacher = response.StaffMembers.find(
+  const teacher = staffMembers.find(
     (staff) => staff.Name.toLowerCase() === name.toLowerCase() ||
               `${staff.FirstName} ${staff.LastName}`.toLowerCase() === name.toLowerCase()
   );
@@ -69,14 +62,15 @@ export async function getTeacherScheduleTool(
     throw new Error(`Teacher "${teacherName}" not found. Please check the spelling and try again.`);
   }
 
-  // Set date range
-  const dateRange = startDate 
+  // Set date range. The default week starts on the site's calendar date today,
+  // not this process's (UTC or otherwise) date.
+  const dateRange = startDate
     ? { start: startDate, end: endDate || getWeekFromDate(startDate).end }
-    : getWeekFromDate(getToday());
+    : getWeekFromDate(siteDateString(new Date(), await resolveReadTimeZone(client, cCache)));
 
   // Check cache for classes
   const cacheKey = `classes:${teacher.Id}:${dateRange.start}:${dateRange.end}`;
-  let classes = cCache.get<GetClassesResponse>(cacheKey);
+  let classes = cCache.get<Class[]>(cacheKey);
 
   if (!classes) {
     // Fetch classes from API
@@ -84,18 +78,15 @@ export async function getTeacherScheduleTool(
       StaffIds: [teacher.Id],
       StartDateTime: `${dateRange.start}T00:00:00`,
       EndDateTime: `${dateRange.end}T23:59:59`,
-      Limit: 200, // Max allowed
     };
 
-    classes = await client.get<GetClassesResponse>('/class/classes', {
-      params: request,
-    });
+    ({ items: classes } = await fetchAllPages<Class>(client, '/class/classes', { ...request }, 'Classes'));
 
     cCache.set(cacheKey, classes);
   }
 
   // Process and format the results
-  const formattedClasses = classes.Classes.map((cls) => ({
+  const formattedClasses = classes.map((cls) => ({
     id: cls.Id,
     name: cls.ClassDescription?.Name || '',
     startTime: cls.StartDateTime,
@@ -129,9 +120,11 @@ export async function getTeacherScheduleTool(
     }
   });
 
-  // Sort classes by start time
-  formattedClasses.sort((a, b) => 
-    new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+  // Sort classes by start time. Mindbody's site-local "YYYY-MM-DDTHH:mm:ss"
+  // strings sort chronologically as text; parsing them with `new Date()` would
+  // read them in this process's zone instead of the site's.
+  formattedClasses.sort((a, b) =>
+    a.startTime < b.startTime ? -1 : a.startTime > b.startTime ? 1 : 0
   );
 
   return {

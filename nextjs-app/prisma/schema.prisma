@@ -561,9 +561,10 @@ model Enrollment {
   endDate             DateTime?
   startTime           String?
   endTime             String?
-  dayOfWeek           String?
-  maxCapacity         Int?
-  webCapacity         Int?
+  // No dayOfWeek / maxCapacity / webCapacity: a GET /enrollment/enrollments
+  // row is a ClassSchedule, which carries `Day<Name>` booleans rather than one
+  // weekday, and no capacity fields at all. Nothing in the API can populate
+  // them, so they were removed rather than left as columns that are always NULL.
   isAvailable         Boolean   @default(true)
   isOnlineAvailable   Boolean   @default(true)
 

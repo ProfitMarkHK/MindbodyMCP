@@ -14,6 +14,16 @@ export function useSites() {
   return trpc.site.getSites.useQuery();
 }
 
+/**
+ * The studio's IANA timezone, for the formatters in
+ * @/lib/mindbody/formatSiteTime. `undefined` while loading or if the site
+ * record cannot be resolved; the formatters take that as "render unlabelled
+ * rather than in the viewer's zone", which is still correct.
+ */
+export function useSiteTimeZone(): string | undefined {
+  return trpc.site.getTimeZone.useQuery()?.data;
+}
+
 export function useLocations() {
   return trpc.site.getLocations.useQuery();
 }
@@ -54,59 +64,59 @@ export function useTeacherSchedule(teacherId: number, startDate?: string, endDat
 // ==========================================================================
 
 export function useClients(params?: { searchText?: string; clientIds?: string[]; isProspect?: boolean }) {
-  return trpc.client.getAll.useQuery(params);
+  return trpc.clients.getAll.useQuery(params);
 }
 
 export function useClientById(clientId: string) {
-  return trpc.client.getById.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getById.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useClientSearch(searchText: string) {
-  return trpc.client.search.useQuery({ searchText }, { enabled: searchText.length >= 2 });
+  return trpc.clients.search.useQuery({ searchText }, { enabled: searchText.length >= 2 });
 }
 
 export function useClientVisits(clientId: string, startDate?: string, endDate?: string) {
-  return trpc.client.getVisits.useQuery(
+  return trpc.clients.getVisits.useQuery(
     { clientId, startDate, endDate },
     { enabled: !!clientId }
   );
 }
 
 export function useClientMemberships(clientId: string, locationId?: number) {
-  return trpc.client.getMemberships.useQuery(
+  return trpc.clients.getMemberships.useQuery(
     { clientId, locationId },
     { enabled: !!clientId }
   );
 }
 
 export function useClientContracts(clientId: string) {
-  return trpc.client.getContracts.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getContracts.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useClientAccountBalances(clientId: string) {
-  return trpc.client.getAccountBalances.useQuery({ clientId }, { enabled: !!clientId });
+  return trpc.clients.getAccountBalances.useQuery({ clientId }, { enabled: !!clientId });
 }
 
 export function useAddClient() {
   const utils = trpc.useUtils();
-  return trpc.client.add.useMutation({
+  return trpc.clients.add.useMutation({
     onSuccess: () => {
-      utils.client.getAll.invalidate();
+      utils.clients.getAll.invalidate();
     },
   });
 }
 
 export function useUpdateClient() {
   const utils = trpc.useUtils();
-  return trpc.client.update.useMutation({
+  return trpc.clients.update.useMutation({
     onSuccess: () => {
-      utils.client.getAll.invalidate();
+      utils.clients.getAll.invalidate();
     },
   });
 }
 
 export function useClientCheckIn() {
-  return trpc.client.checkIn.useMutation();
+  return trpc.clients.checkIn.useMutation();
 }
 
 // ==========================================================================
@@ -239,17 +249,19 @@ export function useUpdateAppointment() {
 
 export function useEnrollments(params?: {
   locationIds?: number[];
+  classScheduleIds?: number[];
   staffIds?: number[];
   programIds?: number[];
+  sessionTypeIds?: number[];
   startDate?: string;
   endDate?: string;
 }) {
   return trpc.enrollment.getAll.useQuery(params);
 }
 
-export function useClientEnrollments(clientId: string) {
+export function useClientEnrollments(clientId: string, startDate?: string, endDate?: string) {
   return trpc.enrollment.getClientEnrollments.useQuery(
-    { clientId },
+    { clientId, startDate, endDate },
     { enabled: !!clientId }
   );
 }
@@ -259,6 +271,7 @@ export function useAddClientToEnrollment() {
   return trpc.enrollment.addClient.useMutation({
     onSuccess: () => {
       utils.enrollment.getAll.invalidate();
+      utils.enrollment.getClientEnrollments.invalidate();
     },
   });
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useSites, useLocations, useStaff, useClasses } from '@/hooks/useMindbody';
+import { useSites, useLocations, useStaff, useClasses, useSiteTimeZone } from '@/hooks/useMindbody';
+import { formatSiteDateTime } from '@/lib/mindbody/formatSiteTime';
 
 // ============================================================================
 // HOME PAGE - Dashboard Overview
@@ -12,6 +13,9 @@ export default function HomePage() {
   const { data: locations, isLoading: loadingLocations } = useLocations();
   const { data: staff, isLoading: loadingStaff } = useStaff();
   const { data: classes, isLoading: loadingClasses } = useClasses();
+  // Class times are shown in the studio's zone, labelled, so a viewer in another
+  // zone does not read them as their own local time.
+  const timeZone = useSiteTimeZone();
 
   return (
     <main className="min-h-screen p-8">
@@ -110,7 +114,10 @@ export default function HomePage() {
                       <td className="p-4">{cls.staff.name}</td>
                       <td className="p-4">{cls.location.name}</td>
                       <td className="p-4">
-                        {new Date(cls.startDateTime).toLocaleString()}
+                        {formatSiteDateTime(cls.startDateTime, timeZone, {
+                          withZone: true,
+                          fallback: '—',
+                        })}
                       </td>
                       <td className="p-4">
                         {cls.maxCapacity - cls.totalBooked} / {cls.maxCapacity}

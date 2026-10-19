@@ -1,4 +1,4 @@
-import { mindbodyClient, type IMindbodyClient } from '../api/client';
+import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 
 // Get available services (class packages, memberships)
 export async function getServicesTool(
@@ -27,37 +27,39 @@ export async function getServicesTool(
   }>;
   totalServices: number;
 }> {
-  const response = await client.get<any>('/sale/services', {
-    params: {
+  const { items: servicesRaw, totalResults } = await fetchAllPages<any>(
+    client,
+    '/sale/services',
+    {
       ProgramIds: programIds,
       SessionTypeIds: sessionTypeIds,
       LocationId: locationId,
       ClassId: classId,
       HideRelatedPrograms: hideRelatedPrograms,
-      Limit: 200,
     },
-  });
+    'Services'
+  );
 
-  const services = response.Services.map((service: any) => ({
-    id: service.Id,
+  const services = servicesRaw.map((service: any) => ({
+    id: Number(service.Id ?? service.id),
     name: service.Name,
-    price: service.Price,
-    onlinePrice: service.OnlinePrice,
-    taxIncluded: service.TaxIncluded,
-    taxRate: service.TaxRate,
-    programId: service.ProgramId,
-    sessionTypeId: service.SessionTypeId,
-    count: service.Count,
+    price: Number(service.Price ?? 0),
+    onlinePrice: service.OnlinePrice != null ? Number(service.OnlinePrice) : undefined,
+    taxIncluded: Boolean(service.TaxIncluded),
+    taxRate: service.TaxRate != null ? Number(service.TaxRate) : undefined,
+    programId: service.ProgramId != null ? Number(service.ProgramId) : undefined,
+    sessionTypeId: service.SessionTypeId != null ? Number(service.SessionTypeId) : undefined,
+    count: service.Count != null ? Number(service.Count) : undefined,
     expirationUnit: service.ExpirationUnit,
-    expirationLength: service.ExpirationLength,
-    membershipId: service.MembershipId,
-    priority: service.Priority,
+    expirationLength: service.ExpirationLength != null ? Number(service.ExpirationLength) : undefined,
+    membershipId: service.MembershipId != null ? Number(service.MembershipId) : undefined,
+    priority: service.Priority != null ? Number(service.Priority) : undefined,
     prerequisite: service.Prerequisite,
   }));
 
   return {
     services,
-    totalServices: services.length,
+    totalServices: totalResults,
   };
 }
 
@@ -81,15 +83,17 @@ export async function getPackagesTool(
   }>;
   totalPackages: number;
 }> {
-  const response = await client.get<any>('/sale/packages', {
-    params: {
+  const { items: packageRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/sale/packages',
+    {
       LocationId: locationId,
       ClassScheduleId: classScheduleId,
-      Limit: 200,
     },
-  });
+    'Packages'
+  );
 
-  const packages = response.Packages.map((pkg: any) => ({
+  const packages = packageRows.map((pkg: any) => ({
     id: pkg.Id,
     name: pkg.Name,
     classCount: pkg.Count,
@@ -108,7 +112,7 @@ export async function getPackagesTool(
 
   return {
     packages,
-    totalPackages: packages.length,
+    totalPackages: totalResults || packages.length,
   };
 }
 
@@ -137,18 +141,20 @@ export async function getProductsTool(
   }>;
   totalProducts: number;
 }> {
-  const response = await client.get<any>('/sale/products', {
-    params: {
+  const { items: productRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/sale/products',
+    {
       ProductIds: productIds,
       SearchText: searchText,
       CategoryIds: categoryIds,
       SubCategoryIds: subCategoryIds,
       SellOnline: sellOnline,
-      Limit: 200,
     },
-  });
+    'Products'
+  );
 
-  const products = response.Products.map((product: any) => ({
+  const products = productRows.map((product: any) => ({
     id: product.Id,
     name: product.Name,
     price: product.Price,
@@ -165,7 +171,7 @@ export async function getProductsTool(
 
   return {
     products,
-    totalProducts: response.PaginationResponse.TotalResults,
+    totalProducts: totalResults || products.length,
   };
 }
 
@@ -182,6 +188,8 @@ export async function checkoutShoppingCartTool(
       };
     };
     quantity: number;
+    /** Existing appointment IDs this item pays for (reconciles). */
+    appointmentIds?: number[];
     appointmentBookingRequests?: Array<{
       staffId: number;
       locationId: number;
@@ -224,6 +232,8 @@ export async function checkoutShoppingCartTool(
       discountAmount: number;
       tax: number;
       total: number;
+      /** IDs of the appointments this cart item reconciled. */
+      appointments?: number[];
     }>;
   };
   appointments?: Array<{
@@ -270,6 +280,10 @@ export async function checkoutShoppingCartTool(
             Amount: item.item.metadata.amount,
           },
         };
+      }
+
+      if (item.appointmentIds && item.appointmentIds.length > 0) {
+        baseItem.AppointmentIds = item.appointmentIds;
       }
 
       if (item.appointmentBookingRequests) {
@@ -343,6 +357,7 @@ export async function checkoutShoppingCartTool(
           discountAmount: item.DiscountAmount,
           tax: item.TaxAmount,
           total: item.Total,
+          ...reconciledAppointmentIds(item.Appointments),
         })),
       } : undefined,
       appointments: response.Appointments?.map((apt: any) => ({
@@ -362,7 +377,47 @@ export async function checkoutShoppingCartTool(
   }
 }
 
-// Purchase contract (membership/auto-renew)
+/**
+ * CartItem.Appointments is described in docs/openapi.json as "the IDs of the
+ * appointments that were reconciled" but typed as Appointment objects. Accept
+ * both shapes and surface plain IDs. Omitted entirely when absent.
+ */
+function reconciledAppointmentIds(raw: unknown): { appointments?: number[] } {
+  if (!Array.isArray(raw)) return {};
+  const ids = raw
+    .map((entry: any) => (typeof entry === 'number' ? entry : Number(entry?.Id)))
+    .filter((id) => Number.isFinite(id));
+  return { appointments: ids };
+}
+
+/**
+ * Purchase a contract (membership / auto-renew).
+ *
+ * ── Why `useAccountCredit` exists ───────────────────────────────────────────
+ * `/sale/purchasecontract` answers HTTP 400 `MissingRequiredFields` — "At
+ * least one of the following parameters must be passed: CreditCardInfo,
+ * StoredCardInfo, UseDirectDebit, UseAccountCredit" — unless one of those four
+ * is present. Three of the four are real payment instruments. `UseAccountCredit`
+ * is NOT: it is a boolean meaning "bill this to the client's account balance",
+ * and the sandbox accepts it with a zero balance, committing the contract and
+ * leaving the charge on account. It is therefore the only way to exercise this
+ * endpoint without handing Mindbody payment details, and the reason the live
+ * tier can test it at all.
+ *
+ * The other three are deliberately NOT exposed. This server takes no card
+ * numbers, no stored-card ids and no bank details (see the no-op policy in
+ * tests/live/README.md), so exposing them would widen the surface for no
+ * caller that is allowed to use them.
+ *
+ * ── Response shape ──────────────────────────────────────────────────────────
+ * `PurchaseContractResponse` in docs/openapi.json carries `ClientId,
+ * UniqueClientId, LocationId, ContractId, ClientContractId,
+ * PaymentProcessingFailures, Totals`. It has NO nested `ClientContract`
+ * object — an earlier version of this tool read `response.ClientContract.Id`,
+ * which threw on every successful purchase and reported the success as a
+ * failure. `ClientContractId` is the id of the ClientContract that was created;
+ * read it back through `getClientContracts`.
+ */
 export async function purchaseContractTool(
   clientId: string,
   contractId: number,
@@ -371,19 +426,16 @@ export async function purchaseContractTool(
   clientSignature?: string,
   promotionCode?: string,
   locationId?: number,
+  useAccountCredit?: boolean,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   success: boolean;
-  clientContract?: {
-    id: number;
-    clientId: string;
-    contractName: string;
-    startDate: string;
-    endDate?: string;
-    paymentAmount: number;
-    frequency?: number;
-    remainingPayments?: number;
-  };
+  /** The id of the ClientContract that was created; `null` on a dry run. */
+  clientContractId?: number | null;
+  clientId?: string;
+  contractId?: number;
+  locationId?: number;
+  totals?: { subTotal: number; discount: number; tax: number; total: number };
   message: string;
 }> {
   try {
@@ -395,20 +447,23 @@ export async function purchaseContractTool(
       ClientSignature: clientSignature,
       PromotionCode: promotionCode,
       LocationId: locationId,
+      UseAccountCredit: useAccountCredit,
     });
 
     return {
       success: true,
-      clientContract: {
-        id: response.ClientContract.Id,
-        clientId: response.ClientContract.ClientId,
-        contractName: response.ClientContract.ContractName,
-        startDate: response.ClientContract.StartDate,
-        endDate: response.ClientContract.EndDate,
-        paymentAmount: response.ClientContract.PaymentAmount,
-        frequency: response.ClientContract.Frequency,
-        remainingPayments: response.ClientContract.RemainingPayments,
-      },
+      clientContractId: response.ClientContractId ?? null,
+      clientId: response.ClientId,
+      contractId: response.ContractId,
+      locationId: response.LocationId,
+      totals: response.Totals
+        ? {
+            subTotal: response.Totals.SubTotal,
+            discount: response.Totals.Discount,
+            tax: response.Totals.Tax,
+            total: response.Totals.Total,
+          }
+        : undefined,
       message: 'Contract purchased successfully',
     };
   } catch (error: any) {
@@ -449,16 +504,18 @@ export async function getContractsTool(
   }>;
   totalContracts: number;
 }> {
-  const response = await client.get<any>('/sale/contracts', {
-    params: {
+  const { items: contractRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/sale/contracts',
+    {
       ContractIds: contractIds,
       SoldOnline: soldOnline,
       LocationId: locationId,
-      Limit: 200,
     },
-  });
+    'Contracts'
+  );
 
-  const contracts = response.Contracts.map((contract: any) => ({
+  const contracts = contractRows.map((contract: any) => ({
     id: contract.Id,
     name: contract.Name,
     description: contract.Description,
@@ -482,6 +539,6 @@ export async function getContractsTool(
 
   return {
     contracts,
-    totalContracts: contracts.length,
+    totalContracts: totalResults || contracts.length,
   };
 }

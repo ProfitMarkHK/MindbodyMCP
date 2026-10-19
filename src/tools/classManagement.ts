@@ -1,11 +1,10 @@
-import { mindbodyClient, type IMindbodyClient } from '../api/client';
-import { classCache, SimpleCache } from '../cache/index';
+import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { classCache, SimpleCache } from '../cache/index.js';
+import { epochMsToSiteLocal, resolveReadTimeZone } from '../utils/siteTime.js';
 import {
   GetClassesRequest,
-  GetClassesResponse,
   Class,
-  ClassDescription,
-} from '../types/mindbody';
+} from '../types/mindbody.js';
 
 // Get all classes with filtering options
 export async function getClassesTool(
@@ -41,27 +40,30 @@ export async function getClassesTool(
   };
 }> {
   const cacheKey = `classes:${startDate}:${endDate}:${locationIds?.join(',')}:${classDescriptionIds?.join(',')}:${staffIds?.join(',')}`;
-  let cached = cache.get<GetClassesResponse>(cacheKey);
+  let cached = cache.get<Class[]>(cacheKey);
 
   if (!cached) {
+    // Defaults: from "now" to seven days on, expressed as site-local wall time
+    // (Mindbody reads offset-less date-times in the site's zone).
+    // The zone is only resolved (once) if a default is actually needed.
+    let zone: Promise<string> | undefined;
+    const siteNow = async (offsetMs: number) =>
+      epochMsToSiteLocal(Date.now() + offsetMs, await (zone ??= resolveReadTimeZone(client, cache)));
     const request: GetClassesRequest = {
-      StartDateTime: startDate ? `${startDate}T00:00:00` : new Date().toISOString(),
-      EndDateTime: endDate ? `${endDate}T23:59:59` : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      StartDateTime: startDate ? `${startDate}T00:00:00` : await siteNow(0),
+      EndDateTime: endDate ? `${endDate}T23:59:59` : await siteNow(7 * 24 * 60 * 60 * 1000),
       LocationIds: locationIds,
       ClassDescriptionIds: classDescriptionIds,
       StaffIds: staffIds,
-      Limit: 200,
     };
 
-    cached = await client.get<GetClassesResponse>('/class/classes', {
-      params: request,
-    });
+    ({ items: cached } = await fetchAllPages<Class>(client, '/class/classes', { ...request }, 'Classes'));
 
     cache.set(cacheKey, cached);
   }
 
   // Process and format results
-  const formattedClasses = cached.Classes.map((cls) => ({
+  const formattedClasses = cached.map((cls) => ({
     id: cls.Id,
     name: cls.ClassDescription?.Name || '',
     description: cls.ClassDescription?.Description || '',
@@ -113,16 +115,14 @@ export async function getClassDescriptionsTool(
   totalTypes: number;
 }> {
   const cacheKey = 'class-descriptions';
-  let cached = cache.get<any>(cacheKey);
+  let cached = cache.get<any[]>(cacheKey);
 
   if (!cached) {
-    cached = await client.get<any>('/class/classdescriptions', {
-      params: { Limit: 200 },
-    });
+    ({ items: cached } = await fetchAllPages<any>(client, '/class/classdescriptions', {}, 'ClassDescriptions'));
     cache.set(cacheKey, cached, 60); // Cache for 60 minutes
   }
 
-  const classTypes = cached.ClassDescriptions.map((desc: any) => ({
+  const classTypes = cached.map((desc: any) => ({
     id: desc.Id,
     name: desc.Name,
     description: desc.Description || '',
@@ -230,16 +230,18 @@ export async function getWaitlistEntriesTool(
   }>;
   totalEntries: number;
 }> {
-  const response = await client.get<any>('/class/waitlistentries', {
-    params: {
+  const { items: entryRows } = await fetchAllPages<any>(
+    client,
+    '/class/waitlistentries',
+    {
       ClassScheduleIds: classScheduleIds,
       ClassIds: classIds,
       ClientIds: clientIds,
-      Limit: 200,
     },
-  });
+    'WaitlistEntries'
+  );
 
-  const entries = response.WaitlistEntries.map((entry: any) => ({
+  const entries = entryRows.map((entry: any) => ({
     classId: entry.ClassId,
     className: entry.ClassName,
     classDate: entry.ClassDate,
@@ -327,17 +329,19 @@ export async function getClassSchedulesTool(
   }>;
   totalSchedules: number;
 }> {
-  const response = await client.get<any>('/class/classschedules', {
-    params: {
+  const { items: scheduleRows } = await fetchAllPages<any>(
+    client,
+    '/class/classschedules',
+    {
       LocationIds: locationIds,
       ClassDescriptionIds: classDescriptionIds,
       StaffIds: staffIds,
       ProgramIds: programIds,
-      Limit: 200,
     },
-  });
+    'ClassSchedules'
+  );
 
-  const schedules = response.ClassSchedules.map((schedule: any) => ({
+  const schedules = scheduleRows.map((schedule: any) => ({
     id: schedule.Id,
     className: schedule.ClassDescription?.Name || '',
     instructor: schedule.Staff?.Name || `${schedule.Staff?.FirstName || ''} ${schedule.Staff?.LastName || ''}`.trim() || '',

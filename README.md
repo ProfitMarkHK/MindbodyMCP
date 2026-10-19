@@ -9,7 +9,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 
 ## ✨ Features
 
-- **50+ Tools** covering every aspect of studio operations
+- **41 Tools** covering every aspect of studio operations
 - **Complete Class Management** - View schedules, book clients, manage waitlists, substitute teachers
 - **Client Management** - Add/update clients, track visits, memberships, and balances
 - **Sales & Commerce** - Process payments, sell packages, memberships, and retail products
@@ -87,10 +87,15 @@ MINDBODY_SOURCE_PASSWORD=your_source_password
 
 # Optional settings
 MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
+# MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
 ```
+
+### Dates and timezones
+
+Mindbody takes and returns every date and time as the studio's local time with no UTC offset (for example `2026-10-18T08:00:00`). Send dates and times the same way. The server reads the site's IANA timezone from Mindbody's site record (`GET /site/sites`, cached for 60 minutes), so "today" in default date ranges is the studio's calendar date, not your machine's. `cancelAppointments` compares start times in that zone and refuses to write if the zone cannot be resolved. `MINDBODY_SITE_TIMEZONE` is a fallback for a site record with no usable zone; leave it unset otherwise.
 
 ### 3. Configure Claude Desktop
 
@@ -137,7 +142,7 @@ Or use the GitHub repository directly:
 
 ## 🛠️ Available Tools
 
-The server provides 50+ tools across 7 categories:
+The server provides 41 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -147,6 +152,7 @@ The server provides 50+ tools across 7 categories:
 - `removeClientFromClass` - Cancel bookings
 - `getWaitlistEntries` - Manage waitlists
 - `substituteClassTeacher` - Handle substitutions
+- `getClassVisits` - Attendance and sign-in status for a class
 
 ### 👥 Client Management
 - `getClients` - Search and retrieve clients
@@ -163,30 +169,35 @@ The server provides 50+ tools across 7 categories:
 - `getPackages` - List class packages
 - `getProducts` - Browse retail products
 - `getContracts` - View membership options
-- `checkoutShoppingCart` - Process purchases
-- `purchaseContract` - Sell memberships
+- `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds`
+- `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
-- `getSites` - Get business information
+- `getSites` - Get business information for the configured site. Optional `siteId`. With a multi-site API key and no default or explicit site, it returns `availableSites` instead of guessing
 - `getLocations` - List all locations
 - `getPrograms` - View programs offered
 - `getResources` - Manage resources
 - `getSessionTypes` - List session types
 - `getStaff` - View all staff members
 - `getTeacherSchedule` - Teacher schedules
+- `getActivationCode` - Get the site activation code
 
 ### 📆 Appointments
-- `getStaffAppointments` - View appointments
+- `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client
 - `addAppointment` - Book appointments
-- `updateAppointment` - Modify appointments
+- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
+- `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `getBookableItems` - Find available slots
-- `getActiveSessionTimes` - Check availability
+- `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that
 - `getScheduleItems` - View schedules
 
+**Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed or NoShow. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
+
 ### 🎓 Enrollments
-- `getEnrollments` - View courses/workshops
-- `addClientToEnrollment` - Register for courses
-- `getClientEnrollments` - View client enrollments
+- `getEnrollments` - List courses/workshops/series (class schedules whose program is an Enrollment program); the `id` is what `addClientToEnrollment` takes
+- `addClientToEnrollment` - Book one client into one enrollment: the whole thing, from a date on (`enrollDateForward`), or selected sessions (`enrollOpenDates`)
+- `getClientEnrollments` - A client's enrollments with their sessions, grouped by enrollment. Visits are resolved to classes and kept only when the class belongs to an Enrollment program, so drop-ins and appointments are excluded. Default window: today through 365 days ahead
+- `cancelEnrollmentVisits` - Cancel up to 3 future enrollment sessions for one client by visit ID, with ownership, future-only and status guards; all-or-nothing. There is no move operation: cancel, then add again. Details in [CLAUDE.md](CLAUDE.md)
 
 ## 💬 Example Usage in Claude
 
@@ -213,6 +224,9 @@ cd MindbodyMCP
 
 # Install dependencies
 bun install  # or npm install
+
+# If you cloned with --no-scripts, install the pre-commit quality gate by hand:
+git config core.hooksPath .githooks
 
 # Run in development mode
 bun run dev  # or npm run dev
@@ -305,6 +319,19 @@ bun run benchmark
 bun run typecheck
 ```
 
+### Quality gates
+
+```bash
+bun run check   # every automated gate: tests, typecheck, builds, secret scan
+```
+
+The same script runs as a pre-commit hook. `bun install` installs it
+automatically (`prepare` sets `git config core.hooksPath .githooks`); if you
+cloned with `--no-scripts`, run that command by hand. Every commit then runs the
+full suite (~13s warm), including `scripts/secret-scan.sh`, which blocks a commit
+that introduces a credential-shaped string and never prints a matched value.
+Full checklist: [docs/quality-gates.md](docs/quality-gates.md).
+
 ## 📦 Publishing
 
 The package is available on:
@@ -324,6 +351,12 @@ The package is available on:
 - **Intelligent Caching**: 5-minute cache for dynamic data, 60-minute for static
 - **Automatic Retry**: Exponential backoff for failed requests
 - **Rate Limiting**: Respects Mindbody's 2000 requests/hour limit
+
+### Pagination
+
+Every Mindbody GET that accepts `Limit`/`Offset` in the API spec is read through `fetchAllPages` (`src/api/client.ts`). It asks for 200 rows per page (`DEFAULT_PAGE_SIZE`), advances `Offset` by the rows actually received, and, when the server reports `TotalResults`, keeps going until that many rows are collected. It never returns a silently truncated list: it throws after 100 pages (`MAX_PAGES`), or when the server ignores `Offset` and repeats a page.
+
+Quality gate 13 (`tests/pagination-gate.test.ts`, run by `bun run check`) enforces this statically. A paginated endpoint called with a single GET, a path the spec does not define, or a call the scanner cannot resolve to a literal path fails the build. There is no allowlist. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ## 🤝 Contributing
 

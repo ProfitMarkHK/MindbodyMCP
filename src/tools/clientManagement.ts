@@ -1,5 +1,6 @@
-import { mindbodyClient, type IMindbodyClient } from '../api/client';
-import { SimpleCache } from '../cache/index';
+import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { classCache, SimpleCache } from '../cache/index.js';
+import { withDefaultDates } from '../utils/siteTime.js';
 
 // Get clients with search and filtering
 export async function getClientsTool(
@@ -38,17 +39,19 @@ export async function getClientsTool(
   }>;
   totalClients: number;
 }> {
-  const response = await client.get<any>('/client/clients', {
-    params: {
+  const { items: clientRows, totalResults } = await fetchAllPages<any>(
+    client,
+    '/client/clients',
+    {
       SearchText: searchText,
       ClientIds: clientIds,
       LastModifiedDate: lastModifiedDate,
       IsProspect: isProspect,
-      Limit: 200,
     },
-  });
+    'Clients'
+  );
 
-  const clients = response.Clients.map((client: any) => ({
+  const clients = clientRows.map((client: any) => ({
     id: client.Id,
     firstName: client.FirstName,
     lastName: client.LastName,
@@ -78,7 +81,7 @@ export async function getClientsTool(
 
   return {
     clients,
-    totalClients: response.PaginationResponse.TotalResults,
+    totalClients: totalResults,
   };
 }
 
@@ -111,7 +114,7 @@ export async function addClientTool(
   message: string;
 }> {
   try {
-    const response = await client.post<any>('/client/addclient', {
+    const payload: Record<string, unknown> = {
       FirstName: firstName,
       LastName: lastName,
       Email: email,
@@ -126,8 +129,14 @@ export async function addClientTool(
       EmergencyContactInfoPhone: emergencyContactPhone,
       EmergencyContactInfoRelationship: emergencyContactRelationship,
       SendAccountEmails: sendAccountEmails,
-      ReferredBy: referredBy,
-    });
+      ReferredBy: referredBy ?? 'MindbodyMCP',
+    };
+
+    if (addressLine1) payload.Street = addressLine1;
+    if (mobilePhone) payload.MobileNumber = mobilePhone;
+    if (birthDate) payload.Birthday = birthDate;
+
+    const response = await client.post<any>('/client/addclient', payload);
 
     return {
       success: true,
@@ -176,6 +185,8 @@ export async function updateClientTool(
   message: string;
 }> {
   try {
+    // UpdateClientRequest (docs/openapi.json) requires the fields nested under
+    // `Client`; top-level fields are refused with `Client (Code: MissingRequiredFields)`.
     const updateData: any = {
       Id: clientId,
     };
@@ -194,7 +205,12 @@ export async function updateClientTool(
     if (updates.emergencyContactPhone) updateData.EmergencyContactInfoPhone = updates.emergencyContactPhone;
     if (updates.sendAccountEmails !== undefined) updateData.SendAccountEmails = updates.sendAccountEmails;
 
-    const response = await client.post<any>('/client/updateclient', updateData);
+    // CrossRegionalUpdate defaults to true, which a site outside a region refuses
+    // ("The current site does not belong to a region"), so always update locally.
+    const response = await client.post<any>('/client/updateclient', {
+      Client: updateData,
+      CrossRegionalUpdate: false,
+    });
 
     return {
       success: true,
@@ -219,7 +235,8 @@ export async function getClientVisitsTool(
   clientId: string,
   startDate?: string,
   endDate?: string,
-  client: IMindbodyClient = mindbodyClient
+  client: IMindbodyClient = mindbodyClient,
+  cache: SimpleCache = classCache
 ): Promise<{
   visits: Array<{
     id: number;
@@ -245,16 +262,20 @@ export async function getClientVisitsTool(
     byInstructor: Record<string, number>;
   };
 }> {
-  const response = await client.get<any>('/client/clientvisits', {
-    params: {
+  // Default window: the last 30 site-local days, ending today at the site.
+  const dates = await withDefaultDates(startDate, endDate, -30, client, cache);
+  const { items: visitsRaw, totalResults } = await fetchAllPages<any>(
+    client,
+    '/client/clientvisits',
+    {
       ClientId: clientId,
-      StartDate: startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      EndDate: endDate || new Date().toISOString().split('T')[0],
-      Limit: 200,
+      StartDate: dates.start,
+      EndDate: dates.end,
     },
-  });
+    'Visits'
+  );
 
-  const visits = response.Visits.map((visit: any) => ({
+  const visits = visitsRaw.map((visit: any) => ({
     id: visit.Id,
     classId: visit.ClassId,
     className: visit.Name,
@@ -289,7 +310,7 @@ export async function getClientVisitsTool(
 
   return {
     visits,
-    totalVisits: visits.length,
+    totalVisits: totalResults || visits.length,
     summary,
   };
 }
@@ -314,14 +335,17 @@ export async function getClientMembershipsTool(
   }>;
   totalMemberships: number;
 }> {
-  const response = await client.get<any>('/client/activeclientmemberships', {
-    params: {
+  const { items: membershipRows } = await fetchAllPages<any>(
+    client,
+    '/client/activeclientmemberships',
+    {
       ClientId: clientId,
       LocationId: locationId,
     },
-  });
+    'ClientMemberships'
+  );
 
-  const memberships = response.ClientMemberships.map((membership: any) => ({
+  const memberships = membershipRows.map((membership: any) => ({
     id: membership.Id,
     name: membership.Name,
     remainingClasses: membership.Remaining,
@@ -382,13 +406,14 @@ export async function getClientAccountBalancesTool(
     lastFour: string;
   }>;
 }> {
-  const response = await client.get<any>('/client/clientaccountbalances', {
-    params: {
-      ClientIds: [clientId],
-    },
-  });
+  const { items: balanceRows } = await fetchAllPages<any>(
+    client,
+    '/client/clientaccountbalances',
+    { ClientIds: [clientId] },
+    'Clients'
+  );
 
-  const clientData = response.Clients[0];
+  const clientData = balanceRows[0];
   return {
     accountBalance: clientData.AccountBalance || 0,
     creditCardBalances: clientData.ClientCreditCards?.map((card: any) => ({
@@ -418,13 +443,14 @@ export async function getClientContractsTool(
   }>;
   totalContracts: number;
 }> {
-  const response = await client.get<any>('/client/clientcontracts', {
-    params: {
-      ClientId: clientId,
-    },
-  });
+  const { items: contractsRaw, totalResults } = await fetchAllPages<any>(
+    client,
+    '/client/clientcontracts',
+    { ClientId: clientId },
+    'Contracts'
+  );
 
-  const contracts = response.Contracts.map((contract: any) => ({
+  const contracts = contractsRaw.map((contract: any) => ({
     id: contract.Id,
     name: contract.ContractName,
     description: contract.Description,
@@ -439,6 +465,6 @@ export async function getClientContractsTool(
 
   return {
     contracts,
-    totalContracts: contracts.length,
+    totalContracts: totalResults || contracts.length,
   };
 }

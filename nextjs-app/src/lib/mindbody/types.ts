@@ -29,6 +29,9 @@ export interface Site {
   description?: string;
   logoUrl?: string;
   contactEmail?: string;
+  /** The site's IANA zone, e.g. "America/Los_Angeles". Every Mindbody
+   *  date-time is in this zone; see lib/mindbody/siteTime.ts. */
+  timeZone?: string;
   acceptsVisa: boolean;
   acceptsMastercard: boolean;
   acceptsAmex: boolean;
@@ -429,47 +432,116 @@ export interface ActiveSessionTime {
 // ENROLLMENT TYPES
 // ============================================================================
 
+/**
+ * One enrollment (course, workshop or series) as GET /enrollment/enrollments
+ * returns it. Mindbody has no enrollment record of its own: each row is a
+ * ClassSchedule whose program has ScheduleType `Enrollment`. `id` is the
+ * `classScheduleId` that addClientToEnrollment takes. Name, description,
+ * program and session type come from `ClassDescription`; the scheduled days
+ * are the spec's seven `DaySunday`..`DaySaturday` booleans, collapsed into
+ * `days`. A ClassSchedule carries no capacity: that lives on each Class.
+ */
 export interface Enrollment {
+  /** ClassSchedule ID: the `classScheduleId` addClientToEnrollment takes. */
   id: number;
-  locationId: number;
-  locationName: string;
   name: string;
   description?: string;
-  staffId?: number;
-  staffName?: string;
+  courseId?: number;
+  courseName?: string;
   programId?: number;
   programName?: string;
-  scheduleType?: string;
+  sessionTypeId?: number;
+  sessionTypeName?: string;
+  staffId?: number;
+  staffName: string;
+  locationId?: number;
+  locationName: string;
+  semesterId?: number;
   startDate: string;
-  endDate?: string;
-  startTime?: string;
-  endTime?: string;
-  dayOfWeek?: string;
-  maxCapacity?: number;
-  webCapacity?: number;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  /** Day names, e.g. ['Monday', 'Wednesday']. */
+  days: string[];
+  /** Booking after the enrollment has started is allowed (`enrollOpenDates`). */
+  allowOpenEnrollment: boolean;
+  /** Booking from a date forward is allowed (`enrollDateForward`). */
+  allowDateForwardEnrollment: boolean;
   isAvailable: boolean;
 }
 
+/**
+ * One session a client holds in an enrollment, as returned by
+ * MindbodyService.getClientEnrollments: a row of GET /client/clientschedule
+ * whose class belongs to an `Enrollment` program. `id` is the visit ID.
+ */
+export interface ClientEnrollmentVisit {
+  /** Visit ID. */
+  id: string;
+  classId: number;
+  /** ClassSchedule ID of the enrollment this session belongs to. */
+  classScheduleId: number;
+  /** Enrollment name (from the class's ClassDescription). */
+  name: string;
+  programId?: number;
+  programName?: string;
+  staffId?: number;
+  staffName: string;
+  locationId?: number;
+  locationName: string;
+  startDateTime: string;
+  endDateTime: string;
+  isWaitlisted: boolean;
+  waitlistEntryId?: number;
+  signedIn: boolean;
+  lateCancelled: boolean;
+  missed: boolean;
+  makeUp: boolean;
+}
+
+/**
+ * Filters of GET /enrollment/enrollments. These are the only ones the spec
+ * defines; there is no semester or course filter on this endpoint.
+ */
 export interface GetEnrollmentsParams {
   locationIds?: number[];
   classScheduleIds?: number[];
   staffIds?: number[];
   programIds?: number[];
   sessionTypeIds?: number[];
-  semesterIds?: number[];
-  courseIds?: number[];
+  /** YYYY-MM-DD; default today. */
   startDate?: string;
+  /** YYYY-MM-DD; default 365 days after startDate. */
   endDate?: string;
   limit?: number;
 }
 
+/** Body of POST /enrollment/addclienttoenrollment, in the spec's own terms. */
 export interface AddClientToEnrollmentParams {
   clientId: string;
+  /** The enrollment `id` from getEnrollments (ClassScheduleId, singular). */
   classScheduleId: number;
-  enrollFromDate?: string;
-  enrollUntilDate?: string;
+  /**
+   * Book every session from this site-local date-time on (EnrollDateForward).
+   * Takes priority over `enrollOpenDates`. Needs allowDateForwardEnrollment.
+   */
+  enrollDateForward?: string;
+  /** Book only these session date-times (EnrollOpen). Needs allowOpenEnrollment. */
+  enrollOpenDates?: string[];
+  /** Add to the enrollment's waiting list instead (default false). */
   waitlist?: boolean;
+  /** Promote this waiting-list entry into the enrollment. */
+  waitlistEntryId?: number;
   sendEmail?: boolean;
+  /** Validate only, commit nothing (default false). */
+  test?: boolean;
+}
+
+/** What addClientToEnrollment reports back: the ClassSchedule's sessions after the booking. */
+export interface EnrollmentBookingResult {
+  classScheduleId: number;
+  name?: string;
+  sessions: Array<{ classId: number; startDateTime: string; endDateTime: string; totalBooked?: number }>;
 }
 
 // ============================================================================
@@ -572,7 +644,8 @@ export interface CartItem {
   item: {
     type: 'Service' | 'Product' | 'Package' | 'Tip';
     metadata: {
-      id: number;
+      /** Service, Product or Package ID. Not used for a Tip, which carries `amount`. */
+      id?: number;
       name?: string;
       amount?: number;
     };

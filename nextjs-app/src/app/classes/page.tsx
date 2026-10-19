@@ -2,7 +2,11 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useClasses, useClassDescriptions, useLocations } from '@/hooks/useMindbody';
+import { useClasses, useClassDescriptions, useLocations, useSiteTimeZone } from '@/hooks/useMindbody';
+import {
+  formatSiteDateWithWeekdayLong,
+  formatSiteTimeOfDay,
+} from '@/lib/mindbody/formatSiteTime';
 
 // ============================================================================
 // CLASSES PAGE - Class Schedule Management
@@ -14,6 +18,8 @@ export default function ClassesPage() {
 
   const { data: locations } = useLocations();
   const { data: descriptions } = useClassDescriptions();
+  // Studio-local clocks, not the viewer's browser zone.
+  const timeZone = useSiteTimeZone();
   const { data: classes, isLoading } = useClasses({
     locationIds: selectedLocation ? [selectedLocation] : undefined,
     classDescriptionIds: selectedDescription ? [selectedDescription] : undefined,
@@ -82,7 +88,7 @@ export default function ClassesPage() {
         ) : classes?.items && classes.items.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {classes.items.map((cls) => (
-              <ClassCard key={cls.id} classData={cls} />
+              <ClassCard key={cls.id} classData={cls} timeZone={timeZone} />
             ))}
           </div>
         ) : (
@@ -102,9 +108,7 @@ export default function ClassesPage() {
   );
 }
 
-function ClassCard({ classData }: { classData: any }) {
-  const startTime = new Date(classData.startDateTime);
-  const endTime = new Date(classData.endDateTime);
+function ClassCard({ classData, timeZone }: { classData: any; timeZone: string | undefined }) {
   const spotsAvailable = classData.maxCapacity - classData.totalBooked;
   const isFull = spotsAvailable <= 0;
 
@@ -137,23 +141,15 @@ function ClassCard({ classData }: { classData: any }) {
         </p>
         <p className="text-muted-foreground">
           <span className="font-medium">Date:</span>{' '}
-          {startTime.toLocaleDateString('en-US', {
-            weekday: 'long',
-            month: 'short',
-            day: 'numeric',
+          {formatSiteDateWithWeekdayLong(classData.startDateTime, timeZone, {
+            fallback: '—',
           })}
         </p>
         <p className="text-muted-foreground">
           <span className="font-medium">Time:</span>{' '}
-          {startTime.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-          })}{' '}
-          -{' '}
-          {endTime.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-          })}
+          {formatSiteTimeOfDay(classData.startDateTime, timeZone, { fallback: '—' })}
+          {' - '}
+          {formatSiteTimeOfDay(classData.endDateTime, timeZone, { fallback: '—' })}
         </p>
       </div>
 

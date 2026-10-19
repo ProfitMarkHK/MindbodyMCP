@@ -1,4 +1,6 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
+import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
+import { getSiteTimeZone, withDefaultDates } from './siteTime';
 import type {
   // Site & Location
   Site, Location, Resource,
@@ -14,7 +16,7 @@ import type {
   Appointment, GetAppointmentsParams, AddAppointmentParams, UpdateAppointmentParams,
   BookableItem, GetBookableItemsParams, ScheduleItem, ActiveSessionTime,
   // Enrollment
-  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams,
+  Enrollment, GetEnrollmentsParams, AddClientToEnrollmentParams, ClientEnrollmentVisit, EnrollmentBookingResult,
   // Sales
   Service, Package, Product, Contract,
   GetServicesParams, GetProductsParams, GetContractsParams,
@@ -24,6 +26,83 @@ import type {
   // Utility
   TeacherSchedule, OperationResult, ListResult, VisitSummary,
 } from './types';
+
+// ============================================================================
+// ENROLLMENT HELPERS (module-level; see the ENROLLMENT MANAGEMENT section)
+// ============================================================================
+
+/** Program.ScheduleType value that marks an enrollment (course/workshop/series). */
+export const ENROLLMENT_SCHEDULE_TYPE = 'Enrollment';
+
+/** Default lookahead for getEnrollments and getClientEnrollments, in days. */
+export const DEFAULT_ENROLLMENT_WINDOW_DAYS = 365;
+
+/** GET /class/classes `ClassIds` per request, to keep the query string bounded. */
+const CLASS_LOOKUP_CHUNK = 50;
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+/**
+ * The weekday of a Mindbody SITE-LOCAL date-time ("2026-10-18T08:00:00", no
+ * offset), taken from the string's own calendar fields.
+ *
+ * `new Date(s).toLocaleDateString(...)` happens to name the same day — a string
+ * with no offset is parsed AND formatted in the host's zone, so its calendar date
+ * survives — but it is right by accident and leans on the host's locale data.
+ * Reading the weekday out of the date the studio gave is what the summary means
+ * (Mindbody's own weekday, not a re-derivation), and needs no zone at all: a
+ * Y-M-D names the same weekday everywhere. A string that is not site-local
+ * carries no calendar to read, so it keeps the old host reading.
+ */
+function siteLocalWeekday(siteLocalDateTime: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(siteLocalDateTime?.trim() ?? '');
+  const [, y, mo, d] = match ?? [];
+  const parsed = y && new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d)));
+  // A rolled-over or impossible date (month 13, day 32) is not a calendar date.
+  if (!parsed || parsed.getUTCMonth() !== Number(mo) - 1 || parsed.getUTCDate() !== Number(d)) {
+    return new Date(siteLocalDateTime).toLocaleDateString('en-US', { weekday: 'long' });
+  }
+  return DAY_NAMES[parsed.getUTCDay()];
+}
+
+function staffDisplayName(staff: any): string {
+  if (!staff) return '';
+  return staff.Name || `${staff.FirstName || ''} ${staff.LastName || ''}`.trim();
+}
+
+/** The day names whose `Day<Name>` flag is true on a ClassSchedule. */
+function scheduledDays(schedule: any): string[] {
+  return DAY_NAMES.filter((day) => schedule?.[`Day${day}`] === true);
+}
+
+/** A GET /enrollment/enrollments row (ClassSchedule) as an Enrollment. */
+function mapEnrollment(schedule: any): Enrollment {
+  const description = schedule.ClassDescription;
+  return {
+    id: Number(schedule.Id),
+    name: description?.Name ?? '',
+    description: description?.Description ?? undefined,
+    courseId: schedule.Course?.Id ?? undefined,
+    courseName: schedule.Course?.Name ?? undefined,
+    programId: description?.Program?.Id ?? undefined,
+    programName: description?.Program?.Name ?? undefined,
+    sessionTypeId: description?.SessionType?.Id ?? undefined,
+    sessionTypeName: description?.SessionType?.Name ?? undefined,
+    staffId: schedule.Staff?.Id ?? undefined,
+    staffName: staffDisplayName(schedule.Staff),
+    locationId: schedule.Location?.Id ?? undefined,
+    locationName: schedule.Location?.Name ?? '',
+    semesterId: schedule.SemesterId ?? undefined,
+    startDate: schedule.StartDate,
+    endDate: schedule.EndDate,
+    startTime: schedule.StartTime,
+    endTime: schedule.EndTime,
+    days: scheduledDays(schedule),
+    allowOpenEnrollment: Boolean(schedule.AllowOpenEnrollment),
+    allowDateForwardEnrollment: Boolean(schedule.AllowDateForwardEnrollment),
+    isAvailable: Boolean(schedule.IsAvailable),
+  };
+}
 
 // ============================================================================
 // UNIFIED MINDBODY SERVICE - All API Operations in One Place
@@ -36,18 +115,59 @@ export class MindbodyService {
     this.client = client || getMindbodyClient();
   }
 
+  /**
+   * The date window for a read. The caller's dates when both are given —
+   * unchanged, with no extra request — otherwise the SITE's own calendar window:
+   * `days >= 0` is [today, today + days], `days < 0` is [today + days, today].
+   *
+   * The window must be in the site's timezone: Mindbody reads StartDate/EndDate
+   * as site-local dates, so a host-UTC default gives a studio on the other side
+   * of the date line the wrong day (and, for a site west of the host, the wrong
+   * window entirely). The site zone comes from GET /site/sites via
+   * ./siteTime, cached for an hour; when it cannot be resolved the read falls
+   * back to UTC with one warning rather than failing.
+   */
+  private async defaultRange(
+    startDate: string | undefined,
+    endDate: string | undefined,
+    days: number
+  ): Promise<{ start: string; end: string }> {
+    return withDefaultDates(startDate, endDate, days, this.client);
+  }
+
+  /**
+   * The same window as `defaultRange`, as full site-local date-TIMES suitable
+   * for a `StartDateTime`/`EndDateTime` filter (`T00:00:00` to `T23:59:59`).
+   *
+   * Mindbody wants these as site-local strings with no offset, so the host's
+   * UTC clock cannot produce them: for a studio west of the server, "now" is
+   * the wrong day, and appending a `Z` asserts a zone the API does not want.
+   * Use this wherever a caller must fill in a date-time window itself — the
+   * sync job is the case in point. Falls back to UTC, with the same one-time
+   * warning, when the site zone cannot be resolved.
+   */
+  async defaultDateTimeRange(
+    startDate?: string,
+    endDate?: string,
+    days: number = 30
+  ): Promise<{ start: string; end: string }> {
+    const { start, end } = await this.defaultRange(startDate, endDate, days);
+    return { start: `${start}T00:00:00`, end: `${end}T23:59:59` };
+  }
+
   // ==========================================================================
   // SITE & LOCATION MANAGEMENT
   // ==========================================================================
 
   async getSites(): Promise<ListResult<Site>> {
-    const response = await this.client.get<any>('/site/sites');
-    const sites = response.Sites.map((site: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/sites', {}, 'Sites');
+    const sites = rows.map((site: any) => ({
       id: site.Id,
       name: site.Name,
       description: site.Description,
       logoUrl: site.LogoUrl,
       contactEmail: site.ContactEmail,
+      timeZone: site.TimeZone,
       acceptsVisa: site.AcceptsVisa ?? true,
       acceptsMastercard: site.AcceptsMastercard ?? true,
       acceptsAmex: site.AcceptsAmex ?? true,
@@ -58,9 +178,22 @@ export class MindbodyService {
     return { items: sites, total: sites.length };
   }
 
+  /**
+   * The site's IANA timezone, for rendering timestamps in the studio's own zone.
+   *
+   * Goes through `getSiteTimeZone` rather than reading `Sites[0].TimeZone`, so
+   * the multi-site policy in ./siteTime holds: the site must resolve to exactly
+   * one (by `requestedSiteId`, else `MINDBODY_SITE_ID`), and the
+   * `MINDBODY_SITE_TIMEZONE` override applies when the record has none. Throws
+   * rather than guessing, because a wrong zone mislabels every time on screen.
+   */
+  async getSiteTimeZone(): Promise<string> {
+    return getSiteTimeZone(this.client);
+  }
+
   async getLocations(): Promise<ListResult<Location>> {
-    const response = await this.client.get<any>('/site/locations');
-    const locations = response.Locations.map((loc: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/locations', {}, 'Locations');
+    const locations = rows.map((loc: any) => ({
       id: loc.Id,
       name: loc.Name,
       description: loc.Description,
@@ -79,8 +212,8 @@ export class MindbodyService {
   }
 
   async getResources(): Promise<ListResult<Resource>> {
-    const response = await this.client.get<any>('/site/resources');
-    const resources = response.Resources.map((res: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/site/resources', {}, 'Resources');
+    const resources = rows.map((res: any) => ({
       id: res.Id,
       name: res.Name,
     }));
@@ -100,14 +233,17 @@ export class MindbodyService {
   // ==========================================================================
 
   async getPrograms(params?: GetProgramsParams): Promise<ListResult<Program>> {
-    const response = await this.client.get<any>('/site/programs', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/site/programs',
+      {
         ScheduleType: params?.scheduleType,
         OnlineOnly: params?.onlineOnly,
-        Limit: params?.limit || 200,
       },
-    });
-    const programs = response.Programs.map((prog: any) => ({
+      'Programs',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const programs = rows.map((prog: any) => ({
       id: prog.Id,
       name: prog.Name,
       scheduleType: prog.ScheduleType,
@@ -118,14 +254,17 @@ export class MindbodyService {
   }
 
   async getSessionTypes(params?: GetSessionTypesParams): Promise<ListResult<SessionType>> {
-    const response = await this.client.get<any>('/site/sessiontypes', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/site/sessiontypes',
+      {
         ProgramIds: params?.programIds,
         OnlineOnly: params?.onlineOnly,
-        Limit: params?.limit || 200,
       },
-    });
-    const sessionTypes = response.SessionTypes.map((st: any) => ({
+      'SessionTypes',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const sessionTypes = rows.map((st: any) => ({
       id: st.Id,
       name: st.Name,
       type: st.Type,
@@ -144,18 +283,20 @@ export class MindbodyService {
   // ==========================================================================
 
   async getStaff(params?: GetStaffParams): Promise<ListResult<Staff>> {
-    const response = await this.client.get<any>('/staff/staff', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/staff/staff',
+      {
         StaffIds: params?.staffIds,
         Filters: params?.filters,
         SessionTypeIds: params?.sessionTypeIds,
         LocationIds: params?.locationIds,
         StartDateTime: params?.startDateTime,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const staff = response.StaffMembers.map((s: any) => ({
+      'StaffMembers',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const staff = rows.map((s: any) => ({
       id: s.Id,
       firstName: s.FirstName,
       lastName: s.LastName,
@@ -168,7 +309,7 @@ export class MindbodyService {
       appointmentTrn: s.AppointmentTrn,
       independentContractor: s.IndependentContractor,
     }));
-    return { items: staff, total: response.PaginationResponse?.TotalResults || staff.length };
+    return { items: staff, total: totalResults };
   }
 
   async getStaffById(staffId: number): Promise<Staff | null> {
@@ -181,17 +322,19 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClients(params?: GetClientsParams): Promise<ListResult<Client>> {
-    const response = await this.client.get<any>('/client/clients', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/client/clients',
+      {
         SearchText: params?.searchText,
         ClientIds: params?.clientIds,
         LastModifiedDate: params?.lastModifiedDate,
         IsProspect: params?.isProspect,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const clients = response.Clients.map((c: any) => ({
+      'Clients',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const clients = rows.map((c: any) => ({
       id: c.Id,
       firstName: c.FirstName,
       lastName: c.LastName,
@@ -228,7 +371,7 @@ export class MindbodyService {
       creationDate: c.CreationDate,
       membershipIcon: c.MembershipIcon,
     }));
-    return { items: clients, total: response.PaginationResponse?.TotalResults || clients.length };
+    return { items: clients, total: totalResults };
   }
 
   async getClientById(clientId: string): Promise<Client | null> {
@@ -319,19 +462,20 @@ export class MindbodyService {
   }
 
   async getClientVisits(params: GetClientVisitsParams): Promise<{ visits: ClientVisit[]; total: number; summary: VisitSummary }> {
-    const defaultStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const defaultEnd = new Date().toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, -30);
 
-    const response = await this.client.get<any>('/client/clientvisits', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientvisits',
+      {
         ClientId: params.clientId,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
-        Limit: 200,
+        StartDate: start,
+        EndDate: end,
       },
-    });
+      'Visits'
+    );
 
-    const visits: ClientVisit[] = response.Visits.map((v: any) => ({
+    const visits: ClientVisit[] = rows.map((v: any) => ({
       id: v.Id,
       classId: v.ClassId,
       className: v.Name,
@@ -368,10 +512,13 @@ export class MindbodyService {
   }
 
   async getClientMemberships(clientId: string, locationId?: number): Promise<ListResult<ClientMembership>> {
-    const response = await this.client.get<any>('/client/activeclientmemberships', {
-      params: { ClientId: clientId, LocationId: locationId },
-    });
-    const memberships = response.ClientMemberships.map((m: any) => ({
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/activeclientmemberships',
+      { ClientId: clientId, LocationId: locationId },
+      'ClientMemberships'
+    );
+    const memberships = rows.map((m: any) => ({
       id: m.Id,
       name: m.Name,
       remainingClasses: m.Remaining,
@@ -387,10 +534,13 @@ export class MindbodyService {
   }
 
   async getClientContracts(clientId: string): Promise<ListResult<ClientContract>> {
-    const response = await this.client.get<any>('/client/clientcontracts', {
-      params: { ClientId: clientId },
-    });
-    const contracts = response.Contracts.map((c: any) => ({
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientcontracts',
+      { ClientId: clientId },
+      'Contracts'
+    );
+    const contracts = rows.map((c: any) => ({
       id: c.Id,
       name: c.ContractName,
       description: c.Description,
@@ -406,10 +556,13 @@ export class MindbodyService {
   }
 
   async getClientAccountBalances(clientId: string): Promise<{ accountBalance: number; creditCardBalances: Array<{ amount: number; cardType: string; lastFour: string }> }> {
-    const response = await this.client.get<any>('/client/clientaccountbalances', {
-      params: { ClientIds: [clientId] },
-    });
-    const client = response.Clients[0];
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientaccountbalances',
+      { ClientIds: [clientId] },
+      'Clients'
+    );
+    const client = rows[0];
     return {
       accountBalance: client?.AccountBalance || 0,
       creditCardBalances: client?.ClientCreditCards?.map((card: any) => ({
@@ -441,19 +594,21 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClasses(params?: GetClassesParams): Promise<ListResult<Class>> {
-    const response = await this.client.get<any>('/class/classes', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/class/classes',
+      {
         ClassDescriptionIds: params?.classDescriptionIds,
         ClassIds: params?.classIds,
         StaffIds: params?.staffIds,
         StartDateTime: params?.startDateTime,
         EndDateTime: params?.endDateTime,
         LocationIds: params?.locationIds,
-        Limit: params?.limit || 200,
-        Offset: params?.offset,
       },
-    });
-    const classes = response.Classes.map((c: any) => ({
+      'Classes',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
+    const classes = rows.map((c: any) => ({
       id: c.Id,
       classScheduleId: c.ClassScheduleId,
       location: {
@@ -489,7 +644,7 @@ export class MindbodyService {
       totalBookedWaitlist: c.TotalBookedWaitlist,
       virtualStreamLink: c.VirtualStreamLink,
     }));
-    return { items: classes, total: response.PaginationResponse?.TotalResults || classes.length };
+    return { items: classes, total: totalResults };
   }
 
   async getClassById(classId: number): Promise<Class | null> {
@@ -498,8 +653,8 @@ export class MindbodyService {
   }
 
   async getClassDescriptions(): Promise<ListResult<ClassDescription>> {
-    const response = await this.client.get<any>('/class/classdescriptions');
-    const descriptions = response.ClassDescriptions.map((cd: any) => ({
+    const { items: rows } = await fetchAllPages<any>(this.client, '/class/classdescriptions', {}, 'ClassDescriptions');
+    const descriptions = rows.map((cd: any) => ({
       id: cd.Id,
       name: cd.Name,
       description: cd.Description,
@@ -512,17 +667,19 @@ export class MindbodyService {
   }
 
   async getClassSchedules(params?: { locationIds?: number[]; classDescriptionIds?: number[]; staffIds?: number[]; startDate?: string; endDate?: string }): Promise<ListResult<ClassSchedule>> {
-    const response = await this.client.get<any>('/class/classschedules', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/class/classschedules',
+      {
         LocationIds: params?.locationIds,
         ClassDescriptionIds: params?.classDescriptionIds,
         StaffIds: params?.staffIds,
         StartDate: params?.startDate,
         EndDate: params?.endDate,
-        Limit: 200,
       },
-    });
-    const schedules = response.ClassSchedules.map((cs: any) => ({
+      'ClassSchedules'
+    );
+    const schedules = rows.map((cs: any) => ({
       id: cs.Id,
       locationId: cs.Location?.Id,
       classDescriptionId: cs.ClassDescription?.Id,
@@ -579,15 +736,17 @@ export class MindbodyService {
   }
 
   async getWaitlistEntries(classIds?: number[], clientIds?: string[], hidePastEntries?: boolean): Promise<ListResult<WaitlistEntry>> {
-    const response = await this.client.get<any>('/class/waitlistentries', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/class/waitlistentries',
+      {
         ClassIds: classIds,
         ClientIds: clientIds,
         HidePastEntries: hidePastEntries,
-        Limit: 200,
       },
-    });
-    const entries = response.WaitlistEntries.map((entry: any) => ({
+      'WaitlistEntries'
+    );
+    const entries = rows.map((entry: any) => ({
       id: entry.Id,
       classId: entry.ClassId,
       clientId: entry.Client?.Id,
@@ -619,11 +778,7 @@ export class MindbodyService {
   // ==========================================================================
 
   async getTeacherSchedule(teacherId: number, startDate?: string, endDate?: string): Promise<TeacherSchedule> {
-    const today = new Date().toISOString().split('T')[0];
-    const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    const start = startDate || today;
-    const end = endDate || weekFromNow;
+    const { start, end } = await this.defaultRange(startDate, endDate, 7);
 
     const [staffResult, classesResult] = await Promise.all([
       this.getStaff({ staffIds: [teacherId] }),
@@ -643,7 +798,7 @@ export class MindbodyService {
     };
 
     classes.forEach((c) => {
-      const day = new Date(c.startDateTime).toLocaleDateString('en-US', { weekday: 'long' });
+      const day = siteLocalWeekday(c.startDateTime);
       summary.byDay[day] = (summary.byDay[day] || 0) + 1;
       summary.byLocation[c.location.name] = (summary.byLocation[c.location.name] || 0) + 1;
       summary.byClassType[c.classDescription.name] = (summary.byClassType[c.classDescription.name] || 0) + 1;
@@ -658,6 +813,10 @@ export class MindbodyService {
       dateRange: { start, end },
       totalClasses: classes.length,
       classes: classes.map((c) => {
+        // Both are site-local strings read in the SAME zone — whatever zone that
+        // is — so their difference is the true elapsed time; the only way it can
+        // be off is a DST transition between the two instants in that zone, which
+        // a class session of minutes cannot span.
         const startTime = new Date(c.startDateTime);
         const endTime = new Date(c.endDateTime);
         return {
@@ -682,22 +841,24 @@ export class MindbodyService {
   // ==========================================================================
 
   async getAppointments(params: GetAppointmentsParams): Promise<ListResult<Appointment>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, 7);
 
-    const response = await this.client.get<any>('/appointment/staffappointments', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/staffappointments',
+      {
         StaffIds: params.staffIds,
         LocationIds: params.locationIds,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         AppointmentIds: params.appointmentIds,
         ClientIds: params.clientIds,
-        Limit: params.limit || 200,
       },
-    });
+      'Appointments',
+      params.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const appointments = response.Appointments.map((apt: any) => ({
+    const appointments = rows.map((apt: any) => ({
       id: apt.Id,
       status: apt.Status,
       staffId: apt.StaffId || apt.Staff?.Id,
@@ -721,7 +882,7 @@ export class MindbodyService {
       resources: apt.Resources?.map((r: any) => ({ id: r.Id, name: r.Name })),
     }));
 
-    return { items: appointments, total: response.PaginationResponse?.TotalResults || appointments.length };
+    return { items: appointments, total: totalResults };
   }
 
   async addAppointment(params: AddAppointmentParams): Promise<OperationResult<Appointment>> {
@@ -803,23 +964,26 @@ export class MindbodyService {
   }
 
   async getBookableItems(params: GetBookableItemsParams): Promise<ListResult<BookableItem>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params.startDate, params.endDate, 7);
 
-    const response = await this.client.get<any>('/appointment/bookableitems', {
-      params: {
+    // The spec documents `Availabilities` as the one list key of
+    // GetBookableItemsResponse; `BookableItems` is not in docs/openapi.json.
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/bookableitems',
+      {
         SessionTypeIds: params.sessionTypeIds,
         LocationIds: params.locationIds,
         StaffIds: params.staffIds,
-        StartDate: params.startDate || defaultStart,
-        EndDate: params.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         AppointmentId: params.appointmentId,
-        Limit: 200,
       },
-    });
+      'Availabilities'
+    );
 
-    const items = response.BookableItems.map((item: any) => ({
-      scheduledItemId: item.ScheduledItemId,
+    const items = rows.map((item: any) => ({
+      scheduledItemId: item.Id ?? item.ScheduledItemId,
       staffId: item.StaffId || item.Staff?.Id,
       staffName: item.Staff?.Name || `${item.Staff?.FirstName || ''} ${item.Staff?.LastName || ''}`.trim(),
       sessionTypeId: item.SessionTypeId || item.SessionType?.Id,
@@ -836,21 +1000,22 @@ export class MindbodyService {
   }
 
   async getScheduleItems(params?: { locationIds?: number[]; staffIds?: number[]; startDate?: string; endDate?: string; ignorePrepFinishBuffer?: boolean }): Promise<ListResult<ScheduleItem>> {
-    const defaultStart = new Date().toISOString().split('T')[0];
-    const defaultEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const { start, end } = await this.defaultRange(params?.startDate, params?.endDate, 7);
 
-    const response = await this.client.get<any>('/appointment/scheduleitems', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/scheduleitems',
+      {
         LocationIds: params?.locationIds,
         StaffIds: params?.staffIds,
-        StartDate: params?.startDate || defaultStart,
-        EndDate: params?.endDate || defaultEnd,
+        StartDate: start,
+        EndDate: end,
         IgnorePrepFinishBuffer: params?.ignorePrepFinishBuffer,
-        Limit: 200,
       },
-    });
+      'StaffMembers'
+    );
 
-    const scheduleItems = response.StaffMembers.flatMap((staff: any) =>
+    const scheduleItems = rows.flatMap((staff: any) =>
       staff.Appointments.map((apt: any) => ({
         id: apt.Id,
         isAvailable: apt.IsAvailable,
@@ -870,17 +1035,20 @@ export class MindbodyService {
   }
 
   async getActiveSessionTimes(params?: { scheduleType?: 'All' | 'Class' | 'Enrollment' | 'Appointment'; sessionTypeIds?: number[]; startTime?: string; endTime?: string; days?: string[] }): Promise<ListResult<ActiveSessionTime>> {
-    const response = await this.client.get<any>('/appointment/activesessiontimes', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/appointment/activesessiontimes',
+      {
         ScheduleType: params?.scheduleType || 'All',
         SessionTypeIds: params?.sessionTypeIds,
         StartTime: params?.startTime,
         EndTime: params?.endTime,
         Days: params?.days,
       },
-    });
+      'ActiveSessionTimes'
+    );
 
-    const activeTimes = response.ActiveSessionTimes.map((time: any) => {
+    const activeTimes = rows.map((time: any) => {
       const result: ActiveSessionTime = {
         id: time.Id,
         sessionTypeId: time.SessionTypeId || time.SessionType?.Id,
@@ -909,81 +1077,185 @@ export class MindbodyService {
   // ENROLLMENT MANAGEMENT
   // ==========================================================================
 
+  // Mindbody has no enrollment record. An enrollment is a ClassSchedule whose
+  // Program has ScheduleType `Enrollment`; each session is a Class on that
+  // schedule; a client's seat in a session is a Visit on the client's schedule.
+  // The visit itself carries no enrollment marker, so a visit is an enrollment
+  // visit when its class's ClassDescription.Program.ScheduleType is
+  // `Enrollment`. This mirrors src/tools/enrollmentManagement.ts in the MCP
+  // server, field for field against docs/openapi.json.
+
+  /**
+   * Enrollments scheduled at the site: GET /enrollment/enrollments (paginated,
+   * list key `Enrollments`, rows are ClassSchedule). Without dates the window
+   * is today through DEFAULT_ENROLLMENT_WINDOW_DAYS; the API's own default is
+   * today only (EndDate defaults to StartDate). The spec's filters are
+   * ClassScheduleIds, LocationIds, StaffIds, ProgramIds, SessionTypeIds,
+   * StartDate and EndDate; there is no semester or course filter here.
+   */
   async getEnrollments(params?: GetEnrollmentsParams): Promise<ListResult<Enrollment>> {
-    const response = await this.client.get<any>('/enrollment/enrollments', {
-      params: {
+    const { start, end } = await this.defaultRange(params?.startDate, params?.endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS);
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/enrollment/enrollments',
+      {
         LocationIds: params?.locationIds,
         ClassScheduleIds: params?.classScheduleIds,
         StaffIds: params?.staffIds,
         ProgramIds: params?.programIds,
         SessionTypeIds: params?.sessionTypeIds,
-        SemesterIds: params?.semesterIds,
-        CourseIds: params?.courseIds,
-        StartDate: params?.startDate,
-        EndDate: params?.endDate,
-        Limit: params?.limit || 200,
+        StartDate: start,
+        EndDate: end,
       },
-    });
+      'Enrollments',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const enrollments = response.Enrollments.map((e: any) => ({
-      id: e.Id,
-      locationId: e.Location?.Id,
-      locationName: e.Location?.Name || '',
-      name: e.Name,
-      description: e.Description,
-      staffId: e.Staff?.Id,
-      staffName: e.Staff?.Name,
-      programId: e.Program?.Id,
-      programName: e.Program?.Name,
-      scheduleType: e.ScheduleType,
-      startDate: e.StartDate,
-      endDate: e.EndDate,
-      startTime: e.StartTime,
-      endTime: e.EndTime,
-      dayOfWeek: e.DayOfWeek,
-      maxCapacity: e.MaxCapacity,
-      webCapacity: e.WebCapacity,
-      isAvailable: e.IsAvailable ?? true,
-    }));
-
-    return { items: enrollments, total: enrollments.length };
+    const enrollments = rows.map(mapEnrollment);
+    return { items: enrollments, total: totalResults || enrollments.length };
   }
 
-  async addClientToEnrollment(params: AddClientToEnrollmentParams): Promise<OperationResult> {
+  /**
+   * Book one client into one enrollment: POST /enrollment/addclienttoenrollment.
+   * Body field names follow the spec exactly: ClientId, ClassScheduleId
+   * (singular), EnrollDateForward (one date-time, takes priority), EnrollOpen
+   * (an ARRAY of session date-times), Waitlist, WaitlistEntryId, SendEmail,
+   * Test. With neither date option the client is booked into every session.
+   * The response is the ClassSchedule with its `Classes`; those are returned
+   * as `data.sessions`.
+   */
+  async addClientToEnrollment(params: AddClientToEnrollmentParams): Promise<OperationResult<EnrollmentBookingResult>> {
+    if (!Number.isInteger(params.classScheduleId) || params.classScheduleId <= 0) {
+      return {
+        success: false,
+        message: 'classScheduleId must be a positive integer (the enrollment id from getEnrollments)',
+      };
+    }
     try {
-      await this.client.post<any>('/enrollment/addclienttoenrollment', {
+      const response = await this.client.post<any>('/enrollment/addclienttoenrollment', {
         ClientId: params.clientId,
         ClassScheduleId: params.classScheduleId,
-        EnrollDateForward: params.enrollFromDate,
-        EnrollOpen: params.enrollUntilDate,
-        Waitlist: params.waitlist,
-        SendEmail: params.sendEmail,
+        EnrollDateForward: params.enrollDateForward,
+        EnrollOpen: params.enrollOpenDates,
+        Waitlist: params.waitlist ?? false,
+        WaitlistEntryId: params.waitlistEntryId,
+        SendEmail: params.sendEmail ?? false,
+        Test: params.test ?? false,
       });
-      return { success: true, message: 'Client added to enrollment successfully' };
+      const sessions = (Array.isArray(response?.Classes) ? response.Classes : []).map((cls: any) => ({
+        classId: Number(cls.Id),
+        startDateTime: cls.StartDateTime,
+        endDateTime: cls.EndDateTime,
+        totalBooked: cls.TotalBooked ?? undefined,
+      }));
+      const what = params.waitlist ? 'waitlisted for' : 'enrolled in';
+      return {
+        success: true,
+        data: {
+          classScheduleId: Number(response?.Id ?? params.classScheduleId),
+          name: response?.ClassDescription?.Name ?? undefined,
+          sessions,
+        },
+        message: `${params.test ? '[test] ' : ''}Client ${params.clientId} ${what} enrollment ${params.classScheduleId} (${sessions.length} session(s) on the schedule)`,
+      };
     } catch (error: any) {
       return { success: false, message: error.message || 'Failed to add client to enrollment' };
     }
   }
 
-  async getClientEnrollments(clientId: string): Promise<ListResult<Enrollment>> {
-    const response = await this.client.get<any>('/client/clientenrollments', {
-      params: { ClientId: clientId },
-    });
+  /**
+   * The sessions a client holds in enrollments (courses, workshops, series).
+   *
+   * 1. GET /client/clientschedule (paginated, `Visits`, IncludeWaitlistEntries)
+   *    for the window; rows with no ClassId are appointments and are dropped.
+   *    There is no GET /client/clientenrollments in docs/openapi.json (the
+   *    live API answers 404).
+   * 2. GET /class/classes (paginated, `ClassIds` in chunks) resolves each
+   *    visit's class. A visit is kept only when that class's
+   *    ClassDescription.Program.ScheduleType is `Enrollment`; drop-in class
+   *    visits are left out. Without this step the schedule rows cannot be told
+   *    apart: `VisitType`/`TypeGroup` are the same for both.
+   *
+   * Without dates the window is today through DEFAULT_ENROLLMENT_WINDOW_DAYS,
+   * so past sessions appear only when startDate is given.
+   */
+  async getClientEnrollments(clientId: string, startDate?: string, endDate?: string): Promise<ListResult<ClientEnrollmentVisit>> {
+    const { start, end } = await this.defaultRange(startDate, endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS);
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/client/clientschedule',
+      {
+        ClientId: clientId,
+        StartDate: start,
+        EndDate: end,
+        IncludeWaitlistEntries: true,
+      },
+      'Visits'
+    );
 
-    const enrollments = response.Enrollments?.map((e: any) => ({
-      id: e.Id,
-      locationId: e.Location?.Id,
-      locationName: e.Location?.Name || '',
-      name: e.Name,
-      description: e.Description,
-      staffId: e.Staff?.Id,
-      staffName: e.Staff?.Name,
-      startDate: e.StartDate,
-      endDate: e.EndDate,
-      isAvailable: true,
-    })) || [];
+    const classVisits = rows.filter((visit: any) => Number(visit?.ClassId) > 0);
+    if (classVisits.length === 0) return { items: [], total: 0 };
 
-    return { items: enrollments, total: enrollments.length };
+    const classes = await this.lookupClassesById(
+      classVisits.map((visit: any) => Number(visit.ClassId)),
+      `${start}T00:00:00`,
+      `${end}T23:59:59`
+    );
+
+    const visits: ClientEnrollmentVisit[] = [];
+    for (const visit of classVisits) {
+      const cls = classes.get(Number(visit.ClassId));
+      if (!cls || cls.ClassDescription?.Program?.ScheduleType !== ENROLLMENT_SCHEDULE_TYPE) continue;
+      const waitlistEntryId = visit.WaitlistInfo?.WaitlistId ?? undefined;
+      visits.push({
+        id: String(visit.Id),
+        classId: Number(visit.ClassId),
+        classScheduleId: Number(cls.ClassScheduleId),
+        name: cls.ClassDescription?.Name ?? visit.Name ?? '',
+        programId: cls.ClassDescription?.Program?.Id ?? undefined,
+        programName: cls.ClassDescription?.Program?.Name ?? undefined,
+        staffId: cls.Staff?.Id ?? visit.StaffId ?? undefined,
+        staffName: staffDisplayName(cls.Staff),
+        locationId: cls.Location?.Id ?? visit.LocationId ?? undefined,
+        locationName: cls.Location?.Name ?? '',
+        startDateTime: visit.StartDateTime,
+        endDateTime: visit.EndDateTime,
+        isWaitlisted: waitlistEntryId != null,
+        waitlistEntryId,
+        signedIn: Boolean(visit.SignedIn),
+        lateCancelled: Boolean(visit.LateCancelled),
+        missed: Boolean(visit.Missed),
+        makeUp: Boolean(visit.MakeUp),
+      });
+    }
+    visits.sort((a, b) => a.startDateTime.localeCompare(b.startDateTime));
+
+    return { items: visits, total: visits.length };
+  }
+
+  /**
+   * GET /class/classes for a set of class IDs, in chunks of CLASS_LOOKUP_CHUNK,
+   * every chunk paged. Returns a map ClassId -> raw Class. The dates bound the
+   * lookup the same way the caller bounded the visits.
+   */
+  private async lookupClassesById(classIds: number[], startDateTime: string, endDateTime: string): Promise<Map<number, any>> {
+    const byId = new Map<number, any>();
+    const unique = [...new Set(classIds)];
+    for (let i = 0; i < unique.length; i += CLASS_LOOKUP_CHUNK) {
+      const { items } = await fetchAllPages<any>(
+        this.client,
+        '/class/classes',
+        {
+          ClassIds: unique.slice(i, i + CLASS_LOOKUP_CHUNK),
+          StartDateTime: startDateTime,
+          EndDateTime: endDateTime,
+          HideCanceledClasses: false,
+        },
+        'Classes'
+      );
+      for (const cls of items) byId.set(Number(cls.Id), cls);
+    }
+    return byId;
   }
 
   // ==========================================================================
@@ -991,18 +1263,21 @@ export class MindbodyService {
   // ==========================================================================
 
   async getServices(params?: GetServicesParams): Promise<ListResult<Service>> {
-    const response = await this.client.get<any>('/sale/services', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/services',
+      {
         ProgramIds: params?.programIds,
         SessionTypeIds: params?.sessionTypeIds,
         LocationId: params?.locationId,
         ClassId: params?.classId,
         HideRelatedPrograms: params?.hideRelatedPrograms,
-        Limit: params?.limit || 200,
       },
-    });
+      'Services',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const services = response.Services.map((s: any) => ({
+    const services = rows.map((s: any) => ({
       id: s.Id,
       name: s.Name,
       price: s.Price,
@@ -1023,15 +1298,17 @@ export class MindbodyService {
   }
 
   async getPackages(locationId?: number, classScheduleId?: number): Promise<ListResult<Package>> {
-    const response = await this.client.get<any>('/sale/packages', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/packages',
+      {
         LocationId: locationId,
         ClassScheduleId: classScheduleId,
-        Limit: 200,
       },
-    });
+      'Packages'
+    );
 
-    const packages = response.Packages.map((p: any) => ({
+    const packages = rows.map((p: any) => ({
       id: p.Id,
       name: p.Name,
       classCount: p.Count,
@@ -1048,18 +1325,21 @@ export class MindbodyService {
   }
 
   async getProducts(params?: GetProductsParams): Promise<ListResult<Product>> {
-    const response = await this.client.get<any>('/sale/products', {
-      params: {
+    const { items: rows, totalResults } = await fetchAllPages<any>(
+      this.client,
+      '/sale/products',
+      {
         ProductIds: params?.productIds,
         SearchText: params?.searchText,
         CategoryIds: params?.categoryIds,
         SubCategoryIds: params?.subCategoryIds,
         SellOnline: params?.sellOnline,
-        Limit: params?.limit || 200,
       },
-    });
+      'Products',
+      params?.limit || DEFAULT_PAGE_SIZE
+    );
 
-    const products = response.Products.map((p: any) => ({
+    const products = rows.map((p: any) => ({
       id: p.Id,
       name: p.Name,
       price: p.Price,
@@ -1074,20 +1354,22 @@ export class MindbodyService {
       sellOnline: p.SellOnline,
     }));
 
-    return { items: products, total: response.PaginationResponse?.TotalResults || products.length };
+    return { items: products, total: totalResults };
   }
 
   async getContracts(params?: GetContractsParams): Promise<ListResult<Contract>> {
-    const response = await this.client.get<any>('/sale/contracts', {
-      params: {
+    const { items: rows } = await fetchAllPages<any>(
+      this.client,
+      '/sale/contracts',
+      {
         ContractIds: params?.contractIds,
         SoldOnline: params?.soldOnline,
         LocationId: params?.locationId,
-        Limit: 200,
       },
-    });
+      'Contracts'
+    );
 
-    const contracts = response.Contracts.map((c: any) => ({
+    const contracts = rows.map((c: any) => ({
       id: c.Id,
       name: c.Name,
       description: c.Description,
