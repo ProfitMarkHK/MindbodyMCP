@@ -38,7 +38,10 @@ bun run typecheck
 
 ### Code Quality
 - `bun run typecheck` - Type checking only
-- `bun run lint` - Full lint (TypeScript strict mode: `tsc --noEmit --strict`)
+- `bun run lint` - `tsc --noEmit --strict`. **Not a linter** — it is the typechecker run
+  again in strict mode. The project has no real linter; that is a tracked gap (Gate 3).
+- `bun run check` - Run every automated quality gate (tests, typecheck, build). Full
+  checklist: [`docs/quality-gates.md`](docs/quality-gates.md)
 
 ### Build
 - `bun run build` - Compile to `dist/` (required before publishing)
@@ -157,14 +160,27 @@ export async function getClassesTool(
 - Tool output: Use interface for structured return (no generic types)
 
 ### Environment Variables
-**Required:**
-- `MINDBODY_API_KEY` - API key from Mindbody developer account
-- `MINDBODY_SITE_ID` - Site ID (use `-99` for sandbox)
-- `MINDBODY_SOURCE_NAME` - OAuth source name
-- `MINDBODY_SOURCE_PASSWORD` - OAuth source password
+**Sandbox-first policy:**
+- The repo-local `.env` file is a sandbox-only environment. Do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME`, or `MINDBODY_SOURCE_PASSWORD` values there.
+- Production credentials live in `.env.production`, and the sandbox values live in `.env` as `MINDBODY_TEST_*` names.
+- Before any local run or API call, map the test values into the names the Mindbody client expects on the fly:
+  ```bash
+  export MINDBODY_API_KEY="$MINDBODY_TEST_API_KEY"
+  export MINDBODY_SITE_ID="${MINDBODY_TEST_SITE_ID:-"-99"}"
+  export MINDBODY_SOURCE_NAME="$MINDBODY_TEST_SOURCE_NAME"
+  export MINDBODY_SOURCE_PASSWORD="$MINDBODY_TEST_SOURCE_PASSWORD"
+  export MINDBODY_API_URL="${MINDBODY_TEST_API_URL:-https://api.mindbodyonline.com/public/v6}"
+  ```
+- This rule exists so a stray test or script cannot silently hit a production site. If the task truly needs a live site, it must be stated and selected explicitly from `.env.production` or the shell.
+
+**Required (sandbox/local):**
+- `MINDBODY_TEST_API_KEY` - Sandbox API key, kept in `.env`
+- `MINDBODY_TEST_SITE_ID` - Sandbox site ID (`-99` by default)
+- `MINDBODY_TEST_SOURCE_NAME` - Sandbox OAuth source name
+- `MINDBODY_TEST_SOURCE_PASSWORD` - Sandbox OAuth source password
 
 **Optional:**
-- `MINDBODY_API_URL` - Custom API endpoint (default: `https://api.mindbodyonline.com/public/v6`)
+- `MINDBODY_TEST_API_URL` - Sandbox API base URL (default: `https://api.mindbodyonline.com/public/v6`)
 - `CACHE_TTL_MINUTES` - Cache TTL override
 
 ## Adding a New Tool
@@ -266,3 +282,75 @@ For a task with a checkable gate (tests, schema, lint, reconciliation), run a *b
 ## Never do
 - Do not modify files under `.slm/`
 - Do not commit `*.slm-cache.db`
+
+---
+
+<!-- BEGIN QUALITY GATES (managed) -->
+## Definition of done. Quality gates
+
+No task is **done-done** (safe to merge, ship, or close) until every applicable
+quality gate below passes. Gates catch regressions and omissions. They do not
+replace design or review judgement.
+
+Run all gates with one command before marking any unit of work complete:
+
+```bash
+bun run check
+```
+
+The full, project-specific checklist lives in
+[`docs/quality-gates.md`](docs/quality-gates.md). It names every gate, its exact command,
+and the gates that are no-ops or gaps for this project. Keep it current.
+Out-of-sync documentation is a bug.
+
+Rules when a gate fails:
+
+- Fix the code, not the gate. Do not weaken a test, silence a linter, or skip a
+  doc update to force a green result.
+- Fix all failures in the same session where practical, then re-run until every
+  gate is green.
+- Never commit or push secrets, even transiently.
+<!-- END QUALITY GATES (managed) -->
+
+---
+
+## Delegation and model routing
+
+Four named roles. Delegate to them by name; each harness binds the role to its own model.
+
+| Role | Does | Claude Code | OpenCode |
+|------|------|-------------|----------|
+| `scout` | Read-only recon, lookups, verification | haiku | `opencode/mimo-v2.6-flash-free` |
+| `builder` | Implementation, scripts, commits | sonnet | `opencode/space-bunny-free` |
+| `review` | Correctness and regression review | sonnet | `github-copilot/gpt-6-astra` |
+| `architect` | Design, boundaries, decisions | fable | `github-copilot/claude-fable-5.1` |
+
+Definitions live in `.claude/agents/` and `.opencode/agents/`. Same role names in both, so
+this table is the only place the mapping differs.
+
+**Roles are boundaries, not just models.** `scout` never writes. `review` never edits.
+`architect` never implements. Those restrictions are enforced in each agent's permissions,
+not left to judgement.
+
+### Evidence behind each binding
+
+- `gpt-6-astra` — DeepSWE 74%, reached in 29 steps / 30k output tokens. Same score as
+  `gemini-3.8-flash` at roughly a fifth of the steps.
+- `claude-fable-5.1` — DeepSWE 70% in 68 steps, about half Opus's token cost for a
+  comparable score.
+- `mimo-v2.6-flash-free` — DeepSWE 67.9% on the official HuggingFace board.
+- `space-bunny-free` — **no public benchmark evidence.** Chosen for cost and a 1M-token
+  context window, not measured capability. Anonymous stealth-preview provider, free for a
+  limited time with no published end date. Treat its output as advisory and verify it.
+
+### Free-preview risk
+
+Zen's free models and Space Bunny's preview may be rate-limited, changed, or withdrawn
+without notice. If a Zen-routed role fails or is removed, fall back to the Claude Code
+column — the role definitions are portable, only the model binding differs.
+
+### Changing a binding
+
+Edit the frontmatter `model` field in the relevant file under `.claude/agents/` or
+`.opencode/agents/`, then update the table above. Out-of-sync routing docs are a bug
+(Gate 5).
