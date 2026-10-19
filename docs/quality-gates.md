@@ -567,13 +567,15 @@ and not needed" from "forgotten":
 
   **How `fetchAllPages` pages.** It sends `Limit` = page size (default 200, set
   per call) and advances `Offset` by the number of rows actually received. An
-  empty page ends the walk. When the server reports `TotalResults`, the walk
+  empty page ends the walk unless the server reported a larger `TotalResults`
+  (then it throws). When the server reports `TotalResults`, the walk
   continues until that many rows are collected, so a server that serves fewer
   rows than asked (a silent cap) is still read to the end. Without
   `TotalResults`, it stops on the first page shorter than the smaller of
   `RequestedLimit` and the first page's length. (`PageSize` is the row count of
   that response per the spec, so it is not a cap.) It throws, never truncates:
-  after `MAX_PAGES` = 100 pages (exported) with the path and the row count, and
+  after `MAX_PAGES` = 100 pages (exported) with the path and the row count,
+  on an empty page before `TotalResults` rows were collected, and
   when a page's first row repeats the previous page's first row, which means the
   server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`.
   The live API does honour a `Limit` above 200: `Limit=500` returned

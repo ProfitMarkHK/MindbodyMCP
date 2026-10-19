@@ -20,6 +20,8 @@ interface MockOptions {
   ignoreOffset?: boolean;
   /** List key the rows are returned under. */
   key?: string;
+  /** Rows served past this many are dropped: later pages come back empty although TotalResults still promises them. */
+  rowsAvailable?: number;
 }
 
 /** A paging Mindbody list endpoint over `total` rows `{ Id: 1..total }`. */
@@ -28,7 +30,7 @@ class PagingServer implements IMindbodyClient {
   private readonly rows: Array<{ Id: number }>;
 
   constructor(private readonly options: MockOptions) {
-    this.rows = Array.from({ length: options.total }, (_, i) => ({ Id: i + 1 }));
+    this.rows = Array.from({ length: options.rowsAvailable ?? options.total }, (_, i) => ({ Id: i + 1 }));
   }
 
   async request<T>(): Promise<T> {
@@ -54,7 +56,7 @@ class PagingServer implements IMindbodyClient {
         RequestedLimit: echoed,
         RequestedOffset: offset,
         PageSize: page.length,
-        ...(mode === "full" || mode === "echo-requested-limit" ? { TotalResults: this.rows.length } : {}),
+        ...(mode === "full" || mode === "echo-requested-limit" ? { TotalResults: this.options.total } : {}),
       };
     }
     return body as T;
@@ -224,6 +226,19 @@ describe("fetchAllPages — fails loudly instead of truncating or looping", () =
   it("throws when the cap is hit without TotalResults too", async () => {
     const server = new PagingServer({ total: MAX_PAGES + 5, pagination: "none" });
     await expect(fetchAllPages(server, "/x", {}, "Things", 1)).rejects.toThrow("exceeded MAX_PAGES=100 (100 items fetched at Limit=1)");
+  });
+
+  it("throws, not truncates, when TotalResults promises more rows than the server serves", async () => {
+    const server = new PagingServer({ total: 450, rowsAvailable: 250 });
+    await expect(fetchAllPages(server, "/sale/products", {}, "Things")).rejects.toThrow(
+      "fetchAllPages: GET /sale/products returned an empty page at Offset=250 (250 items fetched of TotalResults=450); refusing to return a truncated result"
+    );
+    expect(server.offsets).toEqual([0, 200, 250]);
+  });
+
+  it("throws on an empty first page when TotalResults is non-zero", async () => {
+    const server = new PagingServer({ total: 3, rowsAvailable: 0 });
+    await expect(fetchAllPages(server, "/x", {}, "Things")).rejects.toThrow("0 items fetched of TotalResults=3");
   });
 
   it("throws when the server ignores Offset and repeats page one (with TotalResults)", async () => {

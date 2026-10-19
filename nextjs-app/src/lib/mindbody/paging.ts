@@ -12,7 +12,8 @@
 // Behavioural contract (kept identical to the root implementation):
 //   - sends `Limit` = pageSize (default 200) and advances `Offset` by the number
 //     of rows actually received, never by `Limit`;
-//   - an empty page ends the walk;
+//   - an empty page ends the walk, unless the server reported a `TotalResults`
+//     larger than the rows collected so far (then it throws: a truncated read);
 //   - when the server reports `PaginationResponse.TotalResults`, keeps going
 //     until that many rows are collected (a server that silently caps `Limit`
 //     is still read to the end);
@@ -108,6 +109,13 @@ export async function fetchAllPages<T>(
     }
 
     if (pageItems.length === 0) {
+      // An empty page ends the walk only when nothing more was promised.
+      if (totalResults !== undefined && items.length < totalResults) {
+        throw new Error(
+          `fetchAllPages: GET ${url} returned an empty page at Offset=${offset} ` +
+            `(${items.length} items fetched of TotalResults=${totalResults}); refusing to return a truncated result`
+        );
+      }
       break;
     }
 

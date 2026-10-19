@@ -181,6 +181,15 @@ function fixture(overrides: Record<string, unknown[]> = {}) {
   };
 }
 
+const LIST_KEY_BY_URL: Record<string, string> = {
+  "/site/sites": "Sites",
+  "/site/locations": "Locations",
+  "/site/sessiontypes": "SessionTypes",
+  "/staff/staff": "StaffMembers",
+  "/site/programs": "Programs",
+  "/site/resources": "Resources",
+};
+
 /**
  * Records every request, still validating each one against the spec.
  *
@@ -195,7 +204,8 @@ class RecordingClient implements IMindbodyClient {
   constructor(
     private readonly inner: SpecValidatingClient,
     private readonly failUrl?: string,
-    private readonly pageCap = Number.POSITIVE_INFINITY
+    private readonly pageCap = Number.POSITIVE_INFINITY,
+    private readonly fixtureValue: Record<string, any> = {}
   ) {}
 
   async request<T>(config: AxiosRequestConfig, retries?: number): Promise<T> {
@@ -206,7 +216,13 @@ class RecordingClient implements IMindbodyClient {
   async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     this.record(url, config?.params as Record<string, unknown> | undefined);
     if (url === this.failUrl) throw new Error(`stubbed failure: GET ${url}`);
-    const page = await this.inner.get<any>(url, config);
+    let page = await this.inner.get<any>(url, config);
+    // One shared body serves every endpoint, so its TotalResults can only be right
+    // for the longest list. Report each endpoint's own count, as Mindbody does.
+    const ownRows = this.fixtureValue[LIST_KEY_BY_URL[url] ?? ""];
+    if (Array.isArray(ownRows) && page?.PaginationResponse) {
+      page = { ...page, PaginationResponse: { ...page.PaginationResponse, TotalResults: ownRows.length } };
+    }
     if (page === null || typeof page !== "object" || !Number.isFinite(this.pageCap)) return page as T;
     const capped: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(page)) {
@@ -239,7 +255,7 @@ class RecordingClient implements IMindbodyClient {
 }
 
 function recording(fixtureValue: unknown = fixture(), failUrl?: string, pageCap?: number): RecordingClient {
-  return new RecordingClient(makeClient(fixtureValue), failUrl, pageCap);
+  return new RecordingClient(makeClient(fixtureValue), failUrl, pageCap, fixtureValue as Record<string, any>);
 }
 
 /** A recording client that does NOT validate: proves the tool's request shape only. */

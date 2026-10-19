@@ -135,7 +135,8 @@ function paginationCount(value: unknown): number | undefined {
  * tests/pagination-gate.test.ts, Gate 13).
  *
  * Termination, in order of precedence:
- *   1. An empty page ends the walk.
+ *   1. An empty page ends the walk, unless the server reported a `TotalResults`
+ *      larger than the rows collected so far: that is a truncated read and throws.
  *   2. When the server reports `PaginationResponse.TotalResults`, keep going
  *      until that many rows have been collected. The page length is NOT used as
  *      a stop signal here, so a server that silently caps `Limit` below what we
@@ -151,6 +152,7 @@ function paginationCount(value: unknown): number | undefined {
  *
  * Fails loudly instead of truncating or looping:
  *   - more than `MAX_PAGES` pages throws, naming the path and the row count;
+ *   - an empty page before `TotalResults` rows were collected throws;
  *   - a page whose first row is identical to the previous page's first row
  *     throws, because the server is ignoring `Offset` and would loop forever.
  */
@@ -199,6 +201,13 @@ export async function fetchAllPages<T>(
     }
 
     if (pageItems.length === 0) {
+      // An empty page ends the walk only when nothing more was promised.
+      if (totalResults !== undefined && items.length < totalResults) {
+        throw new Error(
+          `fetchAllPages: GET ${url} returned an empty page at Offset=${offset} ` +
+            `(${items.length} items fetched of TotalResults=${totalResults}); refusing to return a truncated result`
+        );
+      }
       break;
     }
 
