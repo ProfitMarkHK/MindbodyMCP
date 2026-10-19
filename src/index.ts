@@ -214,7 +214,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
             classId: { type: 'number', description: 'Class ID' },
-            lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false)' },
+            lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for a class starting within that window' },
           },
           required: ['clientId', 'classId'],
         },

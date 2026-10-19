@@ -2225,6 +2225,20 @@ describe('domain — enrollments', () => {
     expect(stub.countTo('/public/v6/client/updateclientvisit')).toBe(0);
   });
 
+  itE2E('removeClientFromClass refuses lateCancel with no late-cancel window configured, with no API traffic', async () => {
+    stub.resetLog();
+    const result = await client.callTool({
+      name: 'removeClientFromClass',
+      arguments: { clientId: STUB_FIXTURES.clientId, classId: 101, lateCancel: true },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = resultJson(result);
+    expect(payload.success).toBe(false);
+    expect(payload.message).toContain('MINDBODY_LATE_CANCEL_WINDOW_HOURS');
+    expect(stub.countTo('/public/v6/class/removeclientfromclass')).toBe(0);
+    expect(stub.requestsTo('/public/v6/class/classes', 'GET')).toHaveLength(0);
+  });
+
   itE2E('cancelEnrollmentVisits is all-or-nothing: one bad visit and nothing is written', async () => {
     stub.resetLog();
     const result = await client.callTool({

@@ -1,6 +1,13 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
-import { epochMsToSiteLocal, resolveReadTimeZone } from '../utils/siteTime.js';
+import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
+import {
+  epochMsToSiteLocal,
+  getSiteTimeZone,
+  resolveReadTimeZone,
+  siteDateStringPlusDays,
+  siteLocalToEpochMs,
+} from '../utils/siteTime.js';
 import {
   GetClassesRequest,
   Class,
@@ -193,7 +200,56 @@ export async function addClientToClassTool(
   }
 }
 
-// Remove client from class (cancel booking)
+/** How far ahead the class lookup for a late cancel looks, matching the appointment and enrollment guards. */
+const LATE_CANCEL_LOOKUP_WINDOW_DAYS = 365 * 2;
+
+/**
+ * Why a late cancel of `classId` is refused, or null if it may go ahead.
+ * Every failure refuses (fail closed): unknown window, unknown site zone, a
+ * failed lookup, a class that is absent or ambiguous, or one outside the window.
+ * The lookup starts at "now", so a class that has already started is "not found".
+ */
+async function lateCancelRefusal(
+  classId: number,
+  client: IMindbodyClient,
+  cache: SimpleCache
+): Promise<string | null> {
+  const windowHours = lateCancelWindowHours();
+  if (windowHours === undefined) return LATE_CANCEL_WINDOW_UNKNOWN;
+
+  let timeZone: string;
+  try {
+    timeZone = await getSiteTimeZone(client, cache);
+  } catch (error: any) {
+    return `late cancel refused: site timezone unavailable: ${error?.message ?? 'unknown error'}`;
+  }
+
+  const nowMs = Date.now();
+  let rows: any[];
+  try {
+    ({ items: rows } = await fetchAllPages<any>(
+      client,
+      '/class/classes',
+      {
+        ClassIds: [classId],
+        StartDateTime: epochMsToSiteLocal(nowMs, timeZone),
+        EndDateTime: `${siteDateStringPlusDays(new Date(nowMs), timeZone, LATE_CANCEL_LOOKUP_WINDOW_DAYS)}T23:59:59`,
+      },
+      'Classes'
+    ));
+  } catch (error: any) {
+    return `late cancel refused: class lookup failed: ${error?.message ?? 'unknown error'}`;
+  }
+  if (rows.length === 0) return `late cancel refused: class ${classId} was not found as an upcoming class`;
+  if (rows.length > 1) return `late cancel refused: class ${classId} returned more than once by lookup; refusing ambiguous data`;
+
+  const startMs = siteLocalToEpochMs(rows[0].StartDateTime, timeZone);
+  if (Number.isNaN(startMs)) return `late cancel refused: class ${classId} start time could not be parsed`;
+  return lateCancelWindowRefusal(startMs, nowMs, windowHours);
+}
+
+// Remove client from class (cancel booking). `lateCancel` forfeits the visit,
+// so it is honoured only inside the site's late-cancel window (see lateCancel.ts).
 export async function removeClientFromClassTool(
   clientId: string,
   classId: number,
@@ -204,6 +260,11 @@ export async function removeClientFromClassTool(
   success: boolean;
   message: string;
 }> {
+  if (lateCancel) {
+    const refusal = await lateCancelRefusal(classId, client, cache);
+    if (refusal) return { success: false, message: refusal };
+  }
+
   try {
     await client.post('/class/removeclientfromclass', {
       ClientId: clientId,
