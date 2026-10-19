@@ -712,12 +712,12 @@ describe("checkoutShoppingCartTool — appointment reconciliation", () => {
   });
 
   it("sends AppointmentIds on the item wrapper and maps reconciled appointments", async () => {
-    const client = new RecordingClient([], () => cart([{ Id: 9001, Status: "Booked" }]));
+    const client = new RecordingClient([row(9001)], () => cart([{ Id: 9001, Status: "Booked" }]));
     const result = await checkoutShoppingCartTool(
       CLIENT,
       [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001] }],
       [{ type: "Cash", metadata: { amount: 1 } }],
-      false, undefined, false, undefined, client
+      false, undefined, false, undefined, client, client.cache
     );
     expect(result.success).toBe(true);
     expect(client.posts[0].data.Items[0].AppointmentIds).toEqual([9001]);
@@ -726,8 +726,8 @@ describe("checkoutShoppingCartTool — appointment reconciliation", () => {
   });
 
   it("accepts reconciled appointments returned as bare ids", async () => {
-    const client = new RecordingClient([], () => cart([9001, 9002]));
-    const result = await checkoutShoppingCartTool(CLIENT, [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001, 9002] }], [], false, undefined, false, undefined, client);
+    const client = new RecordingClient([row(9001), row(9002)], () => cart([9001, 9002]));
+    const result = await checkoutShoppingCartTool(CLIENT, [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001, 9002] }], [], false, undefined, false, undefined, client, client.cache);
     expect(result.shoppingCart?.items[0].appointments).toEqual([9001, 9002]);
   });
 

@@ -324,7 +324,7 @@ Process a complete purchase transaction.
 - `clientId` (required): Client ID
 - `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds? }`
   - `item.type`: `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the service, product or package; a `Tip` uses `item.metadata.amount` instead.
-  - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`.
+  - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`. Every ID is verified to belong to `clientId` (same lookup as `cancelAppointments`) before anything is sent; if any fails, or the lookup cannot run, the whole checkout is refused and nothing is charged.
 - `payments` (required): Payment methods, each `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`.
 - `inStore` (optional): In-store purchase
 - `promotionCode` (optional): Discount code

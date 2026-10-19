@@ -169,7 +169,7 @@ The server provides 41 tools across 6 categories:
 - `getPackages` - List class packages. A package has no price of its own: `classCount` and `price` are summed from the services it contains
 - `getProducts` - Browse retail products. Categories are exposed as ids; the API returns no category names
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
-- `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds`
+- `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations

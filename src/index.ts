@@ -461,7 +461,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                   appointmentIds: {
                     type: 'array',
                     items: { type: 'number' },
-                    description: 'Existing appointment IDs this item pays for (reconciles)',
+                    description: 'Existing appointment IDs this item pays for (reconciles). Each must belong to clientId, else the whole checkout is refused',
                   },
                 },
               },

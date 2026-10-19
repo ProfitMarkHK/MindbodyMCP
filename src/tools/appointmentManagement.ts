@@ -210,14 +210,15 @@ export async function addAppointmentTool(
 
 // Appointment ownership verification
 //
-// updateAppointment and cancelAppointments both act on ONE appointment that must
-// belong to ONE client, so they share one lookup and one comparison. A row whose
+// updateAppointment, cancelAppointments and checkoutShoppingCart (appointmentIds)
+// all act on appointments that must belong to ONE client, so they share one
+// lookup and one comparison. A row whose
 // owner cannot be read, or whose owner is not the requested client, is reported
 // exactly as a row that was never returned, so a guessed appointment id cannot
 // be used to discover whose an appointment is.
 
 /** How far the shared lookup reaches into the past, in site-calendar days. */
-const OWNERSHIP_LOOKBACK_DAYS = 365;
+export const OWNERSHIP_LOOKBACK_DAYS = 365;
 /** How far the shared lookup reaches into the future, in site-calendar days. */
 const OWNERSHIP_LOOKAHEAD_DAYS = 365 * 2;
 
@@ -256,7 +257,7 @@ interface OwnershipLookup {
  * Fails closed: without the zone the caller cannot decide a timing guard, so the
  * failure is reported rather than guessed.
  */
-async function lookupAppointmentsForClient(
+export async function lookupAppointmentsForClient(
   client: IMindbodyClient,
   cache: SimpleCache,
   clientId: string,
@@ -299,7 +300,7 @@ async function lookupAppointmentsForClient(
 }
 
 /** The single row for `appointmentId` when it is unambiguously this client's. */
-function ownedAppointmentRow(
+export function ownedAppointmentRow(
   rows: any[],
   appointmentId: number,
   clientId: string
