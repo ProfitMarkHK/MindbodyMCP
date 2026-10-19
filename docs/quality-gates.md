@@ -68,11 +68,12 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 | 8 | Security / secrets checks pass | applies | `npm audit --audit-level=moderate` → **found 0 vulnerabilities** (exit 0), plus the fail-closed secret scan below. The audit was verified green 2026-10-15; the secret scan passed on 2026-10-17 (see Gate 8). **The secret scan half is wired into the runner and runs on every `bun run check` and every commit** — `bash scripts/secret-scan.sh .`, then an index-only guard that refuses a staged `.env*` file. The scan prints filenames only and fails closed. `npm audit` stays CI-only: it needs the registry, and a pre-commit hook must not depend on the network. |
 | 9 | Change reviewed | applies | manual — peer review via `.github/PULL_REQUEST_TEMPLATE.md`. Never a gate that always passes. |
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
-| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export supplied by the project owner (`mindbody-public-api-v6.swagger.json`), copied in on 2026-10-17. Its SHA-256 is recorded in `docs/openapi.lock`, which must be updated whenever the file changes. The official portal did not expose a downloadable spec when this was checked. |
+| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
-| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/` and `nextjs-app/src/` is scanned, 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. |
+| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/` and `nextjs-app/src/` is scanned, 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 14 | nextjs-app type checking passes | applies | `cd nextjs-app && ./node_modules/.bin/tsc --noEmit` — exits 0. Run by the runner; **fails, never skips, when `nextjs-app/node_modules` is absent** (it prints the `bun install` to run). See Gates 14 and 15 below. |
 | 15 | nextjs-app build succeeds | applies | `cd nextjs-app && next build` — exits 0, ~11s warm, 8 routes; writes `nextjs-app/.next/` and `tsconfig.tsbuildinfo`, both ignored by `nextjs-app/.gitignore`. Run by the runner with `NEXT_TELEMETRY_DISABLED=1` and no stdin so it can never block a hook; fail-closed on missing dependencies like Gate 14. |
+| 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
 
 State legend: **applies** (must pass), **no-op** (does not apply, reason
 given), **gap** (should apply but not yet possible, tracked as work).
@@ -671,6 +672,63 @@ and not needed" from "forgotten":
    `tests/nextjs-sitetime.test.ts`, Gate 1) so no second runner is needed. Adding
   a runner inside `nextjs-app/` would also pull `bun:test` types into a tsconfig
   that `next build` type-checks. The app's own `README.md` says the same.
+- **Gate 16 — OpenAPI spec integrity (applies; passes; offline).**
+  `sha256(docs/openapi.json)` must equal the single value in
+  [`docs/openapi.lock`](openapi.lock). Purely local: it reads two files and
+  compares, with no network, no credentials and no Mindbody API call, and costs
+  about a second. Fail-closed on all four ways this can go wrong — spec missing,
+  lock missing, either digest not 64 lowercase hex digits, or a mismatch — and it
+  **fails, never skips**. The mismatch message names both digests and points at
+  `bun run spec:update`.
+
+  The two "unparseable digest" checks are the load-bearing ones. Without them an
+  **empty or truncated lock file compares equal to an empty digest and passes**,
+  so deleting the lock — the one failure mode that most needs to be loud — would
+  have read as green. Validating the shape before comparing removes that whole
+  class of false pass.
+
+  **Why it runs second, after Gate 8 and before Gate 1.** Gate 8 stays first: a
+  committed credential is the highest-harm thing this runner can catch and cannot
+  be un-published by waiting. Gate 16 is next, and before the ~13.7s test run,
+  because two later gates *read this file*: `tests/classManagement.test.ts`
+  validates tool calls against it at runtime (Gate 1), and Gate 13's scanner
+  classifies its GET paths to decide what must be paged. If the spec had
+  drifted, both would be checking the wrong document and would report green on
+  evidence that does not exist — so a spec-integrity failure is cheaper to
+  discover before the test suite than after it, and the gates downstream of it
+  are only as trustworthy as this one. It is cheap and offline for the same
+  reason Gate 8's scan is.
+
+  **What it does not prove.** Only that the two committed files agree with each
+  other. It does **not** check the spec against upstream — that would put a
+  network call in a pre-commit hook, and would make every commit depend on a
+  third party's uptime and on Mindbody's own schedule. Agreement with upstream is
+  a separate, deliberate question, handled by the drift policy below.
+
+  **Drift policy — the spec is pinned, not auto-followed.**
+  `docs/openapi.json` is a live mirror of a document Mindbody controls, so it
+  will change and the SHA-256 will move. That is expected and is not in itself a
+  problem. The policy:
+
+  - The spec is **pinned**. Gate 16 verifies the pin; nothing follows upstream
+    automatically, and no CI job updates the file.
+  - When `bun run spec:update` changes the SHA, that is a trigger to **re-run the
+    reconciliation audit**, not a routine sync. The 46 call sites in
+    [`docs/mindbody-spec-discrepancies.md`](mindbody-spec-discrepancies.md) were
+    reasoned against one specific document, and **those verdicts do not transfer
+    automatically to a different one**. A moved SHA invalidates the audit until
+    it is re-run.
+  - The SHA-256 every verdict in that audit depends on is recorded at the top of
+    the audit document, so a future reader can tell in one glance whether the
+    audit still applies to the file in front of them.
+  - Refreshing a spec whose SHA an audit depends on must **never happen
+    silently**. `scripts/update-spec.ts` prints both digests and the added and
+    removed paths on any move, which is the raw material for the re-run decision
+    and is sufficient for that purpose; what it lacked was any statement that an
+    audit is at stake, so it now prints a banner naming the audit and this
+    policy alongside the diff. It still writes both files and still exits 0 — it
+    is a maintenance command, not a gate, and only Gate 16 blocks a commit.
+
 - **Gate 12 — agent skill structure (no-op for Claude Code extension keys).**
   `npx --yes skills-ref validate <dir>` passes for 24 of the 29
   `.agents/skills/*/` directories and fails for `handoff`,
@@ -722,11 +780,12 @@ and not needed" from "forgotten":
   the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
   is **half** in: its secret scan and staged-`.env` guard run as the first gate of
   the runner, so every commit is covered; only `npm audit` is left out, because it
-  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13, 14
-  and 15, which are green today. Gates 2
+  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13,
+  14, 15 and 16. Gates 2
   and 13 are executed by Gate 1's single `bun test` run and their verdicts read
   out of that run's log; see the Gate 2 and Gate 13 entries for why neither is
-  invoked a second time. Gates 14 and 15 run inside `nextjs-app/` and need its
+  invoked a second time. Gate 16 runs second, before Gate 1, because Gates 1 and
+  13 both read the spec it verifies. Gates 14 and 15 run inside `nextjs-app/` and need its
   own `bun install` once per clone; they fail, not skip, without it. The opt-in live
   E2E tier is likewise not in the runner; see its own entry above for why it is
   credential-gated and cannot run unattended.

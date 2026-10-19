@@ -8,6 +8,9 @@
 #   Gate 8  scripts/secret-scan.sh + staged .env guard — offline, fail-closed,
 #                                 run first so a credential is refused in the
 #                                 first seconds, not after the two builds
+#   Gate 16 sha256(docs/openapi.json) == docs/openapi.lock — offline, fail-closed,
+#                                 runs second: Gates 1 and 13 both reason against
+#                                 the spec, so its identity is settled first
 #   Gate 6  bun run typecheck   — tsc --noEmit
 #   Gate 1  bun test            — full suite (tests + hermetic E2E tier)
 #   Gate 2  (derived from Gate 1)— end-to-end acceptance suite, see below
@@ -97,6 +100,59 @@ if [ -n "$STAGED_ENV" ]; then
   fail "Gate 8  staged .env guard  (${STAGED_COUNT} gitignored credential file(s) staged; .gitignore does not stop git add -f)"
 else
   pass "Gate 8  staged .env guard  (no .env* file staged; .env.example allowed)"
+fi
+
+# ── Gate 16: OpenAPI spec integrity ──────────────────────────────────────────
+# docs/openapi.json is a PINNED mirror of a document Mindbody controls, served
+# unauthenticated at https://api.mindbodyonline.com/public/v6/swagger/doc and
+# maintained by `bun run spec:update` (scripts/update-spec.ts), which refreshes
+# both files together. docs/openapi.lock holds the SHA-256 of the file. This gate
+# re-hashes the file and compares, offline — no network, no credentials, no API
+# call — in well under a second.
+#
+# Why it runs SECOND, immediately after Gate 8 and before the test suite: Gates 1
+# and 13 both reason against this file. tests/classManagement.test.ts validates
+# tool calls against it at runtime, and Gate 13's scanner classifies its GET
+# paths as paginated or not. If the spec had drifted, those two gates would be
+# checking the WRONG document and their green result would be meaningless, so
+# settling the spec's identity first is the fail-fast order that actually buys
+# something. Gate 8 still runs before it: a committed credential outranks a stale
+# spec.
+#
+# Fail-closed on four conditions, never silent: missing spec, missing lock,
+# unparseable digest on either side, and mismatch. The two "unparseable" checks
+# matter more than they look — without them an empty lock file would hash-compare
+# against an empty digest and PASS, turning a deleted lock into a green gate.
+#
+# What this gate does NOT prove: that the spec is the CURRENT upstream document.
+# It only proves the two committed files agree. Drift against upstream is a
+# deliberate choice in this repo — the spec is pinned, not auto-followed — and is
+# the subject of the drift policy in docs/quality-gates.md under Gate 16.
+echo
+echo "=== Gate 16: OpenAPI spec integrity (sha256 of docs/openapi.json vs docs/openapi.lock) ==="
+SPEC_JSON="docs/openapi.json"
+SPEC_LOCK="docs/openapi.lock"
+SPEC_HEX='^[0-9a-f]{64}$'
+
+if [ ! -f "$SPEC_JSON" ]; then
+  fail "Gate 16 OpenAPI spec integrity could not run: ${SPEC_JSON} is missing (run: bun run spec:update)"
+elif [ ! -f "$SPEC_LOCK" ]; then
+  fail "Gate 16 OpenAPI spec integrity could not run: ${SPEC_LOCK} is missing (run: bun run spec:update)"
+elif ! command -v shasum >/dev/null 2>&1; then
+  fail "Gate 16 OpenAPI spec integrity could not run: no sha256 tool found (shasum is absent from this environment)"
+else
+  SPEC_ACTUAL=$(shasum -a 256 "$SPEC_JSON" | awk '{print $1}')
+  SPEC_PINNED=$(head -n 1 "$SPEC_LOCK" | tr -d '[:space:]')
+
+  if ! printf '%s' "$SPEC_ACTUAL" | grep -qE "$SPEC_HEX"; then
+    fail "Gate 16 OpenAPI spec integrity could not run: hashing ${SPEC_JSON} did not yield 64 lowercase hex digits (got '${SPEC_ACTUAL}')"
+  elif ! printf '%s' "$SPEC_PINNED" | grep -qE "$SPEC_HEX"; then
+    fail "Gate 16 OpenAPI spec integrity (${SPEC_LOCK} does not hold one SHA-256; found '${SPEC_PINNED}'; run: bun run spec:update)"
+  elif [ "$SPEC_ACTUAL" != "$SPEC_PINNED" ]; then
+    fail "Gate 16 OpenAPI spec integrity  (${SPEC_JSON} is ${SPEC_ACTUAL} but ${SPEC_LOCK} pins ${SPEC_PINNED} — spec and lock have drifted apart; run: bun run spec:update)"
+  else
+    pass "Gate 16 OpenAPI spec integrity (sha256 ${SPEC_ACTUAL} matches ${SPEC_LOCK}; offline)"
+  fi
 fi
 
 # ── Gate 1: all tests pass ───────────────────────────────────────────────────

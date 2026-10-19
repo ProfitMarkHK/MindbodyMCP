@@ -49,6 +49,21 @@ async function main() {
       if (!added.length && !removed.length)
         console.log('  no path additions/removals — likely parameter or schema changes');
     }
+    // Loud, and deliberately so: this file is pinned and an audit depends on its
+    // exact bytes. The 46-call-site reconciliation in
+    // docs/mindbody-spec-discrepancies.md was reasoned against the PREVIOUS
+    // digest above, and its verdicts do not transfer to the new document. A moved
+    // SHA triggers a re-run of that audit, not a routine sync. See the drift
+    // policy under Gate 16 in docs/quality-gates.md. Gate 16 will fail on the next
+    // commit until this file and docs/openapi.lock are committed together, which
+    // is the intended tripwire — never overwrite one without the other.
+    console.log('');
+    console.log('  !!  PINNED SPEC HAS MOVED — this is a drift event, not a routine sync.');
+    console.log('  !!  docs/mindbody-spec-discrepancies.md holds verdicts reasoned against');
+    console.log(`  !!  the previous SHA-256 ${storedHash}; they do NOT transfer automatically.`);
+    console.log('  !!  Re-run the reconciliation before trusting any verdict in it.');
+    console.log('  !!  Policy: docs/quality-gates.md, drift policy under Gate 16.');
+    console.log('');
   } else {
     console.log(`Wrote initial lock file with hash: ${fetchedHash}`);
   }
