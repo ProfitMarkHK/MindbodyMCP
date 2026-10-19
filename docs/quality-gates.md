@@ -578,8 +578,11 @@ and not needed" from "forgotten":
   on an empty page before `TotalResults` rows were collected, when more rows
   arrive than `TotalResults` claims (e.g. `TotalResults: 0` beside a non-empty
   page: the reported total is checked against the rows, not trusted alone), and
-  when a page's first row repeats the previous page's first row, which means the
-  server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`.
+  when a page of two or more rows consists only of rows already received
+  (a verbatim, reordered or wrapped-around replay: the server is ignoring
+  `Offset`). A page that merely shares some rows with earlier ones is accepted,
+  because duplicate source rows, a concurrent insert and overlapping list keys
+  all produce that; a one-row page is judged against the previous page alone. Covered by `tests/fetchAllPages.test.ts`.
   The live API does honour a `Limit` above 200: `Limit=500` returned
   `RequestedLimit 500, PageSize 141, TotalResults 141`.
 

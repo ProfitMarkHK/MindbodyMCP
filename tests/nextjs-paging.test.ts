@@ -91,6 +91,20 @@ class PagingServer implements PagedGetClient {
   }
 }
 
+/** A client that serves `pages` in call order, whatever Offset says, reporting `total`. */
+function scripted(pages: Array<Record<string, Array<{ Id: number }>>>, total: number) {
+  let call = 0;
+  const offsets: unknown[] = [];
+  const client: PagedGetClient = {
+    get: async <T,>(_url: string, options?: { params?: Record<string, any> }) => {
+      offsets.push(options?.params?.Offset);
+      return { ...pages[call++], PaginationResponse: { TotalResults: total } } as T;
+    },
+  };
+  return { client, offsets };
+}
+const page = (...rowIds: number[]) => ({ Things: rowIds.map((Id) => ({ Id })) });
+
 const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
@@ -191,6 +205,35 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
     const server = new PagingServer({ total: 500, ignoreOffset: true });
     await expect(fetchAllPages(server, "/client/clients", {}, "Things")).rejects.toThrow(/appears to ignore Offset/);
     expect(server.calls).toHaveLength(2);
+  });
+
+  it("throws when a server that ignores Offset also wraps around, so no page repeats the previous first row", async () => {
+    // offsets [0, 2, 4] served [1,2] [3,4] [1,2]: TotalResults=6 would be reached with duplicates.
+    const { client, offsets } = scripted([page(1, 2), page(3, 4), page(1, 2)], 6);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow(
+      "returned a page at Offset=4 whose 2 row(s) were all received already; the server appears to ignore Offset (4 items fetched before the repeat)"
+    );
+    expect(offsets).toEqual([0, 2, 4]);
+  });
+
+  it("throws when a server that ignores Offset re-orders the page it repeats", async () => {
+    const { client } = scripted([page(1, 2), page(2, 1)], 4);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow("appears to ignore Offset");
+  });
+
+  it("accepts a source whose rows repeat across a page boundary (duplicate rows are not an ignored Offset)", async () => {
+    const { client } = scripted([page(1, 2), page(1, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 1, 3]);
+  });
+
+  it("accepts one row shared by the end of a page and the start of the next", async () => {
+    const { client } = scripted([page(1, 2), page(2, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 2, 3]);
+  });
+
+  it("accepts overlapping list keys that put the same row on consecutive pages", async () => {
+    const { client } = scripted([{ A: [{ Id: 1 }], B: [{ Id: 1 }] }, { A: [{ Id: 1 }], B: [{ Id: 2 }] }], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, ["A", "B"], 2)).items)).toEqual([1, 1, 1, 2]);
   });
 
   it("rejects a non-positive or fractional page size before any request", async () => {

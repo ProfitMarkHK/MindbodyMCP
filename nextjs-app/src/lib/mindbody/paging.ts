@@ -22,8 +22,11 @@
 //   - throws when more rows have been received than `TotalResults` claims
 //     (the claim is checked against the rows, never trusted on its own);
 //   - throws after MAX_PAGES pages instead of returning a truncated list;
-//   - throws when a page's first row repeats the previous page's first row,
-//     which means the server is ignoring `Offset` and would loop forever.
+//   - throws when a page is made only of rows already received, which means the
+//     server is ignoring `Offset` (verbatim replay, reordered, or wrapped around).
+//     A page that only shares some rows with earlier ones is accepted (duplicate
+//     source rows, a concurrent insert, overlapping list keys); a one-row page is
+//     judged against the previous page alone.
 //
 // Covered by tests/nextjs-paging.test.ts in the repo root (run by `bun test`).
 
@@ -83,7 +86,8 @@ export async function fetchAllPages<T>(
   let offset = 0;
   let totalResults: number | undefined;
   let effectivePageSize: number | undefined;
-  let previousFirstItem: string | undefined;
+  const seen = new Set<string>();
+  let previousPage = new Set<string>();
 
   for (let page = 0; ; page += 1) {
     if (page >= MAX_PAGES) {
@@ -121,14 +125,23 @@ export async function fetchAllPages<T>(
       break;
     }
 
-    const firstItem = JSON.stringify(pageItems[0]);
-    if (previousFirstItem !== undefined && firstItem === previousFirstItem) {
+    // Offset-ignored detection. A page made only of rows already received is a replay:
+    // verbatim, reordered or wrapped around. A page that merely shares a row or two with
+    // earlier ones is not: duplicate rows in the source, a row inserted between requests,
+    // or overlapping list keys all do that, and a valid read must survive them.
+    // shortcut: a one-row page is compared with the previous page only, because
+    // "seen anywhere" would reject any source that repeats a row; revisit if a
+    // server that ignores Offset while serving one-row pages shows up.
+    const rows = pageItems.map((item) => JSON.stringify(item));
+    const isReplay = rows.length > 1 ? rows.every((row) => seen.has(row)) : previousPage.has(rows[0]);
+    if (isReplay) {
       throw new Error(
-        `fetchAllPages: GET ${url} returned the same first item at Offset=${offset} as on the previous page; ` +
-          `the server appears to ignore Offset (${items.length} items fetched before the repeat)`
+        `fetchAllPages: GET ${url} returned a page at Offset=${offset} whose ${rows.length} row(s) were all received ` +
+          `already; the server appears to ignore Offset (${items.length} items fetched before the repeat)`
       );
     }
-    previousFirstItem = firstItem;
+    rows.forEach((row) => seen.add(row));
+    previousPage = new Set(rows);
 
     // TotalResults is the server's claim; the rows received are the evidence. More
     // rows than the claim means the claim is wrong (a stale `0` would otherwise end
