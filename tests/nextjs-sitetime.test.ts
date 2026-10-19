@@ -279,8 +279,8 @@ describe("getSiteTimeZone", () => {
     expect(api.to("/site/sites")[0]).toEqual({ SiteIds: ["12345"], Limit: 200, Offset: 0 });
   });
 
-  it("prefers the API zone over MINDBODY_SITE_TIMEZONE", async () => {
-    process.env[SITE_TIMEZONE_ENV] = HK;
+  it("returns the API zone when the env override agrees with it", async () => {
+    process.env[SITE_TIMEZONE_ENV] = LA;
     expect(await getSiteTimeZone(sandbox(LA), cache())).toBe(LA);
   });
 
@@ -288,16 +288,57 @@ describe("getSiteTimeZone", () => {
     process.env[SITE_TIMEZONE_ENV] = HK;
     expect(await getSiteTimeZone(new FakeApi([{ Id: 1, Name: "No zone" }]), cache())).toBe(HK);
     expect(await getSiteTimeZone(sandbox("Pacific Standard Time"), cache())).toBe(HK);
-    expect(await getSiteTimeZone(new FakeApi([], new Error("down")), cache())).toBe(HK);
   });
 
-  it("throws when neither source yields a usable zone", async () => {
+  it("never consults the override when the site lookup fails", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    await expect(getSiteTimeZone(new FakeApi([], new Error("down")), cache())).rejects.toThrow(
+      /^Cannot determine the site timezone: site lookup failed: down$/
+    );
+  });
+
+  it("returns the multi-site refusal instead of the override", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    const TWO: SiteRow[] = [
+      { Id: -99, Name: "Sandbox", TimeZone: LA },
+      { Id: 12345, Name: "Second Studio", TimeZone: HK },
+    ];
+    await expect(getSiteTimeZone(new FakeApi(TWO), cache())).rejects.toThrow(
+      /site lookup failed: this API key reaches 2 sites/
+    );
+    // reads refuse too (UTC fallback), they do not adopt the override
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveReadTimeZone(new FakeApi(TWO), cache())).toBe("UTC");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("write path refuses an override that disagrees with the record; a case-only difference is fine", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    await expect(getSiteTimeZone(sandbox(LA), cache())).rejects.toThrow(
+      /disagrees with the site record's TimeZone "America\/Los_Angeles"/
+    );
+    process.env[SITE_TIMEZONE_ENV] = "america/los_angeles";
+    expect(await getSiteTimeZone(sandbox(LA), cache())).toBe(LA);
+  });
+
+  it("read path keeps the record's zone and ignores a disagreeing override", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    expect(await resolveReadTimeZone(sandbox(LA), cache())).toBe(LA);
+  });
+
+  it("throws a clear error when neither source is usable", async () => {
     await expect(getSiteTimeZone(new FakeApi([{ Id: 1, Name: "No zone" }]), cache())).rejects.toThrow(
       'Cannot determine the site timezone: site record has no usable TimeZone (got undefined), and MINDBODY_SITE_TIMEZONE is not set'
     );
     await expect(getSiteTimeZone(new FakeApi([], new Error("boom")), cache())).rejects.toThrow("site lookup failed: boom");
+  });
+
+  it("throws when the env override is itself invalid", async () => {
     process.env[SITE_TIMEZONE_ENV] = "Not/AZone";
-    await expect(getSiteTimeZone(new FakeApi([], new Error("down")), cache())).rejects.toThrow(
+    await expect(getSiteTimeZone(new FakeApi([{ Id: 1, Name: "No zone" }]), cache())).rejects.toThrow(
       'MINDBODY_SITE_TIMEZONE="Not/AZone" is not a valid IANA zone'
     );
   });

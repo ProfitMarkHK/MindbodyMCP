@@ -212,38 +212,64 @@ export function assertTimeZone(timeZone: unknown): asserts timeZone is string {
   }
 }
 
-/** Zone from the site record, or a description of why there is none. */
-async function zoneFromApi(client: PagedGetClient, cache: TtlCache): Promise<{ zone?: string; problem?: string }> {
+/** `zone` is set when the record has a usable one; `unreachable` when the site could not be resolved at all. */
+async function zoneFromApi(
+  client: PagedGetClient,
+  cache: TtlCache
+): Promise<{ zone?: string; problem?: string; unreachable?: boolean }> {
   try {
     const site = await getSelectedSite(client, cache);
     const zone = site?.TimeZone;
     if (isValidTimeZone(zone)) return { zone };
     return { problem: `site record has no usable TimeZone (got ${JSON.stringify(zone)})` };
   } catch (error: any) {
-    return { problem: `site lookup failed: ${error?.message ?? 'unknown error'}` };
+    return { problem: `site lookup failed: ${error?.message ?? 'unknown error'}`, unreachable: true };
   }
 }
 
 /**
- * The site's IANA timezone. Source order: the cached GET /site/sites record,
- * then the `MINDBODY_SITE_TIMEZONE` env override. Throws if neither is usable;
- * callers decide whether to fail closed or fall back.
+ * `MINDBODY_SITE_TIMEZONE` never overrides a site we could not resolve: that
+ * includes the multi-site refusal from `selectSite`, so it cannot turn a
+ * fail-closed refusal into a write. It stands in only for a reachable record
+ * with no usable zone. `strict` (write paths) also refuses an override that
+ * disagrees with the record's zone, since a wrong zone shifts every now-comparison.
  */
-export async function getSiteTimeZone(
-  client: PagedGetClient = getMindbodyClient(),
-  cache: TtlCache = siteInfoCache
-): Promise<string> {
-  const { zone, problem } = await zoneFromApi(client, cache);
-  if (zone) return zone;
-
+async function resolveSiteTimeZone(client: PagedGetClient, cache: TtlCache, strict: boolean): Promise<string> {
+  const { zone, problem, unreachable } = await zoneFromApi(client, cache);
   const override = process.env[SITE_TIMEZONE_ENV];
-  if (override !== undefined && override !== '') {
+  const hasOverride = override !== undefined && override !== '';
+
+  if (zone) {
+    if (strict && hasOverride && override.toLowerCase() !== zone.toLowerCase()) {
+      throw new Error(
+        `Refusing to proceed: ${SITE_TIMEZONE_ENV}=${JSON.stringify(override)} disagrees with the site record's TimeZone ${JSON.stringify(zone)}; fix or unset ${SITE_TIMEZONE_ENV}`
+      );
+    }
+    return zone;
+  }
+  if (unreachable) throw new Error(`Cannot determine the site timezone: ${problem}`);
+
+  if (hasOverride) {
     if (isValidTimeZone(override)) return override;
     throw new Error(
       `Cannot determine the site timezone: ${problem}, and ${SITE_TIMEZONE_ENV}=${JSON.stringify(override)} is not a valid IANA zone`
     );
   }
   throw new Error(`Cannot determine the site timezone: ${problem}, and ${SITE_TIMEZONE_ENV} is not set`);
+}
+
+/**
+ * The site's IANA timezone for WRITE guards (both callers cancel things).
+ * Source: the cached GET /site/sites record. `MINDBODY_SITE_TIMEZONE` is used
+ * only when the record is reachable but has no usable zone; it is refused when
+ * it disagrees with a usable record zone, and never consulted when the site
+ * lookup fails (including an ambiguous multi-site key). Throws in all those cases.
+ */
+export async function getSiteTimeZone(
+  client: PagedGetClient = getMindbodyClient(),
+  cache: TtlCache = siteInfoCache
+): Promise<string> {
+  return resolveSiteTimeZone(client, cache, true);
 }
 
 let warnedUtcFallback = false;
@@ -276,7 +302,8 @@ export async function resolveReadTimeZone(
   cache: TtlCache = siteInfoCache
 ): Promise<string> {
   try {
-    return await getSiteTimeZone(client, cache);
+    // Lenient: a read cannot write, so the record's zone wins over a disagreeing override.
+    return await resolveSiteTimeZone(client, cache, false);
   } catch (error: any) {
     if (!warnedUtcFallback) {
       warnedUtcFallback = true;
