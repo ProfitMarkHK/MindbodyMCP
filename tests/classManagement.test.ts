@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { AxiosRequestConfig } from "axios";
+import type { IMindbodyClient } from "../src/api/client.js";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { SpecValidatingClient, SpecValidationError } from "./spec-validating-client.js";
@@ -10,8 +12,11 @@ import {
   getWaitlistEntriesTool,
   addClientToClassTool,
   substituteClassTeacherTool,
+  removeClientFromClassTool,
 } from "../src/tools/classManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
+import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
+import { epochMsToSiteLocal, resetSiteTimeWarningForTests } from "../src/utils/siteTime.js";
 
 const spec = JSON.parse(
   readFileSync(resolve(__dirname, "../docs/openapi.json"), "utf-8")
@@ -355,5 +360,130 @@ describe("getClassVisitsTool — C-13 ids only, no client object", () => {
     expect(result.summary.totalSignedIn).toBe(1);
     expect(result.summary.totalNotSignedIn).toBe(0);
     expect(result.summary.totalLateCancels).toBe(0);
+  });
+});
+// ── removeClientFromClass: lateCancel is bounded to the site window ──────────
+
+const SITE_TZ = "America/Los_Angeles";
+const HOUR_MS = 3_600_000;
+
+/** Records every call and validates GET params against docs/openapi.json. */
+class RecordingClient implements IMindbodyClient {
+  readonly gets: Array<{ url: string; params: Record<string, any> }> = [];
+  readonly posts: Array<{ url: string; data: any }> = [];
+  readonly cache = new SimpleCache(5);
+  siteZone: string | null = SITE_TZ;
+  classes: any[] = [];
+  private readonly validator = new SpecValidatingClient(spec, {});
+
+  async request<T>(): Promise<T> {
+    throw new Error("request() is not used by these tools");
+  }
+
+  async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    await this.validator.get(url, config);
+    this.gets.push({ url, params: config?.params ?? {} });
+    const page = (key: string, rows: unknown[]) =>
+      ({ [key]: rows, PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: rows.length, TotalResults: rows.length } }) as T;
+    if (url === "/site/sites") {
+      return page("Sites", [{ Id: -99, Name: "Stub", ...(this.siteZone === null ? {} : { TimeZone: this.siteZone }) }]);
+    }
+    if (url === "/class/classes") {
+      const wanted: number[] = config?.params?.ClassIds ?? [];
+      return page("Classes", this.classes.filter((cls) => wanted.includes(cls.Id)));
+    }
+    throw new Error(`unexpected GET ${url}`);
+  }
+
+  async post<T>(url: string, data?: any): Promise<T> {
+    await this.validator.post(url, data);
+    this.posts.push({ url, data });
+    return {} as T;
+  }
+}
+
+function classStartingIn(hours: number, id = 501) {
+  return { Id: id, StartDateTime: epochMsToSiteLocal(Date.now() + hours * HOUR_MS, SITE_TZ) };
+}
+
+describe("removeClientFromClassTool — lateCancel window", () => {
+  beforeEach(() => {
+    resetSiteTimeWarningForTests();
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+  });
+  afterEach(() => delete process.env[LATE_CANCEL_WINDOW_ENV]);
+
+  it("sends LateCancel: true for a class inside the window", async () => {
+    const client = new RecordingClient();
+    client.classes = [classStartingIn(10)];
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.posts).toEqual([
+      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: true } },
+    ]);
+    const [lookup] = client.gets.filter((get) => get.url === "/class/classes");
+    expect(lookup.params.ClassIds).toEqual([501]);
+  });
+
+  it("refuses a class outside the window with no POST", async () => {
+    const client = new RecordingClient();
+    client.classes = [classStartingIn(24 * 90)];
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("outside the site's late-cancel window");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("refuses with no call at all when the window is unset or invalid", async () => {
+    for (const value of [undefined, "nope", "0"]) {
+      if (value === undefined) delete process.env[LATE_CANCEL_WINDOW_ENV];
+      else process.env[LATE_CANCEL_WINDOW_ENV] = value;
+      const client = new RecordingClient();
+      client.classes = [classStartingIn(10)];
+      const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain(LATE_CANCEL_WINDOW_ENV);
+      expect(client.gets).toEqual([]);
+      expect(client.posts).toEqual([]);
+    }
+  });
+
+  it("refuses when the site timezone is unavailable, with no POST", async () => {
+    const client = new RecordingClient();
+    client.siteZone = null;
+    client.classes = [classStartingIn(10)];
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("site timezone unavailable");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("refuses a class that is not found, or returned twice, with no POST", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const missing = new RecordingClient();
+    const notFound = await removeClientFromClassTool("c1", 501, true, missing, missing.cache);
+    expect(notFound.success).toBe(false);
+    expect(notFound.message).toContain("was not found");
+    expect(missing.posts).toEqual([]);
+
+    const twice = new RecordingClient();
+    twice.classes = [classStartingIn(10), classStartingIn(10)];
+    const ambiguous = await removeClientFromClassTool("c1", 501, true, twice, twice.cache);
+    expect(ambiguous.success).toBe(false);
+    expect(ambiguous.message).toContain("more than once");
+    expect(twice.posts).toEqual([]);
+  });
+
+  it("makes no lookup and sends LateCancel: false when lateCancel is off", async () => {
+    const client = new RecordingClient();
+    const result = await removeClientFromClassTool("c1", 501, false, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.gets).toEqual([]);
+    expect(client.posts).toEqual([
+      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: false } },
+    ]);
   });
 });

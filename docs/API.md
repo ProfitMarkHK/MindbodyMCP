@@ -240,7 +240,7 @@ A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbo
 - Unset, empty, non-numeric or not positive: a `lateCancel: true` request is refused before any lookup or write, with `late cancel refused: the site's late-cancel window is unknown. Set MINDBODY_LATE_CANCEL_WINDOW_HOURS ...` (id `-1`).
 - `lateCancel: false` (the default) is unaffected.
 
-`cancelEnrollmentVisits` applies the same bound to enrollment sessions. **Gap:** `removeClientFromClass` (drop-in classes) still forwards `lateCancel` unchecked: it has no class lookup or timing guard to hang the window on, and adding one is a separate change. Until then, prefer `cancelAppointments` / `cancelEnrollmentVisits` for anything where a late cancel would cost the client.
+`cancelEnrollmentVisits` applies the same bound to enrollment sessions, and so does `removeClientFromClass` (drop-in classes). With `lateCancel: true` the latter, before any write: refuses if the window is unset or invalid (no lookup, no write); resolves the site timezone (refuses if it cannot); looks the class up with `GET /class/classes` filtered by `ClassIds`, from now through two years ahead in the site's zone; and refuses if the class is not found (including one that has already started), is returned more than once, or starts more than the window from now. It returns `{ success: false, message }` with the same refusal texts as above. `lateCancel: false` (the default) makes no extra read.
 
 #### Response
 
