@@ -350,7 +350,7 @@ The package is available on:
 
 - **Bun Runtime**: 4x faster startup than Node.js
 - **Intelligent Caching**: 5-minute cache for dynamic data, 60-minute for static
-- **Automatic Retry**: Exponential backoff for failed requests
+- **Automatic Retry**: Exponential backoff for failed GET requests; writes (POST) are never retried blindly
 - **Rate Limiting**: Respects Mindbody's 2000 requests/hour limit
 
 ### Pagination

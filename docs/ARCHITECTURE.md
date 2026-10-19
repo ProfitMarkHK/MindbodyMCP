@@ -69,12 +69,12 @@ Design principles:
 
 #### Client (`api/client.ts`)
 - HTTP request handling
-- Automatic retry logic
+- Automatic retry logic (GET/HEAD/OPTIONS only)
 - Error formatting
 - Request/response interceptors
 
 Features:
-- Exponential backoff
+- Exponential backoff (GET only; POSTs are not retried)
 - Connection pooling
 - Timeout handling
 - Error transformation
@@ -159,7 +159,7 @@ classCache.get(`classes:${teacherId}:${dateRange}`)
 
 ### 4. Error Recovery
 
-- Automatic retry with backoff
+- Automatic retry with backoff for GET requests; failed POSTs throw a reconcile message instead
 - Token refresh on 401
 - Graceful degradation
 - Circuit breaker pattern (planned)
@@ -231,7 +231,7 @@ Return to User
 ### Error Categories
 
 1. **User Errors**: Clear messages, no retry
-2. **API Errors**: Automatic retry, fallback
+2. **API Errors**: GET: automatic retry, fallback. POST: not retried, reconcile first
 3. **System Errors**: Log and alert
 4. **Rate Limits**: Cache and backoff
 

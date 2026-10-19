@@ -47,7 +47,7 @@ mindbody-mcp/
 ### 1. **High-Performance Architecture**
 - Bun runtime for 4x faster startup
 - Intelligent caching system
-- Automatic retry with exponential backoff
+- Automatic retry with exponential backoff for GET requests (POSTs fail loudly, not retried)
 - Connection pooling
 
 ### 2. **Developer Experience**
