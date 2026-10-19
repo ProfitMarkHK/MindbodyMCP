@@ -105,11 +105,4 @@ jobs:
         run: npm audit --audit-level=moderate || true
         
       - name: Check for secrets
-        run: |
-          # Check for potential secrets in code (actual values, not env var references)
-          # Look for patterns like API_KEY="actual_value" or hardcoded keys
-          if grep -r -E "(MINDBODY_API_KEY|MINDBODY_SOURCE_PASSWORD)\s*=\s*['\"].*['\"]" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude="*.md" --exclude=".env.example" .; then
-            echo "Error: Potential secrets found in code"
-            exit 1
-          fi
-          echo "No hardcoded secrets found ✓"
+        run: bash scripts/secret-scan.sh

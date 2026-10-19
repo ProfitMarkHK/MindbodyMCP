@@ -24,11 +24,15 @@ metadata:
   name: mindbody-mcp-secrets
   namespace: mindbody-mcp
 type: Opaque
+# Placeholders only - never commit a real credential here.
+# Supply the live values out-of-band (kubectl create secret, External Secrets
+# Operator, sealed-secrets). The CI secret scan fails the build on any
+# key-shaped assignment with a long quoted value, by design.
 stringData:
-  MINDBODY_API_KEY: "your-api-key-here"
+  MINDBODY_API_KEY: "REPLACE"
   MINDBODY_SITE_ID: "your-site-id-here"
   MINDBODY_SOURCE_NAME: "your-source-name-here"
-  MINDBODY_SOURCE_PASSWORD: "your-source-password-here"
+  MINDBODY_SOURCE_PASSWORD: "REPLACE"
 ---
 apiVersion: apps/v1
 kind: Deployment
