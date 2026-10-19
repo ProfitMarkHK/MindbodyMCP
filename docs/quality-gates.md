@@ -58,7 +58,7 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 
 | # | Gate | State | Command / note |
 |---|------|-------|----------------|
-| 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. Includes `tests/nextjs-paging.test.ts`, the tests for the Next.js app's pager and service (the app has no test runner of its own). |
+| 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] root = "./tests"`, so discovery never walks nested worktrees or scratch checkouts in the repo root (Bun ignores `.gitignore` for discovery) — see gate 1 below. It also sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. Includes `tests/nextjs-paging.test.ts`, the tests for the Next.js app's pager and service (the app has no test runner of its own). |
 | 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
 | 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured, in the root or in `nextjs-app/` (`next lint` has no config to run and only offers to create one). See gaps 3a, 3b and 3c below. |
 | 4 | New code covered by non-trivial tests | applies | manual review — the change's tests must exercise real logic paths, assert on outputs or state, and cover error paths, not just "returns without error". |
@@ -114,6 +114,22 @@ and not needed" from "forgotten":
     above ≈`0.1667` is red today. Next are `src/utils/dates.ts` (20.00% funcs),
     `src/api/client.ts` (35.71% funcs) and `src/cache/index.ts` (37.50% funcs). The real work is tests for
     `src/api/auth.ts` and `src/api/client.ts`, the two lowest-covered files.
+
+  **Discovery is scoped to `tests/` — do not remove `[test] root`.** `bunfig.toml`
+  also sets `[test] root = "./tests"`. Without it, a bare `bun test` walks the
+  entire working tree, and this repo's layout puts git worktrees *inside* the
+  main checkout (`chore-spec-integrity-gate/`, `fix-sandbox-observed-behaviour/`,
+  `t3-*/`). Each one was collected as another copy of the whole suite: observed
+  2026-10-19 from the main checkout, **1586 tests across 47 files** with **four**
+  `GATE2_E2E_RESULT` lines (75–76 tests) and **four** `GATE13_PAGINATION_RESULT`
+  lines (`sites=65`, `65`, `68`, `65`) — different numbers because each checkout
+  was at a different commit. Anyone reading "one" count was reading whichever copy
+  sorted last. Bun does **not** honour `.gitignore` for test discovery (verified:
+  gitignoring a nested copy still collected it), so `root` is the only fix that
+  holds for every invocation, including a bare `bun test` typed by hand and
+  `bun run test`. Explicit paths still resolve as before — `bun test ./tests` and
+  the opt-in live tier `bun test ./tests/live/mindbody-live.e2e.ts` both work.
+  `scripts/check-gates.sh` additionally passes `./tests` as belt-and-braces.
 
   **Coverage-collection caveat — `bun test` reports files it never ran.** This is
   separate from the threshold and matters precisely when the threshold is
