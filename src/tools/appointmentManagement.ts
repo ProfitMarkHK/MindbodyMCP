@@ -237,8 +237,22 @@ const ATTENDANCE_FINAL_STATUSES = new Set(['Completed', 'NoShow']);
  */
 const TERMINAL_STATUSES = new Set(['Cancelled', 'LateCancelled']);
 
-/** Statuses from which a cancellation is refused. */
-const NON_CANCELLABLE_STATUSES = new Set([...TERMINAL_STATUSES, ...ATTENDANCE_FINAL_STATUSES]);
+/**
+ * An arrived client is physically present, so cancelling (and above all
+ * late-cancelling, which forfeits the service) is a staff-side correction that
+ * belongs in the Mindbody front desk, not in an AI-driven tool. The future-start
+ * guard does not catch it: a client can be marked arrived on an appointment
+ * booked for later. Fail closed; the caller is told how to proceed.
+ */
+const ARRIVED_STATUS = 'Arrived';
+
+/**
+ * Statuses from which a cancellation is refused. The Cancelled/LateCancelled
+ * entries are defence in depth: the sandbox never returns those rows from
+ * /appointment/staffappointments (D-4), so a re-cancel normally ends at "not
+ * found for this client" before reaching this check.
+ */
+const NON_CANCELLABLE_STATUSES = new Set([...TERMINAL_STATUSES, ...ATTENDANCE_FINAL_STATUSES, ARRIVED_STATUS]);
 
 const NOT_FOUND_FOR_CLIENT = 'not found for this client';
 const AMBIGUOUS_LOOKUP = 'appointment returned more than once by lookup; refusing ambiguous data';
@@ -618,7 +632,10 @@ function cancellationRejectionReason(
   if (startMs <= nowMs) return 'appointment has already started or is in the past';
 
   if (NON_CANCELLABLE_STATUSES.has(row.Status)) {
-    return `appointment status is ${row.Status}, which cannot be cancelled`;
+    const hint = row.Status === ARRIVED_STATUS
+      ? '; un-arrive it (updateAppointment execute "unarrive") or cancel it in Mindbody directly'
+      : '';
+    return `appointment status is ${row.Status}, which cannot be cancelled${hint}`;
   }
   return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
 }

@@ -211,6 +211,24 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
     });
   }
 
+  it("rejects an Arrived appointment that has not started yet, plain or late, and says how to proceed", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "72"; // the window must not let an arrived client through
+    try {
+      for (const lateCancel of [false, true]) {
+        const client = new RecordingClient([row(1, { Status: "Arrived" })]);
+        const result = await cancelAppointmentsTool(CLIENT, [1], lateCancel, false, client, client.cache);
+        expect(result.success).toBe(false);
+        expect(result.rejected).toHaveLength(1);
+        expect(result.rejected[0].reason).toContain("appointment status is Arrived, which cannot be cancelled");
+        expect(result.rejected[0].reason).toContain("unarrive");
+        expect(result.rejected[0].reason).toContain("Mindbody directly");
+        expect(client.posts).toHaveLength(0);
+      }
+    } finally {
+      delete process.env[LATE_CANCEL_WINDOW_ENV];
+    }
+  });
+
   it("is all-or-nothing: one good and one bad id cancels neither", async () => {
     const client = new RecordingClient([row(1), row(2, { Status: "Cancelled" })]);
     const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, client, client.cache);

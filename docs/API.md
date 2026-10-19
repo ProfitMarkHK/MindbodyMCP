@@ -218,9 +218,19 @@ All guards run before any cancellation is sent. The request is all-or-nothing: i
 - 1 to 3 appointment IDs (`MAX_CANCELLATIONS_PER_REQUEST`), no duplicates.
 - Each appointment must belong to `clientId`. Ownership is checked with `GET /appointment/staffappointments` filtered by `ClientId`. An appointment that belongs to another client, or falls outside the lookup window (today through two years out), is reported as "not found for this client".
 - Each appointment must start in the future, compared in the site's timezone. If the site timezone cannot be resolved, nothing is written (see the error table).
-- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed` or `NoShow`.
+- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed`, `NoShow` or `Arrived` (see below).
 
 Once the guards pass, each cancellation is sent through `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`), one at a time.
+
+#### Arrived appointments
+
+`Arrived` is non-cancellable through this tool, even when the start time is still in the future (a client can be marked arrived on an appointment booked for later). An arrived client is physically present, so cancelling, and especially late-cancelling, which forfeits the service, is a staff-side correction that belongs in the Mindbody front desk, not in an AI-driven tool. The tool fails closed and its error tells the caller to un-arrive the appointment or cancel it in Mindbody directly.
+
+The `Cancelled` / `LateCancelled` status check is defence in depth. The sandbox never returns those rows from `GET /appointment/staffappointments` (D-4 in `docs/mindbody-spec-discrepancies.md`), so re-cancelling an already-cancelled appointment normally ends at `not found for this client` before the status check is reached.
+
+#### Email is not dry-run
+
+There is no dry-run for cancellation. `sendEmail` defaults to `false`, but `sendEmail: true` makes Mindbody email the real client (only if the client has an email address and automatic emails have been set up), and the cancellation itself is committed. Nothing in the tool previews or undoes either.
 
 #### Late-cancel window
 
@@ -255,7 +265,7 @@ interface CancelAppointmentsResponse {
 |-----------------------------|-------------|----------|
 | `not found for this client` | Missing, owned by another client, or outside the lookup window. Nothing is cancelled. | Check the ID and client ID |
 | `appointment has already started or is in the past` | Start time is not in the future. Nothing is cancelled. | Nothing to cancel |
-| `appointment status is <Status>, which cannot be cancelled` | Already Cancelled, LateCancelled, Completed or NoShow. Nothing is cancelled. | Completed means checked out; it cannot be cancelled here |
+| `appointment status is <Status>, which cannot be cancelled` | Already Cancelled, LateCancelled, Completed, NoShow or Arrived. Nothing is cancelled. For `Arrived` the message adds how to proceed. | Completed means checked out; it cannot be cancelled here. For Arrived, un-arrive it (`updateAppointment` with `execute: "unarrive"`) or cancel it in Mindbody directly |
 | `duplicate appointment id in request` | The same ID appears twice | Remove the duplicate |
 | `late cancel refused: it starts more than N hour(s) from now, ...` | `lateCancel: true` on an appointment outside `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. Nothing is cancelled. | Cancel without `lateCancel` |
 | `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |

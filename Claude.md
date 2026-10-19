@@ -470,7 +470,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 - 1 to 3 IDs (`MAX_CANCELLATIONS_PER_REQUEST`), no duplicates.
 - Each appointment must belong to `clientId`. Ownership is checked with `GET /appointment/staffappointments` filtered by `ClientId`. An appointment that belongs to someone else, or falls outside the lookup window (today through two years out), is reported as "not found for this client".
 - Each appointment must start in the future, compared in the site's timezone (see "Dates and timezones" under Configuration). If that zone cannot be resolved, nothing is written.
-- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed` or `NoShow`.
+- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed`, `NoShow` or `Arrived`. `Arrived` is refused by decision: see "Arrived appointments" in `docs/API.md`.
 
 All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` gives the reason for each failing ID. If the verification lookup itself fails, nothing is cancelled. Once the guards pass, cancellations are sent one at a time via `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`). If one of those writes fails, the cancellations already made stand: they are listed in `cancelled`, and the failing ID appears in `rejected`.
 

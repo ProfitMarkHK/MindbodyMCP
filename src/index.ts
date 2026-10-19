@@ -654,7 +654,8 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           `Cancel future appointments for a single client. Guards, all checked before anything is cancelled: ` +
           `one client per call; 1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs, no duplicates; ` +
           `each appointment must belong to that client, start in the future, and not already be ` +
-          `cancelled, late-cancelled, completed or a no-show. All-or-nothing: if any ID fails a guard, ` +
+          `cancelled, late-cancelled, completed, a no-show or arrived (un-arrive it or cancel in Mindbody directly). ` +
+          `Not a dry run: sendEmail (default false) can email a real client. All-or-nothing: if any ID fails a guard, ` +
           `none are cancelled. Cancellations run one at a time and stop at the first failure.`,
         inputSchema: {
           type: 'object',
