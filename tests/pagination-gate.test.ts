@@ -8,36 +8,55 @@
  * with a single GET is a failure. There is no allowlist.
  *
  * How it works: docs/openapi.json is loaded and every GET path is classified as
- * paginated or not. Every TypeScript file (.ts and .tsx) under src/ AND under
- * nextjs-app/src/ is then scanned (comments blanked out first, line numbers
- * preserved) for API GET call sites:
+ * paginated or not. Every TypeScript file (.ts and .tsx) under each scan root is
+ * then parsed with the TypeScript compiler (one Program per root, using that
+ * root's own tsconfig so `@/` imports resolve) and every call is classified by
+ * the TYPE of its receiver, not by the identifier it happens to be bound to:
  *
- *   - `fetchAllPages(<client>, '<path>', …)` — with or without a type argument,
- *     over any number of lines, whatever the first argument (`client`,
- *     `this.client`, …);
- *   - `<client>.get('<path>', …)` / `<client>.get<T>('<path>', …)` with a string
- *     literal starting with '/', on any receiver;
- *   - `client.get(…)` / `mindbodyClient.get(…)` / `this.client.get(…)` with a
- *     NON-literal first argument, and any `.request(…)` on those receivers:
- *     these cannot be resolved to a path, so they fail rule 5 rather than escape
- *     the scan. Two structural exemptions, both located by parsing rather than
- *     by line number: the request issued inside the body of `fetchAllPages`
- *     itself, and the forwarding calls inside the body of `class
- *     MindbodyApiClient` (the HTTP wrapper whose `.get()` hands the path to
- *     axios; its own call sites are what the scan checks).
+ *   - `fetchAllPages(<client>, <path>, …)`, however it is imported or aliased
+ *     (`import { fetchAllPages as pageAll }`, `paging.fetchAllPages(…)`);
+ *   - `<receiver>.get(<path>, …)`, `<receiver>?.get(…)`, `<receiver>['get'](…)`
+ *     and `(<receiver>.get as any)(…)`, on any receiver whose type is not a
+ *     known benign one. The path is resolved by type, so a hoisted
+ *     `const PATH = '/class/classes'` counts as the literal it is;
+ *   - when the path does not resolve to a literal starting with '/', the call
+ *     cannot be classified, so it fails rule 5 rather than escape the scan; the
+ *     same goes for any `.request(…)` and for `.get` / `.request` / `fetchAllPages`
+ *     taken as a value (`const g = client.get`, `client.get.bind(client)`).
+ *
+ * Benign receivers (BENIGN_RECEIVER_TYPES) are the types whose `.get` is a keyed
+ * lookup, never an HTTP read: `Map`, `URLSearchParams`, `Headers` and this repo's
+ * own TTL caches. Fail-closed: a receiver typed `any`, an axios object, or any
+ * type not on that list is treated as a possible Mindbody client. So a path-keyed
+ * `routeTable.get('/class/classes')` on a `Map` is ignored on purpose, while the
+ * same call on a renamed client, an aliased import or `this.mindbody` is not.
+ * Two structural exemptions, both located by parsing rather than by line number:
+ * the request issued inside the body of `fetchAllPages` itself, and the
+ * forwarding calls inside the body of `class MindbodyApiClient` (the HTTP wrapper
+ * whose `.get()` hands the path to axios; its own call sites are what the scan
+ * checks).
  *
  * Every rule is its own test, and its failure message lists every offender as
  * `file:line → path`. The suite prints `GATE13_PAGINATION_RESULT sites=N
  * violations=M` from afterAll, consumed by scripts/check-gates.sh. The line is
  * printed only when the scan itself completed, so a crash is fail-closed.
+ *
+ * The scanner self-test runs the same scanner over tests/fixtures/gate13/, which
+ * sits outside every scan root: one fixture per known escape asserts the gate
+ * goes red on it.
  */
 import { afterAll, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "fs";
-import { join, relative, resolve } from "path";
+import { dirname, join, relative, resolve } from "path";
+import ts from "typescript";
 
 const ROOT = resolve(__dirname, "..");
-/** Every directory the scan covers. Add a root here, never an exemption. */
-const SCAN_ROOTS = [join(ROOT, "src"), join(ROOT, "nextjs-app/src")];
+/** Every directory the scan covers, with the tsconfig its imports resolve under. Add a root here, never an exemption. */
+const SCAN_ROOTS = [
+  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json") },
+  { dir: join(ROOT, "nextjs-app/src"), tsconfig: join(ROOT, "nextjs-app/tsconfig.json") },
+];
+const FIXTURE_DIR = join(ROOT, "tests/fixtures/gate13");
 const SPEC_PATH = join(ROOT, "docs/openapi.json");
 
 /**
@@ -55,6 +74,23 @@ const SPEC_PATH = join(ROOT, "docs/openapi.json");
  * removed.
  */
 const MIN_EXPECTED_SITES = 58;
+
+/**
+ * Receiver types whose `.get` is a keyed lookup, never a Mindbody HTTP read.
+ * Matched on the type's symbol name. A type missing from this list is flagged,
+ * not ignored (fail-closed): add a cache or collection type here only when its
+ * `.get` provably cannot reach the network.
+ */
+const BENIGN_RECEIVER_TYPES = new Set([
+  "Map",
+  "ReadonlyMap",
+  "WeakMap",
+  "URLSearchParams",
+  "Headers",
+  "SimpleCache", // src/cache
+  "SimpleTtlCache", // nextjs-app/src/lib/mindbody/siteTime.ts
+  "TtlCache", // same file, the interface
+]);
 
 const PAGINATION_LIMIT_PARAMS = new Set(["request.limit", "getcoursesrequest.limit"]);
 const PAGINATION_OFFSET_PARAMS = new Set(["request.offset", "getcoursesrequest.offset"]);
@@ -106,252 +142,179 @@ function listSourceFiles(dir: string): string[] {
   return out.sort();
 }
 
-/**
- * Replace every comment character with a space (newlines kept), leaving code and
- * string literals intact, so commented-out calls are not counted and offsets map
- * to the same line numbers as the original file.
- */
-function blankComments(source: string): string {
-  const out = source.split("");
-  let i = 0;
-  const n = source.length;
-  while (i < n) {
-    const c = source[i];
-    const next = source[i + 1];
-    if (c === "/" && next === "/") {
-      while (i < n && source[i] !== "\n") out[i++] = " ";
-    } else if (c === "/" && next === "*") {
-      out[i++] = " ";
-      out[i++] = " ";
-      while (i < n && !(source[i] === "*" && source[i + 1] === "/")) {
-        if (source[i] !== "\n") out[i] = " ";
-        i++;
-      }
-      if (i < n) {
-        out[i++] = " ";
-        out[i++] = " ";
-      }
-    } else if (c === "'" || c === '"' || c === "`") {
-      i = skipString(source, i);
-    } else {
-      i++;
-    }
+/** A Program over `files` under the options of `tsconfig`; diagnostics are never read, only types. */
+function createProgram(files: string[], tsconfig: string): ts.Program {
+  const config = ts.readConfigFile(tsconfig, ts.sys.readFile);
+  const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(tsconfig), undefined, tsconfig);
+  return ts.createProgram(files, {
+    ...options,
+    noEmit: true,
+    incremental: false,
+    composite: false,
+    declaration: false,
+    declarationMap: false,
+    sourceMap: false,
+    rootDir: undefined,
+    outDir: undefined,
+    allowJs: false,
+    types: [],
+  });
+}
+
+/** Strip parentheses, casts, `!` and `satisfies`, so `(client.get as any)(…)` reads as `client.get(…)`. */
+function unwrap(node: ts.Expression): ts.Expression {
+  while (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
+    node = node.expression;
   }
-  return out.join("");
+  return node;
 }
 
-/** Index just past the string literal opening at `start`. Template `${}` nesting is followed. */
-function skipString(source: string, start: number): number {
-  const quote = source[start];
-  let i = start + 1;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "\\") {
-      i += 2;
-      continue;
-    }
-    if (c === quote) return i + 1;
-    if (quote === "`" && c === "$" && source[i + 1] === "{") {
-      i = skipBalanced(source, i + 1, "{", "}");
-      continue;
-    }
-    if (quote !== "`" && c === "\n") return i;
-    i++;
+const HTTP_METHODS = new Set(["get", "request"]);
+
+/** `recv.get`, `recv?.get` and `recv['get']`, cast or parenthesised; null for anything else. */
+function memberOf(expr: ts.Expression): { name: string; receiver: ts.Expression; node: ts.Expression; at: ts.Node } | null {
+  const node = unwrap(expr);
+  if (ts.isPropertyAccessExpression(node)) return { name: node.name.text, receiver: node.expression, node, at: node.name };
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
+    return { name: node.argumentExpression.text, receiver: node.expression, node, at: node.argumentExpression };
   }
-  return i;
+  return null;
 }
 
-/** Index just past the bracket that closes the one at `start`, skipping strings. */
-function skipBalanced(source: string, start: number, open: string, close: string): number {
-  let depth = 0;
-  let i = start;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "'" || c === '"' || c === "`") {
-      i = skipString(source, i);
-      continue;
-    }
-    if (c === open) depth++;
-    else if (c === close) {
-      depth--;
-      if (depth === 0) return i + 1;
-    }
-    i++;
-  }
-  return i;
+/** [fetchAllPages body, class MindbodyApiClient body] of this file: the transport, exempt from rule 5. */
+function exemptRanges(sf: ts.SourceFile): ts.Node[] {
+  const out: ts.Node[] = [];
+  const walk = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "fetchAllPages" && node.body) out.push(node.body);
+    else if (ts.isClassDeclaration(node) && node.name?.text === "MindbodyApiClient") out.push(node);
+    ts.forEachChild(node, walk);
+  };
+  walk(sf);
+  return out;
 }
 
-function skipWs(source: string, i: number): number {
-  while (i < source.length && /\s/.test(source[i])) i++;
-  return i;
-}
-
-/** Index just past `<…>` at `i` if there is a type argument list there, else `i`. */
-function skipTypeArgs(source: string, i: number): number {
-  return source[i] === "<" ? skipBalanced(source, i, "<", ">") : i;
-}
-
-/** Index of the end of the call argument starting at `i` (top-level `,` or `)`). */
-function argEnd(source: string, i: number): number {
-  let depth = 0;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "'" || c === '"' || c === "`") {
-      i = skipString(source, i);
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      if (depth === 0) return i;
-      depth--;
-    } else if (c === "," && depth === 0) return i;
-    i++;
-  }
-  return i;
-}
-
-/** The literal value if the argument at `i` is a plain string literal (no `${}`), else null. */
-function literalAt(source: string, i: number): string | null {
-  const quote = source[i];
-  if (quote !== "'" && quote !== '"' && quote !== "`") return null;
-  const end = skipString(source, i);
-  const body = source.slice(i + 1, end - 1);
-  if (quote === "`" && body.includes("${")) return null;
-  const after = skipWs(source, end);
-  if (source[after] !== "," && source[after] !== ")") return null;
-  return body;
-}
-
-function lineOf(source: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index; i++) if (source[i] === "\n") line++;
-  return line;
-}
-
-/** [start, end) of the body of `function fetchAllPages`, if this file declares it. */
-function pagerBody(code: string): [number, number] | null {
-  const decl = /\bfunction\s+fetchAllPages\b/.exec(code);
-  if (!decl) return null;
-  const params = code.indexOf("(", decl.index);
-  const afterParams = skipBalanced(code, params, "(", ")");
-  const brace = code.indexOf("{", afterParams);
-  // Skip a return-type annotation such as `Promise<{ items: T[] }>` before the body.
-  let i = afterParams;
-  while (i < code.length && code[i] !== "{") {
-    if (code[i] === "<") {
-      i = skipBalanced(code, i, "<", ">");
-      continue;
-    }
-    i++;
-  }
-  const start = i < code.length ? i : brace;
-  return [start, skipBalanced(code, start, "{", "}")];
-}
-
-/**
- * [start, end) of the body of `class MindbodyApiClient`, if this file declares
- * it. Both code bases wrap axios in a class of that name whose `get()` /
- * `request()` forward a caller-supplied path to `this.client` (the axios
- * instance). Those forwarding calls are the transport, not Mindbody call sites,
- * so they are exempt from rule 5; the wrapper's own callers are what the scan
- * checks. Located by parsing, like the pager body, never by line number.
- */
-function wrapperClassBody(code: string): [number, number] | null {
-  const decl = /\bclass\s+MindbodyApiClient\b/.exec(code);
-  if (!decl) return null;
-  const start = code.indexOf("{", decl.index);
-  if (start < 0) return null;
-  return [start, skipBalanced(code, start, "{", "}")];
-}
-
-/**
- * Receivers that are known to be a Mindbody HTTP client: a bare `client` or
- * `mindbodyClient` (the MCP server) or `this.client` (the Next.js service and
- * the wrapper classes). Property access on anything else (`cache.get`,
- * `map.get`) is not a Mindbody call and is ignored when its path is non-literal.
- */
-const MINDBODY_CLIENT_RECEIVER = /(?:^|[^\w$.])(client|mindbodyClient|this\s*\.\s*client)\s*$/;
-
-function scanFile(file: string, sites: CallSite[], unresolved: Unresolved[]): void {
-  const original = readFileSync(file, "utf-8");
-  const code = blankComments(original);
+function scanFile(
+  program: ts.Program,
+  file: string,
+  sites: CallSite[],
+  unresolved: Unresolved[]
+): void {
+  const checker = program.getTypeChecker();
+  const sf = program.getSourceFile(file);
+  if (!sf) throw new Error(`Gate 13: ${file} is not part of the TypeScript program`);
   const rel = relative(ROOT, file);
-  const pager = pagerBody(code);
-  const wrapper = wrapperClassBody(code);
-  const inside = (range: [number, number] | null, index: number) =>
-    range !== null && index >= range[0] && index < range[1];
-  const insidePager = (index: number) => inside(pager, index) || inside(wrapper, index);
+  const exempt = exemptRanges(sf);
+  const isExempt = (node: ts.Node) => exempt.some((r) => node.pos >= r.pos && node.end <= r.end);
+  const lineOf = (node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  const flag = (node: ts.Node, reason: string) => unresolved.push({ file: rel, line: lineOf(node), reason });
 
-  // fetchAllPages(client, '<path>', …)
-  for (const match of code.matchAll(/\bfetchAllPages\b/g)) {
-    const at = match.index!;
-    if (/\bfunction\s+$/.test(code.slice(Math.max(0, at - 20), at))) continue; // the declaration
-    let i = skipWs(code, at + match[0].length);
-    i = skipWs(code, skipTypeArgs(code, i));
-    if (code[i] !== "(") continue; // an import/export specifier, not a call
-    const firstArgEnd = argEnd(code, i + 1);
-    if (code[firstArgEnd] !== ",") {
-      unresolved.push({ file: rel, line: lineOf(code, at), reason: "fetchAllPages call with no path argument" });
-      continue;
-    }
-    const path = literalAt(code, skipWs(code, firstArgEnd + 1));
-    if (path === null || !path.startsWith("/")) {
-      unresolved.push({ file: rel, line: lineOf(code, at), reason: "fetchAllPages path is not a string literal starting with '/'" });
-      continue;
-    }
-    sites.push({ kind: "fetchAllPages", file: rel, line: lineOf(code, at), path });
-  }
+  /** Type-directed: is this receiver a Map/cache-like type whose `.get` is never an HTTP read? */
+  const isBenign = (receiver: ts.Expression) => {
+    const type = checker.getNonNullableType(checker.getTypeAtLocation(receiver));
+    const parts = type.isUnion() ? type.types : [type];
+    return parts.every((t) => BENIGN_RECEIVER_TYPES.has((t.getSymbol() ?? t.aliasSymbol)?.name ?? ""));
+  };
 
-  // <receiver>.get('<path>', …) and <receiver>.get<T>('<path>', …)
-  for (const match of code.matchAll(/\.\s*get\b/g)) {
-    const at = match.index!;
-    let i = skipWs(code, at + match[0].length);
-    i = skipWs(code, skipTypeArgs(code, i));
-    if (code[i] !== "(") continue;
-    const argStart = skipWs(code, i + 1);
-    const path = literalAt(code, argStart);
-    if (path !== null && path.startsWith("/")) {
-      sites.push({ kind: "get", file: rel, line: lineOf(code, at), path });
-      continue;
-    }
-    const receiver = code.slice(Math.max(0, at - 40), at);
-    if (MINDBODY_CLIENT_RECEIVER.test(receiver) && !insidePager(at)) {
-      unresolved.push({ file: rel, line: lineOf(code, at), reason: "Mindbody client .get() with a non-literal path" });
-    }
-  }
+  /** The literal a path argument resolves to: a literal, or a const/`as const` whose type is one. */
+  const pathOf = (arg: ts.Expression | undefined): string | null => {
+    if (!arg) return null;
+    const node = unwrap(arg);
+    if (ts.isStringLiteralLike(node)) return node.text;
+    const type = checker.getTypeAtLocation(node);
+    return type.isStringLiteral() ? type.value : null;
+  };
 
-  // client.request(…) bypasses .get()/fetchAllPages and cannot be classified.
-  for (const match of code.matchAll(/\.\s*request\b/g)) {
-    const at = match.index!;
-    let i = skipWs(code, at + match[0].length);
-    i = skipWs(code, skipTypeArgs(code, i));
-    if (code[i] !== "(") continue;
-    const receiver = code.slice(Math.max(0, at - 40), at);
-    if (MINDBODY_CLIENT_RECEIVER.test(receiver) && !insidePager(at)) {
-      unresolved.push({ file: rel, line: lineOf(code, at), reason: "Mindbody client .request() bypasses the GET scan" });
+  /** `fetchAllPages`, `paging.fetchAllPages`, or an import alias of it. */
+  const isPager = (expr: ts.Expression) => {
+    const node = unwrap(expr);
+    if (ts.isPropertyAccessExpression(node)) return node.name.text === "fetchAllPages";
+    if (!ts.isIdentifier(node)) return false;
+    if (node.text === "fetchAllPages") return true;
+    const decl = checker.getSymbolAtLocation(node)?.declarations?.[0];
+    return !!decl && ts.isImportSpecifier(decl) && (decl.propertyName ?? decl.name).text === "fetchAllPages";
+  };
+
+  const handled = new Set<ts.Node>(); // callees, so the value-reference rules do not re-flag them
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isJSDoc(node)) return;
+
+    if (ts.isCallExpression(node)) {
+      const callee = unwrap(node.expression);
+      const member = memberOf(node.expression);
+      if (isPager(node.expression)) {
+        handled.add(callee);
+        if (ts.isPropertyAccessExpression(callee)) handled.add(callee.name);
+        const path = node.arguments.length < 2 ? null : pathOf(node.arguments[1]);
+        if (node.arguments.length < 2) flag(callee, "fetchAllPages call with no path argument");
+        else if (path === null || !path.startsWith("/")) flag(callee, "fetchAllPages path is not a string literal starting with '/'");
+        else sites.push({ kind: "fetchAllPages", file: rel, line: lineOf(callee), path });
+      } else if (member && HTTP_METHODS.has(member.name)) {
+        handled.add(member.node);
+        if (!isExempt(node) && !isBenign(member.receiver)) {
+          const path = member.name === "get" ? pathOf(node.arguments[0]) : null;
+          if (path !== null && path.startsWith("/")) sites.push({ kind: "get", file: rel, line: lineOf(member.at), path });
+          else flag(member.at, `.${member.name}() on a receiver that is not a Map or cache, with no literal '/…' path the scanner can check`);
+        }
+      }
+    } else if (ts.isIdentifier(node) && !handled.has(node) && isPager(node)) {
+      const parent = node.parent;
+      const declaration = ts.isFunctionDeclaration(parent) && parent.name === node;
+      if (!declaration && !ts.isImportSpecifier(parent) && !ts.isExportSpecifier(parent) && !ts.isPropertyAccessExpression(parent)) {
+        flag(node, "fetchAllPages used as a value, not called");
+      }
+    } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const member = memberOf(node);
+      if (member && HTTP_METHODS.has(member.name) && !handled.has(node) && !isExempt(node) && !isBenign(member.receiver)) {
+        flag(member.at, `.${member.name} taken as a value (alias, bind or call) escapes the scan`);
+      }
     }
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+}
+
+function scanFiles(files: string[], tsconfig: string): { sites: CallSite[]; unresolved: Unresolved[] } {
+  const sites: CallSite[] = [];
+  const unresolved: Unresolved[] = [];
+  const program = createProgram(files, tsconfig);
+  for (const file of files) scanFile(program, file, sites, unresolved);
+  return { sites, unresolved };
 }
 
 function scan(): { specGets: Map<string, SpecGet>; sites: CallSite[]; unresolved: Unresolved[] } {
   const specGets = loadSpecGets();
   const sites: CallSite[] = [];
   const unresolved: Unresolved[] = [];
-  for (const root of SCAN_ROOTS) for (const file of listSourceFiles(root)) scanFile(file, sites, unresolved);
+  for (const root of SCAN_ROOTS) {
+    const found = scanFiles(listSourceFiles(root.dir), root.tsconfig);
+    sites.push(...found.sites);
+    unresolved.push(...found.unresolved);
+  }
   return { specGets, sites, unresolved };
 }
 
 const describeSite = (site: CallSite) => `${site.file}:${site.line} → ${site.path} (${site.kind})`;
 
+/** Rules 1, 2, 3 and 5 for a set of scan results (rule 4 is about the real roots only). */
+function classify(specGets: Map<string, SpecGet>, sites: CallSite[], unresolved: Unresolved[]) {
+  return {
+    singleGetOnPaginated: sites.filter((s) => s.kind === "get" && specGets.get(normalisePath(s.path))?.paginated === true),
+    unknownPaths: sites.filter((s) => !specGets.has(normalisePath(s.path))),
+    pagingNonPaginated: sites.filter((s) => s.kind === "fetchAllPages" && specGets.get(normalisePath(s.path))?.paginated === false),
+    unresolved,
+  };
+}
+
 const { specGets, sites, unresolved } = scan();
 
-const singleGetOnPaginated = sites.filter(
-  (site) => site.kind === "get" && specGets.get(normalisePath(site.path))?.paginated === true
-);
-const unknownPaths = sites.filter((site) => !specGets.has(normalisePath(site.path)));
-const pagingNonPaginated = sites.filter(
-  (site) => site.kind === "fetchAllPages" && specGets.get(normalisePath(site.path))?.paginated === false
-);
+const { singleGetOnPaginated, unknownPaths, pagingNonPaginated } = classify(specGets, sites, unresolved);
 const sanityShortfall = sites.length < MIN_EXPECTED_SITES ? 1 : 0;
 const violations =
   singleGetOnPaginated.length + unknownPaths.length + pagingNonPaginated.length + unresolved.length + sanityShortfall;
@@ -391,7 +354,7 @@ describe("Gate 13 — mandatory pagination", () => {
     // Every scan root contributed: a root that is silently dropped (renamed,
     // moved, or filtered out by the file-extension test) must not pass.
     for (const root of SCAN_ROOTS) {
-      const prefix = relative(ROOT, root);
+      const prefix = relative(ROOT, root.dir);
       expect(sites.some((site) => site.file.startsWith(prefix)), `no call sites found under ${prefix}/`).toBe(true);
     }
   });
@@ -404,67 +367,78 @@ describe("Gate 13 — mandatory pagination", () => {
 });
 
 describe("Gate 13 — scanner self-test", () => {
-  // Fixtures for the scanner itself, so a regex regression shows up here and not
+  // The scanner run over tests/fixtures/gate13/ (outside every scan root, so the
+  // real gate never sees them). A regression in the scanner shows up here, not
   // only as a silently lower site count.
-  const fixture = [
-    "import { fetchAllPages } from '../api/client.js';",
-    "// client.get('/class/classes') in a comment is ignored",
-    "/* fetchAllPages(client, '/sale/sales', {}, 'Sales') */",
-    "const a = await fetchAllPages<any>(",
-    "  client,",
-    "  '/site/locations',",
-    "  {},",
-    "  'Locations'",
-    ");",
-    "const b = await client.get<{ X: number }>(\"/class/classvisits\", { params: {} });",
-    "const c = await mindbodyClient",
-    "  .get(`/staff/staff`);",
-    "const d = cache.get<any>(cacheKey);",
-    "const e = await client.get(dynamicPath);",
-    "const f = await fetchAllPages(client, `/x/${y}`, {}, 'X');",
-    "const g = await client.request({ method: 'GET', url: '/class/classes' });",
-    "const h = 'https://example.invalid/not-a-comment'; const i = await client.get('/site/sites');",
-    "const j = await fetchAllPages<any>(this.client, '/sale/products', {}, 'Products');",
-    "const k = await this.client.get<any>(somePath, { params });",
-    "class MindbodyApiClient {",
-    "  async get<T>(endpoint: string): Promise<T> { return this.client.get<T>(endpoint); }",
-    "  async request<T>(c: any): Promise<T> { return this.client.request<T>(c); }",
-    "}",
-    "const l = await this.client.get<any>('/site/activationcode');",
-  ].join("\n");
+  const fixtureProgram = createProgram(listSourceFiles(FIXTURE_DIR), join(ROOT, "tsconfig.json"));
+  const scanFixture = (name: string) => {
+    const found: CallSite[] = [];
+    const bad: Unresolved[] = [];
+    scanFile(fixtureProgram, join(FIXTURE_DIR, name), found, bad);
+    return { found, bad, tally: classify(specGets, found, bad) };
+  };
+  const lines = (items: { line: number }[]) => items.map((i) => i.line).sort((a, b) => a - b);
 
-  it("finds multi-line, generic and chained calls, ignores comments, flags unresolvable ones", () => {
-    const tmp = join(require("os").tmpdir(), `gate13-fixture-${process.pid}.ts`);
-    require("fs").writeFileSync(tmp, fixture);
-    try {
-      const found: CallSite[] = [];
-      const bad: Unresolved[] = [];
-      scanFile(tmp, found, bad);
-      expect(found.map((s) => [s.kind, s.line, s.path])).toEqual([
-        ["fetchAllPages", 4, "/site/locations"],
-        ["fetchAllPages", 18, "/sale/products"],
-        ["get", 10, "/class/classvisits"],
-        ["get", 12, "/staff/staff"],
-        ["get", 17, "/site/sites"],
-        ["get", 24, "/site/activationcode"],
-      ]);
-      // Line 19 (`this.client.get(somePath)`) is unresolvable; lines 21-22, the
-      // forwarding calls inside `class MindbodyApiClient`, are the exempt wrapper.
-      expect(bad.map((u) => u.line)).toEqual([15, 14, 19, 16]);
-    } finally {
-      require("fs").rmSync(tmp, { force: true });
-    }
+  // One fixture per way a Mindbody read used to slip past the scanner: each must fail the gate.
+  const escapes: Array<[fixture: string, rule: "rule 1" | "rule 5"]> = [
+    ["escape-renamed-receiver.ts", "rule 1"], // api.get(HOISTED_PATH) on a renamed parameter
+    ["escape-renamed-receiver-dynamic.ts", "rule 5"], // c.get(`/class/${id}`)
+    ["escape-aliased-import.ts", "rule 1"], // import { mindbodyClient as mb }
+    ["escape-this-mindbody.ts", "rule 5"], // this.mindbody.get(path)
+    ["escape-computed-member.ts", "rule 1"], // client['get']('/class/classes')
+    ["escape-cast-call.ts", "rule 1"], // (client.get as any)('/class/classes')
+    ["escape-method-reference.ts", "rule 5"], // client.get.bind(client)
+    ["escape-pager-as-value.ts", "rule 5"], // const page = fetchAllPages
+  ];
+  for (const [fixture, rule] of escapes) {
+    it(`goes red on ${fixture} (${rule})`, () => {
+      const { tally } = scanFixture(fixture);
+      const offenders = rule === "rule 1" ? tally.singleGetOnPaginated : tally.unresolved;
+      expect(offenders.length, `${fixture} must be flagged under ${rule}`).toBeGreaterThan(0);
+    });
+  }
+
+  it("keeps catching the forms it always caught", () => {
+    const { found, bad, tally } = scanFixture("still-caught.ts");
+    // axios.get, client?.get, and a receiver-newline-then-.get on a paginated path.
+    expect(lines(tally.singleGetOnPaginated)).toEqual([5, 6, 8]);
+    // fetchAllPages imported as `pageAll`, on a path the spec does not paginate.
+    expect(lines(tally.pagingNonPaginated)).toEqual([9]);
+    // client.get(dynamicPath)
+    expect(lines(bad)).toEqual([10]);
+    expect(found).toHaveLength(4);
+  });
+
+  it("finds multi-line, generic and chained calls and ignores comments", () => {
+    const { found, bad } = scanFixture("ok-forms.ts");
+    expect(found.map((s) => [s.kind, s.line, s.path])).toEqual([
+      ["fetchAllPages", 5, "/site/locations"],
+      ["get", 11, "/class/classvisits"],
+      ["get", 13, "/site/activationcode"],
+      ["get", 14, "/site/sites"],
+    ]);
+    expect(bad).toEqual([]);
+  });
+
+  it("ignores path-keyed lookups on a Map or a cache (the routeTable.get('/class/classes') false positive)", () => {
+    const { found, bad } = scanFixture("ok-route-table.ts");
+    expect([found, bad]).toEqual([[], []]);
+  });
+
+  it("exempts the transport: the body of fetchAllPages and of class MindbodyApiClient, found by parsing", () => {
+    const { found, bad } = scanFixture("ok-exempt-wrapper.ts");
+    expect(found.map((s) => [s.kind, s.path])).toEqual([["get", "/site/activationcode"]]); // the wrapper's caller is still scanned
+    expect(bad).toEqual([]);
   });
 
   it("scans .tsx files too", () => {
     const dir = require("fs").mkdtempSync(join(require("os").tmpdir(), "gate13-tsx-"));
     const tmp = join(dir, "page.tsx");
-    require("fs").writeFileSync(tmp, "export const x = async () => client.get<any>('/class/classes');\n");
+    require("fs").writeFileSync(tmp, "declare const client: any;\nexport const x = async () => client.get<any>('/class/classes');\n");
     require("fs").writeFileSync(join(dir, "types.d.ts"), "declare const y: number;\n");
     try {
       expect(listSourceFiles(dir)).toEqual([tmp]); // .tsx is listed, .d.ts is not
-      const found: CallSite[] = [];
-      scanFile(tmp, found, []);
+      const { sites: found } = scanFiles([tmp], join(ROOT, "tsconfig.json"));
       expect(found.map((s) => s.path)).toEqual(["/class/classes"]);
     } finally {
       require("fs").rmSync(dir, { recursive: true, force: true });

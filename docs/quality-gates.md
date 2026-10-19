@@ -530,17 +530,37 @@ and not needed" from "forgotten":
   ```
   It is static and deterministic: no network, no subprocess, no credentials. It
   loads `docs/openapi.json`, classifies every GET path (prefix
-  `/public/v{version}` stripped, lowercased) as paginated or not, then scans every
+  `/public/v{version}` stripped, lowercased) as paginated or not, then parses every
   `.ts` and `.tsx` file under **both** `src/` and `nextjs-app/src/` (the roots
   are listed in `SCAN_ROOTS`; `node_modules` and `.next` are outside them) with
-  comments blanked out (line numbers preserved), so a commented-out call is not
-  counted. Rule 4 also asserts that every root contributed at least one call
-  site, so a root silently dropped from the scan cannot pass.
+  the TypeScript compiler, one program per root under that root's own tsconfig
+  (so `@/` imports resolve; `nextjs-app/node_modules` is not needed). Comments
+  are not code, so a commented-out call is not counted. Rule 4 also asserts that
+  every root contributed at least one call site, so a root silently dropped from
+  the scan cannot pass.
+
+  **How a call is recognised: by the type of its receiver, not its name.** The
+  scanner does not look for the identifiers `client` / `mindbodyClient`. It looks
+  at every `.get(…)` and `.request(…)` call, whatever the receiver is called and
+  however it is written: `api.get(p)`, `mb.get(p)` after
+  `import { mindbodyClient as mb }`, `this.mindbody.get(p)`, `client?.get(p)`,
+  `client['get'](p)`, `(client.get as any)(p)`, or a receiver on the line below.
+  A call is ignored only when the receiver's **type** is on the benign list
+  (`BENIGN_RECEIVER_TYPES` in the test: `Map`, `ReadonlyMap`, `WeakMap`,
+  `URLSearchParams`, `Headers`, and this repo's `SimpleCache` / `SimpleTtlCache` /
+  `TtlCache`), because those `.get` calls are keyed lookups, never an HTTP read.
+  Anything else, including an `any`-typed receiver or axios itself, is treated as
+  a possible Mindbody client. That is fail-closed: a new cache type must be added
+  to the list to be ignored, a visible one-line change. The path argument is
+  resolved by type too, so a hoisted `const CLASSES_PATH = '/class/classes'`
+  counts as the literal it is. The known false positive, a path-keyed
+  `routeTable.get('/class/classes')` on a `Map`, is excluded deliberately by that
+  type rule; the same call on a renamed Mindbody client is a call site.
 
   **What counts as a violation** — one `test` per rule; each failure lists every
   offender as `file:line → path`:
   1. a `.get('/…')` / `.get<T>('/…')` call (single line or multi-line, any
-     receiver) whose path the spec paginates;
+     non-benign receiver) whose path the spec paginates;
   2. any GET path — through `.get` or `fetchAllPages` — that is not a GET in the
      spec (an unknown endpoint cannot be classified, so it fails);
   3. a `fetchAllPages` call on a path the spec does **not** paginate;
@@ -552,18 +572,32 @@ and not needed" from "forgotten":
      broken scanner can never pass vacuously. The number is a floor; lower it
      only when call sites are really removed;
   5. a call site the scanner cannot resolve to a literal path: `fetchAllPages`
-     with a non-literal path, `client.get(…)` / `mindbodyClient.get(…)` /
-     `this.client.get(…)` with a non-literal path, or any `.request(…)` on those
-     receivers. Two exemptions, both found structurally (by parsing the file),
-     never by line number: the request `fetchAllPages` itself issues (inside
-     that function's body), and the forwarding calls inside the body of `class
-     MindbodyApiClient` — the axios wrapper both code bases define under that
-     name, whose `get(endpoint)` hands a caller-supplied path to `this.client`.
-     Those are the transport; the wrapper's own callers are what the scan checks.
-  A scanner self-test runs the scanner over a fixture covering multi-line,
-  generic, chained, commented-out and unresolvable calls, `this.client`
-  receivers, the wrapper-class exemption and `.tsx` discovery, so a regex
-  regression fails the suite directly rather than only lowering the count.
+     with a non-literal path (aliased imports and `paging.fetchAllPages(…)` are
+     followed), a `.get(…)` on a non-benign receiver whose path is not a literal
+     `'/…'`, any `.request(…)` on a non-benign receiver, and `.get` / `.request`
+     / `fetchAllPages` taken as a value (`const read = client.get`,
+     `client.get.bind(client)`, `const page = fetchAllPages`), where the call site
+     no longer shows the path. Two exemptions, both found structurally (by
+     parsing the file), never by line number: the request `fetchAllPages` itself
+     issues (inside that function's body), and everything inside the body of
+     `class MindbodyApiClient` — the axios wrapper both code bases define under
+     that name, whose `get(endpoint)` hands a caller-supplied path to
+     `this.client`. Those are the transport; the wrapper's own callers are what
+     the scan checks.
+
+  A scanner self-test runs the same scanner over
+  [`tests/fixtures/gate13/`](../tests/fixtures/gate13/README.md), which sits
+  outside every scan root so the real gate never sees it. There is one `escape-*`
+  fixture per way a read once got past the scanner (renamed receiver parameter
+  with a hoisted path, the same with a dynamic path, an aliased import,
+  `this.mindbody`, a computed member, a cast call, a method taken as a value,
+  `fetchAllPages` taken as a value), and the test asserts the gate goes red on each.
+  `still-caught.ts` pins the forms that were always caught (axios, `client?.get`,
+  a receiver on the previous line, `fetchAllPages as pageAll`, a dynamic path),
+  and the `ok-*` fixtures pin what must stay green: multi-line and generic calls,
+  comments, the `Map` route table, and the exempt transport. A `.tsx` test covers
+  file discovery. A scanner regression fails the suite directly rather than only
+  lowering the count.
 
   **How `fetchAllPages` pages.** It sends `Limit` = page size (default 200, set
   per call) and advances `Offset` by the number of rows actually received. An
@@ -627,13 +661,15 @@ and not needed" from "forgotten":
   the spec, so a single-GET regression on a stubbed route also fails Gate 2.
 
   **Scope limits (residual gap).** The scan covers `src/` and `nextjs-app/src/`;
-  any further code base must be added to `SCAN_ROOTS`. The scanner recognises
-  the receiver names `client`, `mindbodyClient` and `this.client` for rule 5; a
-  GET issued through a differently named client object with a non-literal path,
-  or through axios directly, would not be seen. The scan checks paths, not query
-  parameters, so a call that sends a parameter the spec does not document (for
-  example `Days` on `/appointment/activesessiontimes`) passes Gate 13. That is
-  Gate 11 work.
+  any further code base must be added to `SCAN_ROOTS`. Receiver detection is by
+  type, so it is only as good as the types: a receiver the compiler types as `any`
+  is flagged rather than trusted, but a Mindbody client deliberately laundered
+  through a type on the benign list (`as Map<…>`) would not be seen, and neither
+  would a method pulled apart by destructuring (`const { get } = client`) or
+  reached through a computed, non-literal key (`client[name](path)`). The scan
+  checks paths, not query parameters, so a call that sends a parameter the spec
+  does not document (for example `Days` on `/appointment/activesessiontimes`)
+  passes Gate 13. That is Gate 11 work.
 - **Gates 14 and 15 — nextjs-app type check and build (apply; pass).**
   [`nextjs-app/`](../nextjs-app/README.md) is a second code base in the repo: a
   Next.js 14 app with its own axios Mindbody client, tRPC routers, Prisma schema
