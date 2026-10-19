@@ -1283,16 +1283,11 @@ describe('domain — orders (read and write)', () => {
     const payload = resultJson(result);
     expect(payload.success).toBe(true);
     expect(payload.message).toBe('Contract purchased successfully');
-    expect(payload.clientContract).toEqual({
-      id: 902,
-      clientId: STUB_FIXTURES.clientId,
-      contractName: 'Gold Unlimited',
-      startDate: '2026-04-01',
-      endDate: '2027-03-31',
-      paymentAmount: 149,
-      frequency: 1,
-      remainingPayments: 12,
-    });
+    // PurchaseContractResponse names the created contract by id only; there is
+    // no nested ClientContract object in the spec.
+    expect(payload.clientContractId).toBe(902);
+    expect(payload.contractId).toBe(801);
+    expect(payload.totals).toEqual({ subTotal: 149, discount: 0, tax: 0, total: 149 });
 
     const [post] = stub.requestsTo('/public/v6/sale/purchasecontract', 'POST');
     expect(post.body).toEqual({
@@ -1303,6 +1298,34 @@ describe('domain — orders (read and write)', () => {
       FirstPaymentOccurs: 'StartDate',
       ClientSignature: 'Grace B',
     });
+    // …and must NOT invent the account-credit flag for a caller that did not ask.
+    expect(post.body.UseAccountCredit).toBeUndefined();
+  });
+
+  itE2E('purchaseContract forwards useAccountCredit, the only payment option this server exposes', async () => {
+    // /sale/purchasecontract refuses the request unless one of CreditCardInfo,
+    // StoredCardInfo, UseDirectDebit or UseAccountCredit is present. This server
+    // takes no card or bank details, so UseAccountCredit is the only one it can
+    // ever send — and a dropped flag becomes an HTTP 400 MissingRequiredFields
+    // at the far end, so it must be forwarded verbatim.
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'purchaseContract',
+      arguments: {
+        clientId: STUB_FIXTURES.clientId,
+        contractId: 801,
+        startDate: '2026-04-01',
+        locationId: 1,
+        useAccountCredit: true,
+      },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(resultJson(result).success).toBe(true);
+
+    const [post] = stub.requestsTo('/public/v6/sale/purchasecontract', 'POST');
+    expect(post.body.UseAccountCredit).toBe(true);
+    expect(post.body.LocationId).toBe(1);
   });
 
   itE2E('checkoutShoppingCart sends AppointmentIds and lists the reconciled appointment', async () => {
@@ -2361,7 +2384,7 @@ describe('tools/call — error handling', () => {
       expect(payload.success).toBe(false);
       expect(payload.message).toContain('contract not purchasable');
       expect(payload.message).toContain('BadRequest');
-      expect(payload.clientContract).toBeUndefined();
+      expect(payload.clientContractId).toBeUndefined();
     } finally {
       stub.clearFaults();
     }

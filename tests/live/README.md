@@ -155,7 +155,7 @@ indistinguishable in a CI log.
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
-| Contract purchase | — | no-op by decision (requires real payment details); `it.skip`, see "No-op policy" |
+| Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
 
 `addClientArrival` (`POST /client/addarrival`) is deliberately **not** in the
 suite. It is a client-account check-in that consumes a paid visit, so the
@@ -248,11 +248,13 @@ cancel path, and the only one the cleanup uses.
 
 `afterAll` prints every leftover id on every run that actually started.
 
-## Comp-paid checkout runs by default
+## Comp-paid checkout and on-account contracts run by default
 
 `checkoutShoppingCart` runs in every live run, with no flag. This is the project owner's decision: a `Comp` payment moves no money and needs no payment method, so checking out a service with one is testable against the sandbox. It was verified live on 2026-10-17: Mindbody committed the sale, and the booked appointment read back as `Completed`.
 
-`purchaseContract` is never run: it is a no-op by decision (see "No-op policy").
+`purchaseContract` also runs by default, funded by account credit. `UseAccountCredit` is a boolean meaning "bill this to the client's account balance", not a payment instrument: the sandbox accepts it against a zero balance, commits the contract and leaves the charge on account. It is the only one of the endpoint's four payment options this server exposes — it takes no card numbers, stored-card ids or bank details.
+
+Purchasability is not readable. `getContracts` lists 11 contracts at location 1 and the API refuses 9 of them there ("Contract <id> cannot be purchased at location 1"), with no field on the contract saying which. The test therefore walks the discovered list and keeps the first the API accepts; a refusal writes nothing, so the attempts before it are free. Because the committed contract cannot be deleted, it is reported in the LEFTOVERS banner.
 
 Both Mindbody endpoints accept `Test: true`, which validates without committing.
 The MCP server exposes neither. So through this server every checkout commits:
@@ -271,11 +273,14 @@ The MCP server exposes neither. So through this server every checkout commits:
   the link is unverified by the response for that run. In the verified run the response
   named no reconciled appointment, so that note prints on every default run; the
   appointment's read-back status is what the run reports as evidence of the link.
-- `purchaseContract` is not run at all. It would create a ClientContract with an
-  AutoPay schedule. `FirstPaymentOccurs: StartDate` bills immediately and leaves
-  recurring billing attached to a client, which can keep charging after the test
-  has finished. It needs real payment details, which will never be supplied (see
-  "No-op policy"), so it is an `it.skip` in every run.
+- `purchaseContract` creates a ClientContract with an AutoPay schedule and an
+  account-credit charge. `FirstPaymentOccurs: StartDate` bills immediately, so
+  the resulting record carries a live recurring schedule attached to the client.
+  On `-99` that client has no payment instrument, so there is nothing for a
+  recurring charge to take; it is still a record that cannot be deleted, and it
+  is listed in LEFTOVERS for that reason. On a site where the client has a real
+  card the same call would be a genuine financial obligation, which is why this
+  tier remains sandbox-only.
 
 The `-99` sandbox is shared and its data is not private. Every default run leaves
 records that this server cannot delete or reverse (one client, one `Completed`
@@ -291,12 +296,24 @@ supplied to any test environment. A workflow that requires one is therefore a
 
 | Workflow | Why it is a no-op | How it appears in a run |
 |---|---|---|
-| `purchaseContract` | `/sale/purchasecontract` requires CreditCardInfo, StoredCardInfo, UseDirectDebit or UseAccountCredit, which are real payment details | `it.skip` named `[NO-OP: requires real payment details; not tested by decision]`. Never a loud skip, never listed under `LIVE E2E INCOMPLETE` |
 | `addClientArrival` | `/client/addarrival` consumes a paid visit (`Client requires payment`), and arrival is not part of the salon workflow | Not in the suite. Appointment arrival (`updateAppointment` with `execute: 'arrive'`) is covered instead |
 
-Comp payments are **not** no-ops. A Comp payment moves no money and needs no payment
-method, so `checkoutShoppingCart` with a Comp payment runs in every default run (see
-"Comp-paid checkout runs by default"). The table above is unchanged by that.
+`purchaseContract` is **no longer** in this table. It was, on the assumption that
+its four payment options were all real payment details. Three of them are;
+`UseAccountCredit` is a flag that bills the client's account balance and needs no
+instrument, so the sandbox accepts it with a zero balance and commits the
+contract. The tool now exposes that one and the test runs (see "Comp-paid
+checkout and on-account contracts run by default").
+
+`Comp` payments are **not** no-ops either. A Comp payment moves no money and needs
+no payment method, so `checkoutShoppingCart` with a Comp payment runs in every
+default run. The rule that separates the two cases is whether the "payment" is an
+instrument or just a flag:
+
+- **An instrument** — card number, stored card, bank/direct-debit mandate — is a
+  no-op. It will never be supplied to a test environment.
+- **A flag** — `Comp`, `UseAccountCredit` — is not a payment detail. A test that
+  uses one is a real test and runs by default.
 
 Rules for future tests:
 
@@ -307,8 +324,13 @@ Rules for future tests:
   `[NO-OP: <reason>]` name. Either way, add a row to the table above.
 - A Comp payment moves no money, so a test that uses one is not a no-op.
   `checkoutShoppingCart` with a Comp payment stays in the suite and runs by default.
-- Turning a no-op back into a real test needs a decision from the project owner.
-  Revisit only if Mindbody offers a sandbox-only payment method.
+- Before declaring a workflow a no-op, check whether the "payment" it demands is
+  actually an instrument. `purchaseContract` was wrongly parked as a no-op for a
+  year's worth of runs because `UseAccountCredit` sits in the same
+  `MissingRequiredFields` message as three real ones. Turning a no-op back into a
+  real test still needs a decision from the project owner — but the reason to
+  revisit is now "the field is a flag, not a card", not "Mindbody shipped a
+  sandbox-only payment method".
 
 ## Sandbox facts
 
@@ -365,24 +387,35 @@ the suite; none is hardcoded as an id.
   `CartItems[].AppointmentIds` and top-level `Appointments` are all **empty**
   arrays, so the checkout test does not fail on an empty reconciliation list:
   it prints a loud note and reports the appointment's read-back status instead.
-- **`purchaseContract` cannot succeed through this server.**
-  `POST /sale/purchasecontract` answers `At least one of the following
-  parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit,
-  UseAccountCredit (Code: MissingRequiredFields)`, and the `purchaseContract`
-  tool exposes none of those four. **Decision:** the project owner will not
-  supply real payment details to any test environment, so this is a deliberate
-  no-op. The test is an `it.skip` (`purchaseContract commits an auto-pay
-  contract [NO-OP: ...]`), not a loud skip, and it never appears under
-  `LIVE E2E INCOMPLETE`.
+- **`purchaseContract` succeeds with no payment details, via account credit.**
+  Without one of CreditCardInfo, StoredCardInfo, UseDirectDebit or UseAccountCredit
+  it answers `At least one of the following parameters must be passed:
+  CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit (Code:
+  MissingRequiredFields)`. `UseAccountCredit: true` satisfies it on a client whose
+  balance is zero: the contract commits, `ClientContractId` is returned, and the
+  sale is paid `Account` (PaymentType 16). It is a flag, not an instrument — no
+  card, no bank details, no stored card. The tool exposes it and nothing else, so
+  the test runs on every default run.
+- **Most listed contracts cannot be purchased at the location that lists them.**
+  Location 1 lists 11 and refuses 9 ("Contract <id> cannot be purchased at
+  location 1"); location 2 lists 11; location 98 lists 7. Nothing on the contract
+  says which are sellable, and the first one listed is not: on 2026-10-20
+  `contracts[0]` was 356 (refused) and the accepted ones were 347 and 320. So
+  `purchaseContract` walks the list and keeps the first accepted; the refusals
+  write nothing.
+- **`ClientContract` has two id fields that mean different things.**
+  `Id` is the ClientContract id and is what `purchaseContract` returns as
+  `ClientContractId`; `ContractID` is the catalog contract that was sold. One
+  verified purchase read back as `Id` 16045 / `ContractID` 347 / contract 347 /
+  `AutopayStatus: "Active"`. Match a read-back on `id`, not `ContractID`.
 - **Time zone.** The site is `America/Los_Angeles`; the development host is
   `Asia/Hong_Kong`, 15 hours ahead. Every Mindbody date-time is site-local with
   no offset. The suite reads the zone from `getSites`, computes every "today"
   in it with `Intl.DateTimeFormat`, and compares date-times as strings, never
   through `new Date`.
 - **Contracts exist at every location** (11 / 11 / 7 at locations 1 / 2 / 98 on
-  2026-10-17). `getContracts` is tried at each location and asserted. No test
-  consumes the discovered contract id, because `purchaseContract` is a no-op by
-  decision (see "No-op policy").
+  2026-10-17). `getContracts` is tried at each location and asserted, and the ids
+  at the first location that lists any are handed to `purchaseContract`.
 - **`updateClient` needs `Client` nested and `CrossRegionalUpdate: false`.**
   Sent at the top level it answers `Client (Code: MissingRequiredFields)`; with
   `Client` nested but cross-regional updates left at the default, the sandbox
@@ -392,21 +425,23 @@ the suite; none is hardcoded as an id.
 
 ## Status
 
-**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, and then either cancels the appointment or re-notes it as a LEFTOVER. Last default result on 2026-10-17:
+**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, and buys a contract with account credit. Last default result on 2026-10-20:
 
 ```
- 26 pass
- 1 skip
+ 27 pass
+ 0 skip
  0 fail
 Ran 27 tests across 1 file.
 ```
 
 With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 27 skip, 0 fail`.
 
-- The **1 skip** is the `purchaseContract` no-op (`it.skip`, always; see "No-op policy"). It is not a loud skip and never appears under `LIVE E2E INCOMPLETE`.
+- **No skips and no loud skips.** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
+- **The contract purchase passed.** It walked the 11 contracts at location 1, was refused `356` ("Contract 356 cannot be purchased at location 1"), accepted `347` (Corporate Monthly Membership) and returned `ClientContractId` 16045. `getClientContracts` read it back as `Id` 16045 with `AutopayStatus: "Active"`.
 - **The comp-paid checkout passed.** It sold the appointment's pricing option (service `1395`, price 30) against the booked appointment with `Payments: [{ Type: 'Comp' }]`. Mindbody committed the sale, and the appointment read back as `Completed`. The response's reconciled-appointment arrays were empty, so the `LIVE NOTE (loud)` about the unverified link prints on every run.
-- **No loud skips** in the default run. Every appointment-lifecycle step ran: client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
-- `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, and one comp-paid sale record. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
+- **Every appointment-lifecycle step ran:** client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
+- `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
+- **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.

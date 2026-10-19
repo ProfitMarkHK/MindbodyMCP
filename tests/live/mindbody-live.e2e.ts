@@ -48,9 +48,17 @@
  *     checking that out against an appointment fails with
  *     `ServiceDoesNotPayForAppointment`. The checkout therefore uses the service
  *     returned by `getServices` filtered by `sessionTypeIds` + `locationId`.
- *   - `/sale/purchasecontract` requires one of CreditCardInfo, StoredCardInfo,
- *     UseDirectDebit or UseAccountCredit, and the `purchaseContract` tool
- *     exposes none of them, so that test is a no-op by decision (it.skip).
+ *   - `/sale/purchasecontract` refuses the request unless one of CreditCardInfo,
+ *     StoredCardInfo, UseDirectDebit or UseAccountCredit is present. Only the
+ *     last one is not a payment instrument: it bills the client's account
+ *     balance, and the sandbox accepts it against a zero balance. The
+ *     `purchaseContract` tool exposes that one and no other, so the test runs
+ *     with no card, no bank details and no payment method of any kind.
+ *   - `/sale/contracts` lists contracts a location cannot actually sell: on `-99`
+ *     9 of the 11 contracts at location 1 answer "Contract <id> cannot be
+ *     purchased at location 1". Purchasability is not readable from any field of
+ *     the contract, so `purchaseContract` walks the discovered list and keeps the
+ *     first one the API accepts; every refusal before it writes nothing.
  *
  * Two Mindbody v6 endpoints in this file declare required parameters that a
  * bare call omits (`LocationId` on `/sale/contracts`, `SessionTypeIds` on
@@ -153,6 +161,17 @@ const discovered = {
   contractId: null as number | null,
   /** The location `contractId` was found at; `purchaseContract` sends it. */
   contractLocationId: null as number | null,
+  /**
+   * EVERY contract id at `contractLocationId`, in the order the API returned
+   * them — not just `contractId`.
+   *
+   * The first contract is not necessarily purchasable there: `-99` lists 11 at
+   * location 1 and refuses 9 of them with "Contract <id> cannot be purchased at
+   * location 1", and no field of the contract says which is which.
+   * `purchaseContract` therefore walks this list and keeps the first the API
+   * accepts. Each refusal writes nothing, so trying one cannot leave a record.
+   */
+  contractIds: null as number[] | null,
   /** Default length in minutes of each session type, from `getSessionTypes`. */
   sessionTypeMinutes: null as Map<number, number> | null,
   /**
@@ -188,6 +207,15 @@ interface BookingCandidate {
 
 /** What the raw `/usertoken/issue` probe saw: true issued, false not, null not run. */
 let userTokenIssuedByProbe: boolean | null = null;
+
+/**
+ * The contract this run bought, and the id of the ClientContract it created.
+ *
+ * Nothing in v6 deletes or archives a ClientContract, so this is a leftover on
+ * the LEFTOVERS banner — alongside the client, which is itself undeletable. Null
+ * when `purchaseContract` did not run or did not commit.
+ */
+let purchasedContract: { contractId: number; clientContractId: number } | null = null;
 
 let createdClientId: string | null = null;
 let createdAppointmentId: number | null = null;
@@ -231,7 +259,7 @@ console.log(
     decision.kind === 'run'
       ? ` site id:   ${decision.config.siteId} (sandbox)`
       : ` reason:   ${decision.reason}`,
-    ' writes:    client, appointment and one comp-paid sale (no payment method); real-payment flows are no-ops',
+    ' writes:    client, appointment, one comp-paid sale and one account-credit contract (no payment instrument is ever sent)',
     '='.repeat(78),
     '',
   ].join('\n')
@@ -673,6 +701,12 @@ afterAll(async () => {
       console.log('\n LIVE E2E LEFTOVERS');
       console.log(`   client id:      ${createdClientId ?? 'none'}`);
       console.log(`   appointment id: ${appointmentLine}`);
+      console.log(
+        purchasedContract === null
+          ? '   contract:       none'
+          : `   contract:       ClientContract ${purchasedContract.clientContractId} (contract ` +
+            `${purchasedContract.contractId}) — active auto-pay on the client above; no delete in v6`
+      );
       console.log('   Clients have no delete endpoint in Mindbody API v6, so the client is always a leftover.');
       console.log('   See the cleanup notes in tests/live/mindbody-live.e2e.ts.\n');
 
@@ -1044,6 +1078,7 @@ describe('live tier — orders, read-only', () => {
         expect(typeof result.contracts[0].id).toBe('number');
         discovered.contractId = result.contracts[0].id;
         discovered.contractLocationId = locationId;
+        discovered.contractIds = result.contracts.map((contract: any) => contract.id);
       }
     }
     console.log(`\n LIVE contracts: ${counts.join(', ')}.\n`);
@@ -1469,14 +1504,21 @@ describe('live tier — appointments', () => {
  * exactly like the client this run creates; both are reported in the LEFTOVERS
  * block.
  *
- * Anything that requires a REAL payment method (`purchaseContract` demands card,
- * stored card, direct debit or account credit) stays a no-op by decision; see the
- * No-op policy in tests/live/README.md. There is therefore no longer a financial
- * opt-in flag: the only financial write in this tier is comp-paid.
+ * `purchaseContract` runs too, for the same reason: `UseAccountCredit` bills the
+ * client's account balance and is not a payment instrument, so the contract
+ * commits with no card, no bank details and no stored card — the sandbox accepts
+ * it against a zero balance. Nothing in this tier sends payment details of any
+ * kind. Both writes are irreversible here and both are listed under LEFTOVERS.
+ * See the No-op policy in tests/live/README.md for the workflows that still
+ * need a real payment. There is no financial opt-in flag: every financial write
+ * in this tier is comp-paid or on-account.
  *
  * ORDERING: this block runs AFTER the arrival tests in section 6 and BEFORE the
  * cancellation cleanup in section 8. A checked-out appointment is Completed,
  * which the guarded cancel refuses, so cleanup re-notes it as a LEFTOVER.
+ * `purchaseContract` is independent of the appointment and can run in either
+ * order; it is declared after the checkout so a failed purchase cannot be
+ * mistaken for a consequence of a failed checkout.
  */
 describe('live tier — comp-paid checkout', () => {
   itLive('checkoutShoppingCart commits a comp-paid sale that reconciles the booked appointment', async () => {
@@ -1576,18 +1618,110 @@ describe('live tier — comp-paid checkout', () => {
     expect(reconciled).toContain(createdAppointmentId);
   });
 
-  // ── purchaseContract: NO-OP BY DECISION ────────────────────────────────────
-  // /sale/purchasecontract demands real payment details (CreditCardInfo,
-  // StoredCardInfo, UseDirectDebit or UseAccountCredit; verified against the
-  // sandbox: MissingRequiredFields). The operator has decided NOT to supply real
-  // payment details to any test environment, so every workflow that requires an
-  // actual payment is a deliberate no-op here, not an incomplete run. This is
-  // `it.skip`, not a loud skip, so it is never listed under LIVE E2E INCOMPLETE.
-  // Revisit if Mindbody ever offers a sandbox-only payment method.
-  it.skip(
-    'purchaseContract commits an auto-pay contract [NO-OP: requires real payment details; not tested by decision]',
-    () => {}
-  );
+  // ── purchaseContract: runs, funded by account credit ───────────────────────
+  // /sale/purchasecontract answers HTTP 400 MissingRequiredFields unless one of
+  // CreditCardInfo, StoredCardInfo, UseDirectDebit or UseAccountCredit is
+  // present. This server exposes only UseAccountCredit — a boolean meaning "bill
+  // it to the client's account balance". That is not a payment instrument: the
+  // sandbox accepts it against a zero balance, commits the contract, and leaves
+  // the charge on account (Sale paid `Account`, PaymentType 16). So the contract
+  // commits with no card, no bank details and no stored card.
+  //
+  // Verified against -99 on 2026-10-20 with the payload this test sends: HTTP
+  // 200, ClientContractId set, read back as one active ClientContract.
+  //
+  // This is no longer a no-op or an `it.skip`. It writes exactly one record that
+  // v6 cannot delete, reported on the LEFTOVERS banner alongside the client.
+  const PURCHASE_CONTRACT_TEST =
+    'purchaseContract commits an auto-pay contract funded by account credit';
+
+  itLive(PURCHASE_CONTRACT_TEST, async () => {
+    const name = PURCHASE_CONTRACT_TEST;
+
+    if (!requireDiscovered(name, ['contractIds', 'contractLocationId', 'siteTimeZone'])) return;
+    if (!createdClientId) {
+      throw new Error(
+        'No client was created this run, so purchaseContract has no client to buy for. See the earlier failure.'
+      );
+    }
+
+    // Purchasability is not a readable field. -99 lists 11 contracts at
+    // location 1 and refuses 9 of them there — including `contracts[0]`, so the
+    // first contract discovery reports is not a usable default. Walk the list
+    // and keep the first the API accepts: a refusal writes nothing, so trying
+    // one costs a request and no record.
+    const refusals: string[] = [];
+    let purchased: any = null;
+    let boughtContractId: number | null = null;
+
+    for (const candidateId of discovered.contractIds!) {
+      const result = await callTool('purchaseContract', {
+        clientId: createdClientId,
+        contractId: candidateId,
+        startDate: siteLocalDate(siteZone()),
+        locationId: discovered.contractLocationId,
+        useAccountCredit: true,
+      });
+      if (result.success === true) {
+        purchased = result;
+        boughtContractId = candidateId;
+        break;
+      }
+      // purchaseContractTool catches API errors and reports success: false with
+      // Mindbody's message, so this is a refusal, not a transport failure.
+      refusals.push(`contract ${candidateId}: ${result.message}`);
+    }
+
+    if (purchased === null) {
+      throw new Error(
+        `None of the ${discovered.contractIds!.length} contract(s) at location ` +
+          `${discovered.contractLocationId} could be purchased with UseAccountCredit, so this ` +
+          'suite can no longer test purchaseContract.\n' +
+          refusals.map((line) => `  ${line}`).join('\n')
+      );
+    }
+
+    // Record it for the LEFTOVERS banner BEFORE asserting anything, so a failing
+    // assertion below still reports a contract a human has to go and stop.
+    purchasedContract = {
+      contractId: boughtContractId!,
+      clientContractId: purchased.clientContractId,
+    };
+
+    console.log(
+      `\n LIVE financial write: ClientContract ${purchased.clientContractId} (contract ` +
+        `${boughtContractId}) committed on client ${createdClientId}. NOT reversible.\n`
+    );
+
+    // A real commit names the contract it created. This server never sends
+    // `Test: true`, so a null here would mean nothing was committed.
+    expect(typeof purchased.clientContractId).toBe('number');
+    expect(purchased.clientContractId).toBeGreaterThan(0);
+    expect(Number(purchased.contractId)).toBe(boughtContractId);
+
+    // Independent read-back. This client was created this run and had no
+    // contract before the purchase above, so anything it now lists is that
+    // purchase — the purchase response alone would only be the API's word.
+    //
+    // Match on `id`, not on `ContractID`: in `ClientContract` the two mean
+    // different things. `Id` (surfaced as `id`) is the ClientContract id and is
+    // what `purchaseContract` returns as `clientContractId`; `ContractID` is the
+    // catalog contract that was sold (347 here) — verified on -99, where both
+    // were 16044 and 347 for the same purchase.
+    const back = await callTool('getClientContracts', { clientId: createdClientId });
+    expect(back.totalContracts).toBeGreaterThanOrEqual(1);
+    const match = back.contracts.find((c: any) => c.id === purchased.clientContractId);
+    expect(
+      match,
+      `getClientContracts does not list ClientContract ${purchased.clientContractId}; ` +
+        `it returned ${JSON.stringify(back.contracts)}`
+    ).toBeDefined();
+
+    console.log(
+      `\n LIVE contract read-back: ClientContract ${purchased.clientContractId} ("${match.name}") ` +
+        `AutopayStatus "${match.autopayStatus ?? 'not reported'}" on client ${createdClientId}.\n`
+    );
+  });
 });
 
 // ── 8. Appointment cleanup: LAST, after the comp-paid checkout ────────────────

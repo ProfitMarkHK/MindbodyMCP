@@ -340,6 +340,10 @@ Purchase a membership/contract.
 - `startDate` (required): Start date
 - `firstPaymentOccurs` (optional): Payment timing
 - `promotionCode` (optional): Discount code
+- `locationId` (optional): Location ID
+- `useAccountCredit` (optional): Bill the client's account balance. **The only way to make this tool succeed.** The API refuses the request unless one of CreditCardInfo, StoredCardInfo, UseDirectDebit or UseAccountCredit is present, and this server deliberately exposes only the last — it takes no card or bank details. The flag is accepted against a zero balance, so the contract commits and the charge is left on the client account.
+
+Returns `clientContractId` (the id of the ClientContract that was created), `contractId`, `locationId` and `totals`. It commits for real: v6's `Test` dry-run flag is not exposed. See [`tests/live/README.md`](tests/live/README.md) for what that leaves behind.
 
 ### 🏢 Site & Location Management
 
@@ -632,7 +636,7 @@ One appointment, followed from booking to checkout. Each step names its tool.
 - **Check out:** `checkoutShoppingCart`. Pay with the pricing option that covers the appointment: find it with `getServices` filtered by `sessionTypeIds` (an array, e.g. `[sessionTypeId]`), and send that service as the cart item with the booked appointment's ID in `appointmentIds`, so the sale reconciles it.
 - **Cancel:** `cancelAppointments` (`clientId`, `appointmentIds`). It works only before check-out. A checked-out appointment is `Completed`, and the guard refuses it.
 
-The live tier ([`tests/live/README.md`](tests/live/README.md)) runs this lifecycle against the Mindbody sandbox. By default it covers booking, reschedule, appointment arrival, a comp-paid checkout, and cancellation (which the checkout prevents: the appointment is re-noted as a LEFTOVER instead). Two workflows are deliberate no-ops there: `addClientArrival` (it consumes a paid visit) and `purchaseContract` (it needs real payment details). See the [No-op policy](tests/live/README.md#no-op-policy). The tier has run against the sandbox with authentication; its last recorded result is in that file's Status section, and the field behaviour it asserts is still being verified.
+The live tier ([`tests/live/README.md`](tests/live/README.md)) runs this lifecycle against the Mindbody sandbox. By default it covers booking, reschedule, appointment arrival, a comp-paid checkout, a contract purchase funded by account credit, and cancellation (which the checkout prevents: the appointment is re-noted as a LEFTOVER instead). One workflow is a deliberate no-op there: `addClientArrival`, because it consumes a paid visit. See the [No-op policy](tests/live/README.md#no-op-policy). The tier has run against the sandbox with authentication; its last recorded result is in that file's Status section, and the field behaviour it asserts is still being verified.
 
 ## Configuration
 

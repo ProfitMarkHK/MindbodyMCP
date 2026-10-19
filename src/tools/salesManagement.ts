@@ -390,7 +390,34 @@ function reconciledAppointmentIds(raw: unknown): { appointments?: number[] } {
   return { appointments: ids };
 }
 
-// Purchase contract (membership/auto-renew)
+/**
+ * Purchase a contract (membership / auto-renew).
+ *
+ * ── Why `useAccountCredit` exists ───────────────────────────────────────────
+ * `/sale/purchasecontract` answers HTTP 400 `MissingRequiredFields` — "At
+ * least one of the following parameters must be passed: CreditCardInfo,
+ * StoredCardInfo, UseDirectDebit, UseAccountCredit" — unless one of those four
+ * is present. Three of the four are real payment instruments. `UseAccountCredit`
+ * is NOT: it is a boolean meaning "bill this to the client's account balance",
+ * and the sandbox accepts it with a zero balance, committing the contract and
+ * leaving the charge on account. It is therefore the only way to exercise this
+ * endpoint without handing Mindbody payment details, and the reason the live
+ * tier can test it at all.
+ *
+ * The other three are deliberately NOT exposed. This server takes no card
+ * numbers, no stored-card ids and no bank details (see the no-op policy in
+ * tests/live/README.md), so exposing them would widen the surface for no
+ * caller that is allowed to use them.
+ *
+ * ── Response shape ──────────────────────────────────────────────────────────
+ * `PurchaseContractResponse` in docs/openapi.json carries `ClientId,
+ * UniqueClientId, LocationId, ContractId, ClientContractId,
+ * PaymentProcessingFailures, Totals`. It has NO nested `ClientContract`
+ * object — an earlier version of this tool read `response.ClientContract.Id`,
+ * which threw on every successful purchase and reported the success as a
+ * failure. `ClientContractId` is the id of the ClientContract that was created;
+ * read it back through `getClientContracts`.
+ */
 export async function purchaseContractTool(
   clientId: string,
   contractId: number,
@@ -399,19 +426,16 @@ export async function purchaseContractTool(
   clientSignature?: string,
   promotionCode?: string,
   locationId?: number,
+  useAccountCredit?: boolean,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   success: boolean;
-  clientContract?: {
-    id: number;
-    clientId: string;
-    contractName: string;
-    startDate: string;
-    endDate?: string;
-    paymentAmount: number;
-    frequency?: number;
-    remainingPayments?: number;
-  };
+  /** The id of the ClientContract that was created; `null` on a dry run. */
+  clientContractId?: number | null;
+  clientId?: string;
+  contractId?: number;
+  locationId?: number;
+  totals?: { subTotal: number; discount: number; tax: number; total: number };
   message: string;
 }> {
   try {
@@ -423,20 +447,23 @@ export async function purchaseContractTool(
       ClientSignature: clientSignature,
       PromotionCode: promotionCode,
       LocationId: locationId,
+      UseAccountCredit: useAccountCredit,
     });
 
     return {
       success: true,
-      clientContract: {
-        id: response.ClientContract.Id,
-        clientId: response.ClientContract.ClientId,
-        contractName: response.ClientContract.ContractName,
-        startDate: response.ClientContract.StartDate,
-        endDate: response.ClientContract.EndDate,
-        paymentAmount: response.ClientContract.PaymentAmount,
-        frequency: response.ClientContract.Frequency,
-        remainingPayments: response.ClientContract.RemainingPayments,
-      },
+      clientContractId: response.ClientContractId ?? null,
+      clientId: response.ClientId,
+      contractId: response.ContractId,
+      locationId: response.LocationId,
+      totals: response.Totals
+        ? {
+            subTotal: response.Totals.SubTotal,
+            discount: response.Totals.Discount,
+            tax: response.Totals.Tax,
+            total: response.Totals.Total,
+          }
+        : undefined,
       message: 'Contract purchased successfully',
     };
   } catch (error: any) {

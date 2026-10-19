@@ -498,6 +498,15 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientSignature: { type: 'string', description: 'Client signature' },
             promotionCode: { type: 'string', description: 'Promotion code' },
             locationId: { type: 'number', description: 'Location ID' },
+            useAccountCredit: {
+              type: 'boolean',
+              description:
+                'Bill the contract to the client account balance instead of a payment method. This endpoint ' +
+                'refuses the request unless one of CreditCardInfo, StoredCardInfo, UseDirectDebit or ' +
+                'UseAccountCredit is supplied, and this server exposes only this one — it takes no card or ' +
+                'bank details. It is accepted against a zero balance: the contract commits and the charge is ' +
+                'left on the client account.',
+            },
           },
           required: ['clientId', 'contractId', 'startDate'],
         },
@@ -985,7 +994,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.firstPaymentOccurs as any,
           args.clientSignature as string | undefined,
           args.promotionCode as string | undefined,
-          args.locationId as number | undefined
+          args.locationId as number | undefined,
+          args.useAccountCredit as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(purchaseResult, null, 2) }] };
       

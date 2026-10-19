@@ -325,10 +325,12 @@ and not needed" from "forgotten":
   server exposes neither (see the product limitations below). So through this
   server every checkout really commits: `checkoutShoppingCart` creates a Sale with
   tax lines and a payment transaction, and `purchaseContract` creates a
-  ClientContract with an AutoPay schedule that can keep billing after the test has
-  finished. The `-99` sandbox is shared and its data is not private. Every default run
-  leaves records behind: the comp-paid checkout runs by default, because a Comp payment
-  moves no money, and `purchaseContract` is never run (see tests/live/README.md).
+  ClientContract with an AutoPay schedule. The `-99` sandbox is shared and its data
+  is not private. Every default run leaves records that cannot be removed: a
+  comp-paid sale and an account-credit ClientContract, neither reversible through
+  this server, and a client that v6 has no delete endpoint for. Both financial
+  writes move no money of the operator's and touch no payment instrument — see
+  tests/live/README.md.
 
   **Skip vs fail.** Exactly two automatic skips, both statements about the machine
   rather than the code: `SKIP_LIVE_E2E` is set, or no `MINDBODY_TEST_*`
@@ -352,7 +354,9 @@ and not needed" from "forgotten":
   - **Financial writes always commit.** Neither `checkoutShoppingCart` nor
     `purchaseContract` exposes v6's `Test: true` flag, so both always create real
     records, with no dry-run mode. `returnsale` can reverse a sale but is not
-    exposed either, and a return is a second record, not a deletion.
+    exposed either, and a return is a second record, not a deletion. Nothing in
+    v6 deletes a ClientContract, so `purchaseContract`'s leftover stands until it
+    is removed by hand.
 - **Gate 3a — no linter (gap).** There is no `eslint`, `prettier`, or `biome`
   configuration in the repo. `bun run lint` is `tsc --noEmit --strict`, which is
   Gate 6 run again, not a linter — it cannot catch style or static-analysis

@@ -170,7 +170,7 @@ The server provides 41 tools across 6 categories:
 - `getProducts` - Browse retail products
 - `getContracts` - View membership options
 - `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds`
-- `purchaseContract` - Sell memberships
+- `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
 - `getSites` - Get business information for the configured site. Optional `siteId`. With a multi-site API key and no default or explicit site, it returns `availableSites` instead of guessing

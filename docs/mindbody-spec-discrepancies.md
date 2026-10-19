@@ -14,11 +14,13 @@ Date: 2026-10-17. Sandbox site: `-99`. Read-only audit; no source files were cha
 
 Distinct findings: **30 code bugs** (section C), **10 spec issues to raise with Mindbody** (section D), **5 unverified items** (section E). No call site is wholly unverified, but five individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
 
+One finding has since been fixed and verified live, and is kept here for provenance rather than deleted: **C-23** (`purchaseContract` reading a `ClientContract` object the response does not contain). Doing so also closed **E-3**, which existed only because the runtime shape could not be probed.
+
 Headline items:
 
 - Eleven read tools map response fields that do not exist in either the spec or the sandbox, so parts of their output are always empty or undefined: waitlist entries, class schedules, packages, products, contracts, client contracts, client account balances, client visits, locations, sites, schedule items.
 - Three request shapes are silently ignored by the sandbox because the parameter names are not in the spec: `Days` on active session times, `IgnorePrepFinishBuffer` on schedule items, plural `LocationIds`/`SessionTypeIds` on staff. One (`SessionTypeIds` on resources) makes the sandbox return HTTP 500.
-- `purchaseContract` reads a `ClientContract` object that the spec response does not contain, so a successful purchase would be reported as a failure.
+- `purchaseContract` read a `ClientContract` object that the spec response does not contain, so a successful purchase was reported as a failure. **Fixed 2026-10-20 (C-23)** and confirmed against the sandbox.
 - `getContracts` can omit the spec-required `locationId`; the sandbox answers HTTP 400.
 - The sandbox matches the working-tree spec for every response model probed (the only extra fields are `Program.ScheduleOffset` and `Program.ScheduleOffsetEnd`). The committed spec is older and lacks `SessionTypeActiveSessionTimes`.
 
@@ -92,7 +94,7 @@ Verdict key: OK, CODE-BUG, SPEC-BUG, UNVERIFIED. "C-n" and "D-n" refer to entrie
 | 34 | `src/tools/salesManagement.ts:88` | GET `/sale/packages` | CODE-BUG | `ClassScheduleId` not in spec; sandbox ignores it. Reads `Count`, `Price`, `OnlinePrice`, `TaxIncluded`, `Active`, `ProductId`; `Package` has none (C-20). |
 | 35 | `src/tools/salesManagement.ts:146` | GET `/sale/products` | CODE-BUG | `CategoryIds` typed string in code, integer in spec (numeric strings work). Reads `Description`, `Category`, `Subcategory`, `SellOnline`; none in `Product` (C-21). |
 | 36 | `src/tools/salesManagement.ts:334` | POST `/sale/checkoutshoppingcart` | CODE-BUG | Body OK. Reads `CartItems[].Name`, `UnitPrice`, `TaxAmount`, `Total`; `CartItem` has `Item`, `DiscountAmount`, `Quantity`, `Id`, `VisitIds`, `AppointmentIds`, `Appointments` (C-22). `Appointments` description vs type and empty reconciliation list: D-8. |
-| 37 | `src/tools/salesManagement.ts:418` | POST `/sale/purchasecontract` | CODE-BUG | Body OK. Reads `response.ClientContract.*`; the spec response is flat (`ClientContractId`, `ContractId`, `Totals`, ...) (C-23). Runtime shape not probeable (E-3). |
+| 37 | `src/tools/salesManagement.ts` | POST `/sale/purchasecontract` | RESOLVED 2026-10-20 | Body OK. Read `response.ClientContract.*`; the spec response is flat (`ClientContractId`, `ContractId`, `Totals`, ...). Fixed as C-23 and confirmed against the sandbox, which also closed E-3. |
 | 38 | `src/tools/salesManagement.ts:482` | GET `/sale/contracts` | CODE-BUG | `request.locationId` is spec-required; code can omit it; sandbox 400 (C-24). Reads `ContractType`, `LocationId`, `AutopaySchedule.PaymentAmount`, `IntroOffer.{Id,Name,Price}`; `IntroOffer` is a string (C-25). |
 | 39 | `src/tools/siteManagement.ts:119` | GET `/site/locations` | CODE-BUG | Reads `AdditionalImageURLs[].Id/Name` (they are strings) and `BusinessHours` (not in spec or sandbox) (C-27). |
 | 40 | `src/tools/siteManagement.ts:176` | GET `/site/programs` | OK | Request and reads in spec. Sandbox adds undocumented `ScheduleOffset`, `ScheduleOffsetEnd` (D-9). |
@@ -284,13 +286,14 @@ Each entry: the wrong field(s), the correct field(s), evidence, and a one-line f
 - **Evidence:** `POST /sale/checkoutshoppingcart` `{ClientId, Test: true, Items: [{Item: {Type: 'Service', Metadata: {Id: '1403'}}, Quantity: 1}], Payments: [{Type: 'Comp', Metadata: {Amount: <price>}}], InStore: true, SendEmail: false}` → 200. `CartItems[0]` keys `Item, DiscountAmount, VisitIds, AppointmentIds, Appointments, Id, Quantity`; `Item` keys `Id, Name, Count, OnlinePrice, Price, TaxRate, ProductId, ProgramId, TaxIncluded`.
 - **Fix:** Read `item.Item.Name`, `item.Item.Price`; compute line tax from `TaxRate` or omit; `total` from `Price * Quantity - DiscountAmount`.
 
-### C-23. `purchaseContract` reads a `ClientContract` object that the response does not contain
+### C-23. `purchaseContract` reads a `ClientContract` object that the response does not contain — RESOLVED 2026-10-20
 
-- **File:** `src/tools/salesManagement.ts:431-438`
+- **File:** `src/tools/salesManagement.ts` (`purchaseContractTool`)
 - **Correct:** `PurchaseContractResponse { ClientId, UniqueClientId, LocationId, ContractId, ClientContractId, Totals, PaymentProcessingFailures }`.
-- **Evidence:** Static. The sandbox refuses the call before producing a body (`At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`), see E-3.
+- **Evidence (as audited):** Static. The sandbox refused the call before producing a body (`At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`), so the runtime shape was unprobeable — see E-3.
 - **Effect:** On a real success `response.ClientContract.Id` throws, the `catch` returns `success: false`, and the purchase is reported as failed although it committed.
-- **Fix:** Read `ClientContractId`, `ContractId`, `Totals.{SubTotal,Tax,Total}`, `PaymentProcessingFailures`.
+- **Resolution:** The refusal was itself the finding's cause. `UseAccountCredit` is a boolean that bills the client's account balance, not a payment instrument; sending it (`purchaseContract` now exposes `useAccountCredit`) makes the sandbox accept the call. The tool then returned a 200 whose body was flat, exactly as the spec says, so the mapping now reads `ClientContractId`, `ContractId`, `LocationId` and `Totals.{SubTotal,Discount,Tax,Total}` — the throw path never fires.
+- **Verified live:** `-99`, 2026-10-20, through the MCP tool end to end: HTTP 200, `ClientContractId` 16045 (contract 347), read back through `getClientContracts` as `Id` 16045 with `AutopayStatus: "Active"`. This closes **E-3** as well.
 
 ### C-24. `getContracts` can omit the required `LocationId`
 

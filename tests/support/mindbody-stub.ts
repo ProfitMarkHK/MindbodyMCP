@@ -418,17 +418,20 @@ export const STUB_FIXTURES = {
     ],
   },
 
+  /**
+   * `PurchaseContractResponse` (docs/openapi.json): `ClientId, UniqueClientId,
+   * LocationId, ContractId, ClientContractId, PaymentProcessingFailures,
+   * Totals`. There is NO nested `ClientContract` object — the created contract
+   * is named by `ClientContractId` alone.
+   */
   clientContract: {
-    ClientContract: {
-      Id: 902,
-      ClientId: 'c-1001',
-      ContractName: 'Gold Unlimited',
-      StartDate: '2026-04-01',
-      EndDate: '2027-03-31',
-      PaymentAmount: 149,
-      Frequency: 1,
-      RemainingPayments: 12,
-    },
+    ClientId: 'c-1001',
+    UniqueClientId: 'u-c-1001',
+    LocationId: 1,
+    ContractId: 801,
+    ClientContractId: 902,
+    PaymentProcessingFailures: [],
+    Totals: { SubTotal: 149, Discount: 0, Tax: 0, Total: 149, TransactionFee: 0 },
   },
 
   // ── Appointments ───────────────────────────────────────────────────────────
@@ -1280,11 +1283,11 @@ export class MindbodyStub {
       return {
         status: 200,
         body: {
-          ClientContract: {
-            ...STUB_FIXTURES.clientContract.ClientContract,
-            // Echo the ids the caller sent, so a dropped field cannot pass.
-            ClientId: body.ClientId,
-          },
+          ...STUB_FIXTURES.clientContract,
+          // Echo the ids the caller sent, so a dropped field cannot pass.
+          ClientId: body.ClientId,
+          ContractId: body.ContractId,
+          LocationId: body.LocationId,
         },
       };
     });
