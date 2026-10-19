@@ -51,29 +51,36 @@ import { dirname, join, relative, resolve } from "path";
 import ts from "typescript";
 
 const ROOT = resolve(__dirname, "..");
-/** Every directory the scan covers, with the tsconfig its imports resolve under. Add a root here, never an exemption. */
-const SCAN_ROOTS = [
-  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json") },
-  { dir: join(ROOT, "nextjs-app/src"), tsconfig: join(ROOT, "nextjs-app/tsconfig.json") },
-];
-const FIXTURE_DIR = join(ROOT, "tests/fixtures/gate13");
-const SPEC_PATH = join(ROOT, "docs/openapi.json");
-
 /**
- * The number of API GET call sites the scanner finds today, observed
- * 2026-10-17 and cross-checked against an independent grep:
+ * Every directory the scan covers, with the tsconfig its imports resolve under
+ * and `minSites`, the number of API GET call sites it holds today. Add a root
+ * here, never an exemption.
  *
- *   src/            32 — 30 `fetchAllPages` calls + 2 single GETs to the
+ * `minSites` is a per-root floor, not an exact count: adding endpoints raises the
+ * real number freely, but a broken scanner that finds nothing (or a fraction, or
+ * loses one root) cannot pass vacuously, and a call site that is deleted or
+ * turned into a read the scanner cannot see drops a root below its floor.
+ *
+ * How the numbers were obtained: run `bun test tests/pagination-gate.test.ts` and
+ * read the `GATE13_PAGINATION_ROOTS` line it prints (found/floor per root), 2026-10-19:
+ *
+ *   src/            40 — 38 `fetchAllPages` calls + 2 single GETs to the
  *                        non-paginated /class/classvisits and /site/activationcode
- *   nextjs-app/src/ 26 — 25 `fetchAllPages` calls + 1 single GET to the
+ *   nextjs-app/src/ 28 — 27 `fetchAllPages` calls + 1 single GET to the
  *                        non-paginated /site/activationcode
  *
- * A floor, not an exact count: adding endpoints raises the real number freely,
- * but a broken scanner that finds nothing (or a fraction, e.g. one root silently
- * dropped) cannot pass vacuously. Lower it only when call sites are genuinely
- * removed.
+ * Revisit when the line shows found != floor: lower a floor only when call sites
+ * are genuinely removed. The floor going stale is itself a failure (rule 4,
+ * ROOT_FLOOR_SLACK), so it cannot quietly drift 10 sites behind, as 58 did.
  */
-const MIN_EXPECTED_SITES = 58;
+const SCAN_ROOTS = [
+  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 40 },
+  { dir: join(ROOT, "nextjs-app/src"), tsconfig: join(ROOT, "nextjs-app/tsconfig.json"), minSites: 28 },
+];
+/** How far above its floor a root may sit before the floor counts as stale and must be raised. */
+const ROOT_FLOOR_SLACK = 5;
+const FIXTURE_DIR = join(ROOT, "tests/fixtures/gate13");
+const SPEC_PATH = join(ROOT, "docs/openapi.json");
 
 /**
  * Receiver types whose `.get` is a keyed lookup, never a Mindbody HTTP read.
@@ -315,9 +322,20 @@ function classify(specGets: Map<string, SpecGet>, sites: CallSite[], unresolved:
 const { specGets, sites, unresolved } = scan();
 
 const { singleGetOnPaginated, unknownPaths, pagingNonPaginated } = classify(specGets, sites, unresolved);
-const sanityShortfall = sites.length < MIN_EXPECTED_SITES ? 1 : 0;
+const rootCounts = SCAN_ROOTS.map((root) => {
+  const prefix = `${relative(ROOT, root.dir)}/`;
+  return { prefix, floor: root.minSites, found: sites.filter((site) => site.file.startsWith(prefix)).length };
+});
+const rootsBelowFloor = rootCounts.filter((r) => r.found < r.floor);
+const rootsWithStaleFloor = rootCounts.filter((r) => r.found > r.floor + ROOT_FLOOR_SLACK);
 const violations =
-  singleGetOnPaginated.length + unknownPaths.length + pagingNonPaginated.length + unresolved.length + sanityShortfall;
+  singleGetOnPaginated.length +
+  unknownPaths.length +
+  pagingNonPaginated.length +
+  unresolved.length +
+  rootsBelowFloor.length +
+  rootsWithStaleFloor.length;
+const describeRoots = () => rootCounts.map((r) => `${r.prefix} found ${r.found}, floor ${r.floor}`).join("; ");
 
 function report(title: string, offenders: string[]): string {
   return offenders.length === 0 ? "" : `${title}:\n  ${offenders.join("\n  ")}`;
@@ -346,17 +364,26 @@ describe("Gate 13 — mandatory pagination", () => {
     ).toBe("");
   });
 
-  it(`rule 4: the scanner found at least ${MIN_EXPECTED_SITES} API GET call sites (no vacuous pass)`, () => {
+  it("rule 4: every scan root holds at least its floor of API GET call sites (no vacuous pass)", () => {
     expect(specGets.size).toBeGreaterThan(50);
-    expect(sites.length).toBeGreaterThanOrEqual(MIN_EXPECTED_SITES);
     expect(sites.some((site) => site.kind === "fetchAllPages")).toBe(true);
     expect(sites.some((site) => site.kind === "get")).toBe(true);
-    // Every scan root contributed: a root that is silently dropped (renamed,
-    // moved, or filtered out by the file-extension test) must not pass.
-    for (const root of SCAN_ROOTS) {
-      const prefix = relative(ROOT, root.dir);
-      expect(sites.some((site) => site.file.startsWith(prefix)), `no call sites found under ${prefix}/`).toBe(true);
-    }
+    // Checked per root, independently of the total: a root silently dropped
+    // (renamed, moved, filtered out by the file-extension test) or a call site
+    // deleted or turned into an unscannable read must not pass.
+    expect(
+      report("Scan root below its floor", rootsBelowFloor.map((r) => `${r.prefix} found ${r.found}, floor ${r.floor}`)),
+      describeRoots()
+    ).toBe("");
+  });
+
+  it(`rule 4: no floor is stale (a root more than ${ROOT_FLOOR_SLACK} sites above its floor needs the floor raised)`, () => {
+    expect(
+      report(
+        "Floor is stale — raise minSites in SCAN_ROOTS to the found count",
+        rootsWithStaleFloor.map((r) => `${r.prefix} found ${r.found}, floor ${r.floor}`)
+      )
+    ).toBe("");
   });
 
   it("rule 5: every Mindbody GET call site resolves to a literal path the scanner can check", () => {
@@ -457,4 +484,6 @@ describe("Gate 13 — scanner self-test", () => {
 afterAll(() => {
   // Consumed by scripts/check-gates.sh (Gate 13). Keep the two in step.
   console.log(`GATE13_PAGINATION_RESULT sites=${sites.length} violations=${violations}`);
+  // Informational, for recounting the floors (not parsed by the runner).
+  console.log(`GATE13_PAGINATION_ROOTS ${rootCounts.map((r) => `${r.prefix}=${r.found}/${r.floor}`).join(" ")} (found/floor)`);
 });

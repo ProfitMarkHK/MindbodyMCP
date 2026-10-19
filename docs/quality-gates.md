@@ -564,13 +564,21 @@ and not needed" from "forgotten":
   2. any GET path — through `.get` or `fetchAllPages` — that is not a GET in the
      spec (an unknown endpoint cannot be classified, so it fails);
   3. a `fetchAllPages` call on a path the spec does **not** paginate;
-  4. fewer than 58 call sites found, or a scan root with none (the count
-     observed on 2026-10-17 and cross-checked by an independent grep: `src/` 32 =
-     30 `fetchAllPages` calls plus single GETs to the two non-paginated endpoints
-     `/class/classvisits` and `/site/activationcode`; `nextjs-app/src/` 26 = 25
-     `fetchAllPages` calls plus one single GET to `/site/activationcode`), so a
-     broken scanner can never pass vacuously. The number is a floor; lower it
-     only when call sites are really removed;
+  4. a scan root holding fewer call sites than its own floor (`minSites` in
+     `SCAN_ROOTS`), checked per root and independently of the total, or a floor
+     that has gone stale. Floors as of 2026-10-19: `src/` **40** = 38
+     `fetchAllPages` calls plus single GETs to the two non-paginated endpoints
+     `/class/classvisits` and `/site/activationcode`; `nextjs-app/src/` **28** =
+     27 `fetchAllPages` calls plus one single GET to `/site/activationcode`; total
+     68, which is the `sites=` the runner prints. Each floor equals the found
+     count today, so deleting a call site, or turning one into a read the scanner
+     cannot see, fails. The suite prints
+     `GATE13_PAGINATION_ROOTS src/=40/40 nextjs-app/src/=28/28 (found/floor)`
+     (informational, not parsed by the runner): recount from that line, never
+     from this document. A root more than 5 sites (`ROOT_FLOOR_SLACK`) above its
+     floor also fails with "raise minSites", so the floor cannot quietly fall
+     behind again (it sat at a total of 58 while the real count was 68). Lower a
+     floor only when call sites are really removed;
   5. a call site the scanner cannot resolve to a literal path: `fetchAllPages`
      with a non-literal path (aliased imports and `paging.fetchAllPages(…)` are
      followed), a `.get(…)` on a non-benign receiver whose path is not a literal
