@@ -80,7 +80,7 @@ Mindbody API
 
 **API Client (`src/api/client.ts`)**
 - HTTP client with Axios
-- Automatic retry logic (exponential backoff, max 3 retries)
+- Automatic retry logic for GET/HEAD/OPTIONS only (exponential backoff, max 3 retries; POSTs are never retried)
 - Request/response interceptors for auth headers
 - Error handling with helpful messages
 
@@ -130,7 +130,7 @@ This enables unit testing without mocking the global client.
 
 ### Error Handling
 - API errors wrapped in user-friendly messages
-- Automatic retry with exponential backoff for 5xx errors
+- Automatic retry with exponential backoff for 5xx errors and lost responses on GET/HEAD/OPTIONS; a failed POST is not retried and throws a reconcile message
 - 401 errors trigger token refresh and retry
 - Tool errors thrown as descriptive strings (MCP protocol)
 
@@ -294,7 +294,7 @@ Test with Claude Desktop:
 
 - **Rate limits:** Respect Mindbody's 2000 req/hour limit via caching
 - **Caching:** 5 min for dynamic, 60 min for static data
-- **Retry logic:** Exponential backoff (1s, 2s, 4s) for failed requests
+- **Retry logic:** Exponential backoff (1s, 2s, 4s) for failed GET/HEAD/OPTIONS requests; POSTs are not retried
 - **Token refresh:** OAuth tokens refresh before expiry (no wasted 401 calls)
 
 ---

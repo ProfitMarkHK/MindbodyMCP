@@ -124,7 +124,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 
 **MCP Server (`src/index.ts`)** → Handles protocol, routes tool requests  
 **Tools Layer (`src/tools/`)** → Business logic for each domain  
-**API Client (`src/api/client.ts`)** → HTTP requests with automatic retry  
+**API Client (`src/api/client.ts`)** → HTTP requests with automatic retry for GET requests (POSTs are not retried)  
 **Auth (`src/api/auth.ts`)** → OAuth 2.0 token refresh  
 **Cache (`src/cache/`)** → TTL-based in-memory caching  
 **Types (`src/types/`)** → TypeScript definitions  
@@ -135,11 +135,11 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Modular tools**: One file per domain, ~200 line limit
 - **Smart caching**: 60 min for static data, 5 min for dynamic
 - **Type safety**: Full TypeScript strict mode
-- **Error handling**: Automatic retry with exponential backoff, user-friendly messages
+- **Error handling**: Automatic retry with exponential backoff for GET requests, user-friendly messages
 
 ### Performance Features
 
-- **Automatic retry**: Exponential backoff on 5xx errors
+- **Automatic retry**: Exponential backoff on 5xx errors for GET requests (POSTs fail loudly, not retried)
 - **Token refresh**: OAuth tokens refresh before expiry
 - **Connection pooling**: Axios handles reuse
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
@@ -571,7 +571,7 @@ All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` giv
 ### High Performance
 - Built on Bun runtime for 4x faster execution
 - Intelligent caching system (5-min classes, 60-min static data)
-- Automatic retry with exponential backoff
+- Automatic retry with exponential backoff for GET requests
 - Rate limit aware (2000 req/hour limit)
 
 ### Pagination
