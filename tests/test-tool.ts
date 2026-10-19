@@ -1,6 +1,6 @@
 // Test script to verify the teacher schedule tool works
 import dotenv from 'dotenv';
-import { getTeacherScheduleTool } from '../src/tools/teacherSchedule';
+import { getTeacherScheduleTool } from '../src/tools/teacherSchedule.js';
 
 // Load environment variables
 dotenv.config();
