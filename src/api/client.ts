@@ -7,13 +7,20 @@ export interface IMindbodyClient {
   post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>;
 }
 
-class MindbodyApiClient implements IMindbodyClient {
+/** Methods that are safe to replay: repeating one cannot change server state. */
+const REPLAYABLE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+const isReplayable = (config: AxiosRequestConfig | undefined): boolean =>
+  REPLAYABLE_METHODS.has((config?.method ?? 'GET').toUpperCase());
+
+export class MindbodyApiClient implements IMindbodyClient {
   private client: AxiosInstance;
   private readonly maxRetries = 3;
-  private readonly retryDelay = 1000;
+  private readonly retryDelay: number;
 
-  constructor() {
-    const apiUrl = process.env.MINDBODY_API_URL || 'https://api.mindbodyonline.com/public/v6';
+  constructor(options: { apiUrl?: string; retryDelayMs?: number } = {}) {
+    const apiUrl = options.apiUrl ?? (process.env.MINDBODY_API_URL || 'https://api.mindbodyonline.com/public/v6');
+    this.retryDelay = options.retryDelayMs ?? 1000;
 
     this.client = axios.create({
       baseURL: apiUrl,
@@ -49,17 +56,27 @@ class MindbodyApiClient implements IMindbodyClient {
       const response = await this.client.request<T>(config);
       return response.data;
     } catch (error: any) {
-      if (retries < this.maxRetries && this.shouldRetry(error)) {
+      if (retries < this.maxRetries && isReplayable(config) && this.isTransient(error)) {
         await this.delay(this.retryDelay * Math.pow(2, retries));
         return this.request<T>(config, retries + 1);
       }
 
-      throw this.formatError(error);
+      const formatted = this.formatError(error);
+      if (!isReplayable(config) && this.isTransient(error)) {
+        throw new Error(
+          `${formatted.message}. The ${(config.method ?? 'GET').toUpperCase()} ${config.url} was NOT retried: ` +
+          `the server may already have applied it, and Mindbody's public API v6 documents no idempotency key ` +
+          `that would make a replay safe. Reconcile before retrying: read the record back ` +
+          `(appointments, visits, sales, client) and repeat the write only if it did not land.`
+        );
+      }
+      throw formatted;
     }
   }
 
-  private shouldRetry(error: any): boolean {
-    // Retry on network errors or 5xx errors, but NOT on 401/403 auth errors
+  /** A lost response or a 5xx: the outcome of the request is unknown, or the server is faulting. */
+  private isTransient(error: any): boolean {
+    // Not 401/403 auth errors, not 4xx: those are definitive answers.
     if (!error.response) return true;
     return error.response.status >= 500;
   }
@@ -135,7 +152,8 @@ function paginationCount(value: unknown): number | undefined {
  * tests/pagination-gate.test.ts, Gate 13).
  *
  * Termination, in order of precedence:
- *   1. An empty page ends the walk.
+ *   1. An empty page ends the walk, unless the server reported a `TotalResults`
+ *      larger than the rows collected so far: that is a truncated read and throws.
  *   2. When the server reports `PaginationResponse.TotalResults`, keep going
  *      until that many rows have been collected. The page length is NOT used as
  *      a stop signal here, so a server that silently caps `Limit` below what we
@@ -151,8 +169,15 @@ function paginationCount(value: unknown): number | undefined {
  *
  * Fails loudly instead of truncating or looping:
  *   - more than `MAX_PAGES` pages throws, naming the path and the row count;
- *   - a page whose first row is identical to the previous page's first row
- *     throws, because the server is ignoring `Offset` and would loop forever.
+ *   - an empty page before `TotalResults` rows were collected throws;
+ *   - more rows received than `TotalResults` claims throws: the claim is
+ *     checked against the rows, never trusted on its own (a `TotalResults: 0`
+ *     beside a non-empty first page would otherwise end the walk after page one);
+ *   - a page made only of rows already received throws, because the server is
+ *     ignoring `Offset` (verbatim replay, reordered, or wrapped around). A page
+ *     that only shares some rows with earlier ones is accepted: duplicate rows in
+ *     the source, a concurrent insert, or overlapping list keys do that. A
+ *     one-row page is judged against the previous page alone.
  */
 export async function fetchAllPages<T>(
   client: IMindbodyClient,
@@ -171,7 +196,8 @@ export async function fetchAllPages<T>(
   let offset = 0;
   let totalResults: number | undefined;
   let effectivePageSize: number | undefined;
-  let previousFirstItem: string | undefined;
+  const seen = new Set<string>();
+  let previousPage = new Set<string>();
 
   for (let page = 0; ; page += 1) {
     if (page >= MAX_PAGES) {
@@ -199,23 +225,49 @@ export async function fetchAllPages<T>(
     }
 
     if (pageItems.length === 0) {
+      // An empty page ends the walk only when nothing more was promised.
+      if (totalResults !== undefined && items.length < totalResults) {
+        throw new Error(
+          `fetchAllPages: GET ${url} returned an empty page at Offset=${offset} ` +
+            `(${items.length} items fetched of TotalResults=${totalResults}); refusing to return a truncated result`
+        );
+      }
       break;
     }
 
-    const firstItem = JSON.stringify(pageItems[0]);
-    if (previousFirstItem !== undefined && firstItem === previousFirstItem) {
+    // Offset-ignored detection. A page made only of rows already received is a replay:
+    // verbatim, reordered or wrapped around. A page that merely shares a row or two with
+    // earlier ones is not: duplicate rows in the source, a row inserted between requests,
+    // or overlapping list keys all do that, and a valid read must survive them.
+    // shortcut: a one-row page is compared with the previous page only, because
+    // "seen anywhere" would reject any source that repeats a row; revisit if a
+    // server that ignores Offset while serving one-row pages shows up.
+    const rows = pageItems.map((item) => JSON.stringify(item));
+    const isReplay = rows.length > 1 ? rows.every((row) => seen.has(row)) : previousPage.has(rows[0]);
+    if (isReplay) {
       throw new Error(
-        `fetchAllPages: GET ${url} returned the same first item at Offset=${offset} as on the previous page; ` +
-          `the server appears to ignore Offset (${items.length} items fetched before the repeat)`
+        `fetchAllPages: GET ${url} returned a page at Offset=${offset} whose ${rows.length} row(s) were all received ` +
+          `already; the server appears to ignore Offset (${items.length} items fetched before the repeat)`
       );
     }
-    previousFirstItem = firstItem;
+    rows.forEach((row) => seen.add(row));
+    previousPage = new Set(rows);
+
+    // TotalResults is the server's claim; the rows received are the evidence. More
+    // rows than the claim means the claim is wrong (a stale `0` would otherwise end
+    // the walk after page one), so refuse the result instead of trusting either.
+    if (totalResults !== undefined && items.length + pageItems.length > totalResults) {
+      throw new Error(
+        `fetchAllPages: GET ${url} returned ${items.length + pageItems.length} rows by Offset=${offset} ` +
+          `but reports TotalResults=${totalResults}; the response is inconsistent, refusing to return it`
+      );
+    }
 
     items.push(...pageItems);
     offset += pageItems.length;
 
     if (totalResults !== undefined) {
-      if (items.length >= totalResults) break;
+      if (items.length === totalResults) break;
       continue;
     }
 

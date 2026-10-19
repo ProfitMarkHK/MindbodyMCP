@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AxiosRequestConfig } from "axios";
-import { DEFAULT_PAGE_SIZE, MAX_PAGES, fetchAllPages, type IMindbodyClient } from "../src/api/client.js";
+import { MAX_PAGES, fetchAllPages, type IMindbodyClient } from "../src/api/client.js";
 
 /** What the mock server puts in `PaginationResponse`. */
 type PaginationMode =
@@ -20,6 +20,10 @@ interface MockOptions {
   ignoreOffset?: boolean;
   /** List key the rows are returned under. */
   key?: string;
+  /** Rows served past this many are dropped: later pages come back empty although TotalResults still promises them. */
+  rowsAvailable?: number;
+  /** TotalResults to report instead of the true row count. */
+  reportedTotal?: number;
 }
 
 /** A paging Mindbody list endpoint over `total` rows `{ Id: 1..total }`. */
@@ -28,7 +32,7 @@ class PagingServer implements IMindbodyClient {
   private readonly rows: Array<{ Id: number }>;
 
   constructor(private readonly options: MockOptions) {
-    this.rows = Array.from({ length: options.total }, (_, i) => ({ Id: i + 1 }));
+    this.rows = Array.from({ length: options.rowsAvailable ?? options.total }, (_, i) => ({ Id: i + 1 }));
   }
 
   async request<T>(): Promise<T> {
@@ -54,7 +58,7 @@ class PagingServer implements IMindbodyClient {
         RequestedLimit: echoed,
         RequestedOffset: offset,
         PageSize: page.length,
-        ...(mode === "full" || mode === "echo-requested-limit" ? { TotalResults: this.rows.length } : {}),
+        ...(mode === "full" || mode === "echo-requested-limit" ? { TotalResults: this.options.reportedTotal ?? this.options.total } : {}),
       };
     }
     return body as T;
@@ -69,15 +73,24 @@ class PagingServer implements IMindbodyClient {
   }
 }
 
+/** A client that serves `pages` in call order, whatever Offset says, reporting `total`. */
+function scripted(pages: Array<Record<string, Array<{ Id: number }>>>, total: number) {
+  let call = 0;
+  const offsets: unknown[] = [];
+  const client: IMindbodyClient = {
+    request: async () => { throw new Error("unused"); },
+    post: async () => { throw new Error("unused"); },
+    get: async <T,>(_url: string, config?: AxiosRequestConfig) => {
+      offsets.push(config?.params?.Offset);
+      return { ...pages[call++], PaginationResponse: { TotalResults: total } } as T;
+    },
+  };
+  return { client, offsets };
+}
+const page = (...rowIds: number[]) => ({ Things: rowIds.map((Id) => ({ Id })) });
+
 const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
-
-describe("fetchAllPages — constants", () => {
-  it("defaults to a page size of 200 and caps a walk at 100 pages", () => {
-    expect(DEFAULT_PAGE_SIZE).toBe(200);
-    expect(MAX_PAGES).toBe(100);
-  });
-});
 
 describe("fetchAllPages — multi-page with TotalResults", () => {
   it("walks every page, sends Limit=pageSize, advances Offset by rows received, keeps caller params", async () => {
@@ -96,11 +109,11 @@ describe("fetchAllPages — multi-page with TotalResults", () => {
     }
   });
 
-  it("stops after exactly one GET when the first page already holds TotalResults rows", async () => {
-    const server = new PagingServer({ total: 200 });
+  it("makes no request past the page that completes TotalResults, even on a page boundary", async () => {
+    const server = new PagingServer({ total: 400 });
     const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things");
-    expect(items).toHaveLength(200);
-    expect(server.calls).toHaveLength(1);
+    expect(items).toHaveLength(400);
+    expect(server.offsets).toEqual([0, 200]);
   });
 
   it("honours a caller page size above 200 (the live API does not cap at 200)", async () => {
@@ -226,10 +239,37 @@ describe("fetchAllPages — fails loudly instead of truncating or looping", () =
     await expect(fetchAllPages(server, "/x", {}, "Things", 1)).rejects.toThrow("exceeded MAX_PAGES=100 (100 items fetched at Limit=1)");
   });
 
+  it("throws, not truncates, when TotalResults promises more rows than the server serves", async () => {
+    const server = new PagingServer({ total: 450, rowsAvailable: 250 });
+    await expect(fetchAllPages(server, "/sale/products", {}, "Things")).rejects.toThrow(
+      "fetchAllPages: GET /sale/products returned an empty page at Offset=250 (250 items fetched of TotalResults=450); refusing to return a truncated result"
+    );
+    expect(server.offsets).toEqual([0, 200, 250]);
+  });
+
+  it("throws when TotalResults is 0 beside a non-empty first page, rather than return page one", async () => {
+    const server = new PagingServer({ total: 450, reportedTotal: 0 });
+    await expect(fetchAllPages(server, "/client/clients", {}, "Things", 2)).rejects.toThrow(
+      "fetchAllPages: GET /client/clients returned 2 rows by Offset=0 but reports TotalResults=0; the response is inconsistent, refusing to return it"
+    );
+    expect(server.calls).toHaveLength(1);
+  });
+
+  it("throws when a later page pushes the rows received past TotalResults", async () => {
+    const server = new PagingServer({ total: 5, reportedTotal: 3 });
+    await expect(fetchAllPages(server, "/x", {}, "Things", 2)).rejects.toThrow("returned 4 rows by Offset=2 but reports TotalResults=3");
+    expect(server.offsets).toEqual([0, 2]);
+  });
+
+  it("throws on an empty first page when TotalResults is non-zero", async () => {
+    const server = new PagingServer({ total: 3, rowsAvailable: 0 });
+    await expect(fetchAllPages(server, "/x", {}, "Things")).rejects.toThrow("0 items fetched of TotalResults=3");
+  });
+
   it("throws when the server ignores Offset and repeats page one (with TotalResults)", async () => {
     const server = new PagingServer({ total: 450, ignoreOffset: true });
     await expect(fetchAllPages(server, "/class/classes", {}, "Things")).rejects.toThrow(
-      "fetchAllPages: GET /class/classes returned the same first item at Offset=200 as on the previous page; the server appears to ignore Offset (200 items fetched before the repeat)"
+      "fetchAllPages: GET /class/classes returned a page at Offset=200 whose 200 row(s) were all received already; the server appears to ignore Offset (200 items fetched before the repeat)"
     );
     expect(server.calls).toHaveLength(2);
   });
@@ -238,6 +278,36 @@ describe("fetchAllPages — fails loudly instead of truncating or looping", () =
     const server = new PagingServer({ total: 1, pagination: "none", ignoreOffset: true });
     await expect(fetchAllPages(server, "/x", {}, "Things")).rejects.toThrow("appears to ignore Offset");
     expect(server.calls).toHaveLength(2);
+  });
+
+  it("throws when a server that ignores Offset also wraps around, so no page repeats the previous first row", async () => {
+    // offsets [0, 2, 4] served [1,2] [3,4] [1,2]: TotalResults=6 would be reached with duplicates.
+    const { client, offsets } = scripted([page(1, 2), page(3, 4), page(1, 2)], 6);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow(
+      "returned a page at Offset=4 whose 2 row(s) were all received already; the server appears to ignore Offset (4 items fetched before the repeat)"
+    );
+    expect(offsets).toEqual([0, 2, 4]);
+  });
+
+  it("throws when a server that ignores Offset re-orders the page it repeats", async () => {
+    const { client } = scripted([page(1, 2), page(2, 1)], 4);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow("appears to ignore Offset");
+  });
+
+  it("accepts a source whose rows repeat across a page boundary (duplicate rows are not an ignored Offset)", async () => {
+    // Pages [1,2] then [1,3]: the first rows are equal, the pages are not.
+    const { client } = scripted([page(1, 2), page(1, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 1, 3]);
+  });
+
+  it("accepts one row shared by the end of a page and the start of the next", async () => {
+    const { client } = scripted([page(1, 2), page(2, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 2, 3]);
+  });
+
+  it("accepts overlapping list keys that put the same row on consecutive pages", async () => {
+    const { client } = scripted([{ A: [{ Id: 1 }], B: [{ Id: 1 }] }, { A: [{ Id: 1 }], B: [{ Id: 2 }] }], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, ["A", "B"], 2)).items)).toEqual([1, 1, 1, 2]);
   });
 
   it("rejects a non-positive or fractional page size before any request", async () => {

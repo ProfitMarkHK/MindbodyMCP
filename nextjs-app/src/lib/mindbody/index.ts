@@ -6,7 +6,7 @@
 export { MindbodyApiClient, getMindbodyClient, resetMindbodyClient } from './client';
 export { MindbodyService, getMindbodyService, resetMindbodyService } from './service';
 export { fetchAllPages, DEFAULT_PAGE_SIZE, MAX_PAGES } from './paging';
-export type { PagedGetClient, FetchAllPagesOptions } from './paging';
+export type { PagedGetClient } from './paging';
 export {
   SITE_ID_ENV,
   SITE_INFO_CACHE_KEY,

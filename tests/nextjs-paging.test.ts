@@ -9,14 +9,9 @@
  * its own; see docs/quality-gates.md.
  */
 import { describe, expect, it } from "bun:test";
-import {
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGES,
-  fetchAllPages,
-  type PagedGetClient,
-} from "../nextjs-app/src/lib/mindbody/paging";
+import { MAX_PAGES, fetchAllPages, type PagedGetClient } from "../nextjs-app/src/lib/mindbody/paging";
 import { MindbodyService } from "../nextjs-app/src/lib/mindbody/service";
-import { MindbodyApiClient, getMindbodyClient, resetMindbodyClient } from "../nextjs-app/src/lib/mindbody/client";
+import { MindbodyApiClient } from "../nextjs-app/src/lib/mindbody/client";
 
 type PaginationMode = "full" | "no-total" | "none";
 
@@ -26,6 +21,10 @@ interface MockOptions {
   pagination?: PaginationMode;
   ignoreOffset?: boolean;
   key?: string;
+  /** Rows served past this many are dropped: later pages come back empty although TotalResults still promises them. */
+  rowsAvailable?: number;
+  /** TotalResults to report instead of the true row count. */
+  reportedTotal?: number;
   /** Build a row from its 1-based index; default `{ Id }`. */
   row?: (id: number) => Record<string, unknown>;
 }
@@ -37,7 +36,7 @@ class PagingServer implements PagedGetClient {
 
   constructor(private readonly options: MockOptions) {
     const row = options.row ?? ((id: number) => ({ Id: id }));
-    this.rows = Array.from({ length: options.total }, (_, i) => row(i + 1));
+    this.rows = Array.from({ length: options.rowsAvailable ?? options.total }, (_, i) => row(i + 1));
   }
 
   async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> {
@@ -54,7 +53,7 @@ class PagingServer implements PagedGetClient {
         RequestedLimit: served,
         RequestedOffset: offset,
         PageSize: page.length,
-        ...(mode === "full" ? { TotalResults: this.rows.length } : {}),
+        ...(mode === "full" ? { TotalResults: this.options.reportedTotal ?? this.options.total } : {}),
       };
     }
     return body as T;
@@ -87,15 +86,24 @@ class PagingServer implements PagedGetClient {
   }
 }
 
+/** A client that serves `pages` in call order, whatever Offset says, reporting `total`. */
+function scripted(pages: Array<Record<string, Array<{ Id: number }>>>, total: number) {
+  let call = 0;
+  const offsets: unknown[] = [];
+  const client: PagedGetClient = {
+    get: async <T,>(_url: string, options?: { params?: Record<string, any> }) => {
+      offsets.push(options?.params?.Offset);
+      return { ...pages[call++], PaginationResponse: { TotalResults: total } } as T;
+    },
+  };
+  return { client, offsets };
+}
+const page = (...rowIds: number[]) => ({ Things: rowIds.map((Id) => ({ Id })) });
+
 const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
 describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", () => {
-  it("defaults to a page size of 200 and caps a walk at 100 pages", () => {
-    expect(DEFAULT_PAGE_SIZE).toBe(200);
-    expect(MAX_PAGES).toBe(100);
-  });
-
   it("walks every page, sends Limit=pageSize, advances Offset by rows received, keeps caller params", async () => {
     const server = new PagingServer({ total: 450 });
     const { items, totalResults } = await fetchAllPages<{ Id: number }>(
@@ -134,19 +142,25 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
     expect(server.offsets).toEqual([0, 200, 400]);
   });
 
-  it("collects rows from every listed key and hands every raw page to onPage", async () => {
-    const seen: unknown[] = [];
-    const server = new PagingServer({ total: 3, key: "A" });
-    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, ["A", "B"], 200, {
-      onPage: (page) => seen.push(page),
-    });
-    expect(ids(items)).toEqual([1, 2, 3]);
-    expect(seen).toHaveLength(1);
+  it("collects rows from every listed key on every page", async () => {
+    const { client, offsets } = scripted([{ A: [{ Id: 1 }], B: [{ Id: 2 }] }, { A: [{ Id: 3 }], B: [{ Id: 4 }] }], 4);
+    const { items } = await fetchAllPages<{ Id: number }>(client, "/x", {}, ["A", "B"], 2);
+    expect(ids(items)).toEqual([1, 2, 3, 4]);
+    expect(offsets).toEqual([0, 2]);
   });
 
-  it("returns no items from an empty first page", async () => {
-    const server = new PagingServer({ total: 0 });
-    expect(await fetchAllPages(server, "/x", {}, "Things")).toEqual({ items: [], totalResults: 0 });
+  it("makes no request past the page that completes TotalResults, even on a page boundary", async () => {
+    const server = new PagingServer({ total: 400 });
+    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things");
+    expect(items).toHaveLength(400);
+    expect(server.offsets).toEqual([0, 200]);
+  });
+
+  it("succeeds at exactly MAX_PAGES pages", async () => {
+    const server = new PagingServer({ total: MAX_PAGES });
+    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things", 1);
+    expect(items).toHaveLength(MAX_PAGES);
+    expect(server.offsets).toEqual(range(MAX_PAGES).map((n) => n - 1));
   });
 
   it("throws, naming the path and the count, rather than return a truncated list after MAX_PAGES", async () => {
@@ -156,10 +170,66 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
     );
   });
 
+  it("throws, not truncates, when TotalResults promises more rows than the server serves", async () => {
+    const server = new PagingServer({ total: 450, rowsAvailable: 250 });
+    await expect(fetchAllPages(server, "/sale/products", {}, "Things")).rejects.toThrow(
+      "fetchAllPages: GET /sale/products returned an empty page at Offset=250 (250 items fetched of TotalResults=450); refusing to return a truncated result"
+    );
+    expect(server.offsets).toEqual([0, 200, 250]);
+  });
+
+  it("throws when TotalResults is 0 beside a non-empty first page, rather than return page one", async () => {
+    const server = new PagingServer({ total: 450, reportedTotal: 0 });
+    await expect(fetchAllPages(server, "/client/clients", {}, "Things", 2)).rejects.toThrow(
+      "fetchAllPages: GET /client/clients returned 2 rows by Offset=0 but reports TotalResults=0; the response is inconsistent, refusing to return it"
+    );
+    expect(server.calls).toHaveLength(1);
+  });
+
+  it("throws when a later page pushes the rows received past TotalResults", async () => {
+    const server = new PagingServer({ total: 5, reportedTotal: 3 });
+    await expect(fetchAllPages(server, "/x", {}, "Things", 2)).rejects.toThrow("returned 4 rows by Offset=2 but reports TotalResults=3");
+    expect(server.offsets).toEqual([0, 2]);
+  });
+
+  it("throws on an empty first page when TotalResults is non-zero", async () => {
+    const server = new PagingServer({ total: 3, rowsAvailable: 0 });
+    await expect(fetchAllPages(server, "/x", {}, "Things")).rejects.toThrow("0 items fetched of TotalResults=3");
+  });
+
   it("throws when the server ignores Offset and repeats page one", async () => {
     const server = new PagingServer({ total: 500, ignoreOffset: true });
     await expect(fetchAllPages(server, "/client/clients", {}, "Things")).rejects.toThrow(/appears to ignore Offset/);
     expect(server.calls).toHaveLength(2);
+  });
+
+  it("throws when a server that ignores Offset also wraps around, so no page repeats the previous first row", async () => {
+    // offsets [0, 2, 4] served [1,2] [3,4] [1,2]: TotalResults=6 would be reached with duplicates.
+    const { client, offsets } = scripted([page(1, 2), page(3, 4), page(1, 2)], 6);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow(
+      "returned a page at Offset=4 whose 2 row(s) were all received already; the server appears to ignore Offset (4 items fetched before the repeat)"
+    );
+    expect(offsets).toEqual([0, 2, 4]);
+  });
+
+  it("throws when a server that ignores Offset re-orders the page it repeats", async () => {
+    const { client } = scripted([page(1, 2), page(2, 1)], 4);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow("appears to ignore Offset");
+  });
+
+  it("accepts a source whose rows repeat across a page boundary (duplicate rows are not an ignored Offset)", async () => {
+    const { client } = scripted([page(1, 2), page(1, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 1, 3]);
+  });
+
+  it("accepts one row shared by the end of a page and the start of the next", async () => {
+    const { client } = scripted([page(1, 2), page(2, 3)], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2)).items)).toEqual([1, 2, 2, 3]);
+  });
+
+  it("accepts overlapping list keys that put the same row on consecutive pages", async () => {
+    const { client } = scripted([{ A: [{ Id: 1 }], B: [{ Id: 1 }] }, { A: [{ Id: 1 }], B: [{ Id: 2 }] }], 4);
+    expect(ids((await fetchAllPages<{ Id: number }>(client, "/x", {}, ["A", "B"], 2)).items)).toEqual([1, 1, 1, 2]);
   });
 
   it("rejects a non-positive or fractional page size before any request", async () => {
@@ -179,25 +249,43 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
   });
 });
 
-describe("nextjs-app MindbodyApiClient satisfies the pager's client contract", () => {
-  // Constructor-only: no request is made. The explicit config means nothing is
-  // read from the developer's environment (bunfig.toml loads the repo .env).
-  const config = { apiKey: "test-key", siteId: "-99", sourceName: "src", sourcePassword: "pw", apiUrl: "http://127.0.0.1:1" };
-
-  it("exposes get(endpoint, { params }) and is accepted by fetchAllPages and MindbodyService", () => {
-    const client = new MindbodyApiClient(config);
-    const asPaged: PagedGetClient = client;
-    expect(typeof asPaged.get).toBe("function");
-    expect(new MindbodyService(client)).toBeInstanceOf(MindbodyService);
-  });
-
-  it("getMindbodyClient returns one shared instance until reset", () => {
-    resetMindbodyClient();
-    const a = getMindbodyClient(config);
-    expect(getMindbodyClient()).toBe(a);
-    resetMindbodyClient();
-    expect(getMindbodyClient(config)).not.toBe(a);
-    resetMindbodyClient();
+describe("nextjs-app MindbodyApiClient drives the pager over real HTTP", () => {
+  it("walks Offset 0 → 2 → 4 through the real client against a loopback server, fetching a token first", async () => {
+    const requests: Array<{ path: string; offset: string | null; limit: string | null; auth: string | null }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url);
+        requests.push({
+          path: url.pathname,
+          offset: url.searchParams.get("Offset"),
+          limit: url.searchParams.get("Limit"),
+          auth: req.headers.get("Authorization"),
+        });
+        if (url.pathname.endsWith("/usertoken/issue")) {
+          return Response.json({ AccessToken: "loopback", TokenType: "Bearer", ExpiresIn: 3600 });
+        }
+        const offset = Number(url.searchParams.get("Offset"));
+        return Response.json({
+          Things: range(5).slice(offset, offset + 2).map((Id) => ({ Id })),
+          PaginationResponse: { TotalResults: 5 },
+        });
+      },
+    });
+    try {
+      // The explicit config means nothing is read from the developer's environment (bunfig.toml loads the repo .env).
+      const client = new MindbodyApiClient({
+        apiKey: "k", siteId: "-99", sourceName: "s", sourcePassword: "p", apiUrl: `http://127.0.0.1:${server.port}`,
+      });
+      const { items, totalResults } = await fetchAllPages<{ Id: number }>(client, "/things", {}, "Things");
+      expect(ids(items)).toEqual(range(5));
+      expect(totalResults).toBe(5);
+      const pages = requests.filter((r) => r.path === "/things");
+      expect(pages.map((r) => r.offset)).toEqual(["0", "2", "4"]);
+      expect(pages.every((r) => r.limit === "200" && r.auth === "Bearer loopback")).toBe(true);
+    } finally {
+      server.stop();
+    }
   });
 });
 

@@ -258,11 +258,15 @@ and not needed" from "forgotten":
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
   - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
     manual script needing a server already listening.
-  - **Retry-on-5xx.** `src/api/client.ts` retries network errors and 5xx with a
-    1s + 2s + 4s backoff; exercising it would add ~7s to a pre-commit hook, so the
-    upstream-fault test deliberately uses a 4xx. The retry path is untested.
-  - **Retry/refresh on 401** (`src/api/client.ts` response interceptor) is also
-    untested — the token-failure path falls back to API-key-only auth instead.
+  - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
+    servers, a 1 ms backoff injected through the client's constructor), not by the
+    E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
+    and a POST is never replayed, because Mindbody's v6 spec has no idempotency
+    key. The E2E upstream-fault test still uses a 4xx to keep the hook fast.
+  - **Refresh on 401** (`src/api/client.ts` response interceptor) is covered only
+    for the replay-once step (`tests/api-client-retry.test.ts`, no source
+    credentials); the token re-issue itself is untested, because the E2E
+    token-failure path falls back to API-key-only auth instead.
   - **Per-property `description` coverage** in `inputSchema` is not asserted:
     `updateClient.updates` and its 13 nested properties carry no `description`, so
     a universal check would fail on the current source. Tool-level descriptions
@@ -567,22 +571,32 @@ and not needed" from "forgotten":
 
   **How `fetchAllPages` pages.** It sends `Limit` = page size (default 200, set
   per call) and advances `Offset` by the number of rows actually received. An
-  empty page ends the walk. When the server reports `TotalResults`, the walk
+  empty page ends the walk unless the server reported a larger `TotalResults`
+  (then it throws). When the server reports `TotalResults`, the walk
   continues until that many rows are collected, so a server that serves fewer
   rows than asked (a silent cap) is still read to the end. Without
   `TotalResults`, it stops on the first page shorter than the smaller of
   `RequestedLimit` and the first page's length. (`PageSize` is the row count of
   that response per the spec, so it is not a cap.) It throws, never truncates:
-  after `MAX_PAGES` = 100 pages (exported) with the path and the row count, and
-  when a page's first row repeats the previous page's first row, which means the
-  server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`.
+  after `MAX_PAGES` = 100 pages (exported) with the path and the row count,
+  on an empty page before `TotalResults` rows were collected, when more rows
+  arrive than `TotalResults` claims (e.g. `TotalResults: 0` beside a non-empty
+  page: the reported total is checked against the rows, not trusted alone), and
+  when a page of two or more rows consists only of rows already received
+  (a verbatim, reordered or wrapped-around replay: the server is ignoring
+  `Offset`). A page that merely shares some rows with earlier ones is accepted,
+  because duplicate source rows, a concurrent insert and overlapping list keys
+  all produce that; a one-row page is judged against the previous page alone.
+  Covered by `tests/fetchAllPages.test.ts`.
   The live API does honour a `Limit` above 200: `Limit=500` returned
   `RequestedLimit 500, PageSize 141, TotalResults 141`.
 
   The Next.js port in `nextjs-app/src/lib/mindbody/paging.ts` has the same
   constants (`DEFAULT_PAGE_SIZE` 200, `MAX_PAGES` 100), termination rules and
-  two throws. `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to
-  that contract and then drives the real `MindbodyService` against a paging fake
+  throws; the one difference is that it has no `onPage` hook (only the MCP
+  server's `getActiveSessionTimes` merges a second structure across pages).
+  `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to that contract, walks
+  a loopback HTTP server through the real `MindbodyApiClient`, and then drives the real `MindbodyService` against a paging fake
   server: every one of its list methods is asserted to send `Limit=200`, walk
   `Offset` 0 → 2 → 4 over a server that caps pages at 2 rows, hit the spec path
   under the spec's list key, and return all rows; `getClientVisits`,

@@ -720,8 +720,18 @@ The MCP server implements several strategies to work within these limits:
 
 1. **Response Caching**: 5-minute default cache for class data
 2. **Teacher ID Caching**: 60-minute cache for staff lookups
-3. **Automatic Retry**: Exponential backoff on rate limit errors
+3. **Automatic Retry (GET only)**: A GET is retried up to 3 times (1s, 2s, 4s) on a network error or a 5xx. A POST is never retried: see [Write requests are not retried](#write-requests-are-not-retried)
 4. **Pagination**: Every paginated GET is read to completion through `fetchAllPages`, which throws rather than returning a truncated list (`MAX_PAGES` = 100 pages). Gate 13 enforces this (see [quality-gates.md](quality-gates.md))
+
+### Write requests are not retried
+
+A POST (`checkoutshoppingcart`, `updateappointment`, `addclienttoclass`, ...) that fails with a 5xx or loses its response has an unknown outcome: the server may have applied it before failing. Replaying it could charge a client twice or repeat an emailed cancellation. `docs/openapi.json` defines no idempotency key or header (nothing named `Idempotency*` appears in it), so the client cannot make a replay safe, and `MindbodyApiClient.request` does not retry a POST on a network error or a 5xx. The error carries the original message plus:
+
+```
+... The POST /sale/checkoutshoppingcart was NOT retried: the server may already have applied it, and Mindbody's public API v6 documents no idempotency key that would make a replay safe. Reconcile before retrying: read the record back (appointments, visits, sales, client) and repeat the write only if it did not land.
+```
+
+A 4xx on a POST is a definitive answer and is reported unchanged. The one replay a POST still gets is after a 401: the token is refreshed and the request is sent once more, which is safe because a 401 means nothing was applied. Covered by `tests/api-client-retry.test.ts`.
 
 ## Authentication
 
@@ -748,4 +758,4 @@ Required credentials:
 | 301 | Invalid date format | Use YYYY-MM-DD format |
 | 401 | Unauthorized | Token expired, will auto-refresh |
 | 429 | Rate limit exceeded | Wait and retry, check cache settings |
-| 500 | Server error | Retry with exponential backoff |
+| 500 | Server error | A GET was already retried 3 times. A POST was not retried: reconcile first (see below) |
