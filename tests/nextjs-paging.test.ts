@@ -28,6 +28,8 @@ interface MockOptions {
   key?: string;
   /** Rows served past this many are dropped: later pages come back empty although TotalResults still promises them. */
   rowsAvailable?: number;
+  /** TotalResults to report instead of the true row count. */
+  reportedTotal?: number;
   /** Build a row from its 1-based index; default `{ Id }`. */
   row?: (id: number) => Record<string, unknown>;
 }
@@ -56,7 +58,7 @@ class PagingServer implements PagedGetClient {
         RequestedLimit: served,
         RequestedOffset: offset,
         PageSize: page.length,
-        ...(mode === "full" ? { TotalResults: this.options.total } : {}),
+        ...(mode === "full" ? { TotalResults: this.options.reportedTotal ?? this.options.total } : {}),
       };
     }
     return body as T;
@@ -164,6 +166,20 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
       "fetchAllPages: GET /sale/products returned an empty page at Offset=250 (250 items fetched of TotalResults=450); refusing to return a truncated result"
     );
     expect(server.offsets).toEqual([0, 200, 250]);
+  });
+
+  it("throws when TotalResults is 0 beside a non-empty first page, rather than return page one", async () => {
+    const server = new PagingServer({ total: 450, reportedTotal: 0 });
+    await expect(fetchAllPages(server, "/client/clients", {}, "Things", 2)).rejects.toThrow(
+      "fetchAllPages: GET /client/clients returned 2 rows by Offset=0 but reports TotalResults=0; the response is inconsistent, refusing to return it"
+    );
+    expect(server.calls).toHaveLength(1);
+  });
+
+  it("throws when a later page pushes the rows received past TotalResults", async () => {
+    const server = new PagingServer({ total: 5, reportedTotal: 3 });
+    await expect(fetchAllPages(server, "/x", {}, "Things", 2)).rejects.toThrow("returned 4 rows by Offset=2 but reports TotalResults=3");
+    expect(server.offsets).toEqual([0, 2]);
   });
 
   it("throws on an empty first page when TotalResults is non-zero", async () => {

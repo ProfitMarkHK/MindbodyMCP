@@ -575,7 +575,9 @@ and not needed" from "forgotten":
   `RequestedLimit` and the first page's length. (`PageSize` is the row count of
   that response per the spec, so it is not a cap.) It throws, never truncates:
   after `MAX_PAGES` = 100 pages (exported) with the path and the row count,
-  on an empty page before `TotalResults` rows were collected, and
+  on an empty page before `TotalResults` rows were collected, when more rows
+  arrive than `TotalResults` claims (e.g. `TotalResults: 0` beside a non-empty
+  page: the reported total is checked against the rows, not trusted alone), and
   when a page's first row repeats the previous page's first row, which means the
   server is ignoring `Offset`. Covered by `tests/fetchAllPages.test.ts`.
   The live API does honour a `Limit` above 200: `Limit=500` returned

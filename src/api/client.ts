@@ -153,6 +153,9 @@ function paginationCount(value: unknown): number | undefined {
  * Fails loudly instead of truncating or looping:
  *   - more than `MAX_PAGES` pages throws, naming the path and the row count;
  *   - an empty page before `TotalResults` rows were collected throws;
+ *   - more rows received than `TotalResults` claims throws: the claim is
+ *     checked against the rows, never trusted on its own (a `TotalResults: 0`
+ *     beside a non-empty first page would otherwise end the walk after page one);
  *   - a page whose first row is identical to the previous page's first row
  *     throws, because the server is ignoring `Offset` and would loop forever.
  */
@@ -220,11 +223,21 @@ export async function fetchAllPages<T>(
     }
     previousFirstItem = firstItem;
 
+    // TotalResults is the server's claim; the rows received are the evidence. More
+    // rows than the claim means the claim is wrong (a stale `0` would otherwise end
+    // the walk after page one), so refuse the result instead of trusting either.
+    if (totalResults !== undefined && items.length + pageItems.length > totalResults) {
+      throw new Error(
+        `fetchAllPages: GET ${url} returned ${items.length + pageItems.length} rows by Offset=${offset} ` +
+          `but reports TotalResults=${totalResults}; the response is inconsistent, refusing to return it`
+      );
+    }
+
     items.push(...pageItems);
     offset += pageItems.length;
 
     if (totalResults !== undefined) {
-      if (items.length >= totalResults) break;
+      if (items.length === totalResults) break;
       continue;
     }
 

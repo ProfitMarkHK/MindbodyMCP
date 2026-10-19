@@ -19,6 +19,8 @@
 //     is still read to the end);
 //   - without `TotalResults`, stops on the first page shorter than the smaller
 //     of `RequestedLimit` and the first page's length;
+//   - throws when more rows have been received than `TotalResults` claims
+//     (the claim is checked against the rows, never trusted on its own);
 //   - throws after MAX_PAGES pages instead of returning a truncated list;
 //   - throws when a page's first row repeats the previous page's first row,
 //     which means the server is ignoring `Offset` and would loop forever.
@@ -128,11 +130,21 @@ export async function fetchAllPages<T>(
     }
     previousFirstItem = firstItem;
 
+    // TotalResults is the server's claim; the rows received are the evidence. More
+    // rows than the claim means the claim is wrong (a stale `0` would otherwise end
+    // the walk after page one), so refuse the result instead of trusting either.
+    if (totalResults !== undefined && items.length + pageItems.length > totalResults) {
+      throw new Error(
+        `fetchAllPages: GET ${url} returned ${items.length + pageItems.length} rows by Offset=${offset} ` +
+          `but reports TotalResults=${totalResults}; the response is inconsistent, refusing to return it`
+      );
+    }
+
     items.push(...pageItems);
     offset += pageItems.length;
 
     if (totalResults !== undefined) {
-      if (items.length >= totalResults) break;
+      if (items.length === totalResults) break;
       continue;
     }
 
