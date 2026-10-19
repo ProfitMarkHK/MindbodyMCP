@@ -7,6 +7,7 @@ import {
   siteLocalToEpochMs,
   withDefaultDates,
 } from '../utils/siteTime.js';
+import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 
 /**
  * The name on an embedded `AppointmentStaff`: `DisplayName` if present, else
@@ -601,7 +602,12 @@ function validateCancellationRequest(
  * Why an OWNED appointment may not be cancelled, or null if it may. Ownership is
  * already settled by `ownedAppointmentRow`; this is the timing and status half.
  */
-function cancellationRejectionReason(row: any, nowMs: number, timeZone: string): string | null {
+function cancellationRejectionReason(
+  row: any,
+  nowMs: number,
+  timeZone: string,
+  lateCancelWindowHrs?: number
+): string | null {
   // Mindbody returns StartDateTime as site-local wall time with no UTC offset.
   // It is converted to a UTC instant using the SITE's IANA zone (never this
   // process's zone), so the comparison with "now" is correct wherever the server
@@ -614,7 +620,7 @@ function cancellationRejectionReason(row: any, nowMs: number, timeZone: string):
   if (NON_CANCELLABLE_STATUSES.has(row.Status)) {
     return `appointment status is ${row.Status}, which cannot be cancelled`;
   }
-  return null;
+  return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
 }
 
 /**
@@ -642,6 +648,18 @@ export async function cancelAppointmentsTool(
     };
   }
 
+  // `lateCancel` forfeits the service, so it is honoured only inside the site's
+  // late-cancel window, which the spec does not expose. Unknown window: refuse.
+  const lateWindowHours = lateCancel ? lateCancelWindowHours() : undefined;
+  if (lateCancel && lateWindowHours === undefined) {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ id: -1, reason: LATE_CANCEL_WINDOW_UNKNOWN }],
+      message: 'Late-cancel window unknown; no appointments were cancelled.',
+    };
+  }
+
   // Fail closed, via the shared lookup: without the site's zone "today" and
   // "already started" cannot be decided, so nothing is looked up or written.
   const lookup = await lookupAppointmentsForClient(client, cache, clientId, appointmentIds, 0);
@@ -665,7 +683,7 @@ export async function cancelAppointmentsTool(
       rejected.push({ id, reason: owned.reason });
       continue;
     }
-    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone);
+    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone, lateWindowHours);
     if (reason) {
       rejected.push({ id, reason });
     } else {

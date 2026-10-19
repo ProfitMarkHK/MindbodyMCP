@@ -462,7 +462,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 **Parameters:**
 - `clientId` (required): Client ID who owns every appointment
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
-- `lateCancel` (optional): Record as late cancellations (default false)
+- `lateCancel` (optional): Record as late cancellations (default false). Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window)
 - `sendEmail` (optional): Email the client about the cancellation (default false)
 
 **Guards.** All are checked before any cancellation is sent:
@@ -553,7 +553,7 @@ Cancel 1 to 3 future enrollment sessions for one client, by visit ID, via `POST 
 **Parameters:**
 - `clientId` (required): owner of every visit
 - `visitIds` (required): 1 to 3 visit IDs (`MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST`), no duplicates
-- `lateCancel` (optional, default false), `sendEmail` (optional, default false)
+- `lateCancel` (optional, default false; bounded by `MINDBODY_LATE_CANCEL_WINDOW_HOURS` as in `cancelAppointments`), `sendEmail` (optional, default false)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call; 1 to 3 IDs; no duplicates.
@@ -665,6 +665,7 @@ CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
+# MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
 ```
 
 ### Dates and timezones

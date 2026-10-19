@@ -207,7 +207,7 @@ Cancels future appointments for one client. This is the only cancel path in the 
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Client ID who owns every appointment | - |
 | `appointmentIds` | number[] | Yes | 1 to 3 appointment IDs, no duplicates | - |
-| `lateCancel` | boolean | No | Record as late cancellations | false |
+| `lateCancel` | boolean | No | Record as late cancellations. Honoured only inside the site's late-cancel window (see below) | false |
 | `sendEmail` | boolean | No | Email the client about the cancellation | false |
 
 #### Guards
@@ -221,6 +221,16 @@ All guards run before any cancellation is sent. The request is all-or-nothing: i
 - Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed` or `NoShow`.
 
 Once the guards pass, each cancellation is sent through `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`), one at a time.
+
+#### Late-cancel window
+
+A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbody v6 spec does not expose the site's late-cancel window: no `Site`, `Location`, `SessionType` or `Program` field states it (`Program.CancelOffset` exists but is described only as "The offset to use for the service category", with no unit or meaning, so it is not used). The operator therefore states it in `MINDBODY_LATE_CANCEL_WINDOW_HOURS`:
+
+- Set to a positive number of hours: `lateCancel: true` is honoured only for an appointment that starts within that many hours of now, compared in the site's timezone. Any appointment further out fails the all-or-nothing guard with `late cancel refused: it starts more than N hour(s) from now, outside the site's late-cancel window; cancel without lateCancel`.
+- Unset, empty, non-numeric or not positive: a `lateCancel: true` request is refused before any lookup or write, with `late cancel refused: the site's late-cancel window is unknown. Set MINDBODY_LATE_CANCEL_WINDOW_HOURS ...` (id `-1`).
+- `lateCancel: false` (the default) is unaffected.
+
+`cancelEnrollmentVisits` applies the same bound to enrollment sessions. **Gap:** `removeClientFromClass` (drop-in classes) still forwards `lateCancel` unchecked: it has no class lookup or timing guard to hang the window on, and adding one is a separate change. Until then, prefer `cancelAppointments` / `cancelEnrollmentVisits` for anything where a late cancel would cost the client.
 
 #### Response
 
@@ -247,6 +257,8 @@ interface CancelAppointmentsResponse {
 | `appointment has already started or is in the past` | Start time is not in the future. Nothing is cancelled. | Nothing to cancel |
 | `appointment status is <Status>, which cannot be cancelled` | Already Cancelled, LateCancelled, Completed or NoShow. Nothing is cancelled. | Completed means checked out; it cannot be cancelled here |
 | `duplicate appointment id in request` | The same ID appears twice | Remove the duplicate |
+| `late cancel refused: it starts more than N hour(s) from now, ...` | `lateCancel: true` on an appointment outside `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. Nothing is cancelled. | Cancel without `lateCancel` |
+| `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |
 | `at most 3 appointments may be cancelled per request` | More than 3 IDs. Nothing is cancelled. | Split into several calls |
 | `appointment lookup failed` | Verification lookup failed. Nothing is cancelled. | Retry |
 | `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`, or set `MINDBODY_SITE_TIMEZONE` |
@@ -481,7 +493,7 @@ Cancel 1 to 3 future enrollment sessions for one client, by visit ID, via `POST 
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Owner of every visit | - |
 | `visitIds` | number[] | Yes | 1 to 3 visit IDs from getClientEnrollments, no duplicates | - |
-| `lateCancel` | boolean | No | Record as late cancellations | `false` |
+| `lateCancel` | boolean | No | Record as late cancellations. Bounded by `MINDBODY_LATE_CANCEL_WINDOW_HOURS` exactly as in `cancelAppointments` | `false` |
 | `sendEmail` | boolean | No | Email the client | `false` |
 
 #### Guards
@@ -494,6 +506,7 @@ Every guard runs before anything is written, and one failure rejects the whole r
 4. The visit is a booked enrollment session: it has a `ClassId`, is not a waitlist entry, and its class (`GET /class/classes`) belongs to an `Enrollment` program. A drop-in class visit is refused with a pointer to `removeClientFromClass`.
 5. The session starts in the future in the site's zone.
 6. The visit is not already late-cancelled or signed in. Mindbody's `Missed` flag is not a guard: the sandbox sets it on every future, not-yet-attended enrollment visit.
+7. With `lateCancel: true`, the session starts within `MINDBODY_LATE_CANCEL_WINDOW_HOURS` of now; with that variable unset or invalid the request is refused before any lookup (see *Late-cancel window* under `cancelAppointments`).
 
 Writes are sequential. If one fails, the cancellations already made stand and are reported in `cancelled`; the failing ID is in `rejected`.
 
@@ -679,7 +692,7 @@ Mindbody takes and returns every date and time as the site's local time with no 
 - **Multi-site keys.** The lookup sends `SiteIds` for the chosen site (explicit `siteId` argument, else `MINDBODY_SITE_ID`) and must resolve to exactly one site. If the key reaches several sites and none was chosen, or the chosen one is not reachable, `getSites` returns `{ error, availableSites }` with no `site`, and the timezone cannot be resolved (so `cancelAppointments` refuses to write). The first site returned is never used by default.
 - **Override.** `MINDBODY_SITE_TIMEZONE` (an IANA name, e.g. `America/Los_Angeles`) is used only when the site record gives no usable `TimeZone`. A valid `TimeZone` from the API takes precedence.
 - **Default date ranges** are the site's calendar date, not the host machine's. For example, `getStaffAppointments` defaults to the site's today through seven days out.
-- **Cancellation guard.** `cancelAppointments` compares each start time with now in the site zone. If the zone cannot be resolved, it refuses to write.
+- **Cancellation guard.** `cancelAppointments` compares each start time with now in the site zone. If the zone cannot be resolved, it refuses to write. The same comparison bounds `lateCancel` by `MINDBODY_LATE_CANCEL_WINDOW_HOURS`.
 - **Read tools.** If the zone cannot be resolved, read tools with a default date range fall back to UTC and print one warning to stderr per process.
 - **DST.** An ambiguous wall time (fall back; e.g. 01:30 in Los Angeles on the night the clocks go back) resolves to the earlier instant. A nonexistent wall time (spring forward; e.g. 02:30) moves forward by the gap, to 03:30.
 
