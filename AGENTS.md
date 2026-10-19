@@ -183,6 +183,49 @@ export async function getClassesTool(
 - `MINDBODY_TEST_API_URL` - Sandbox API base URL (default: `https://api.mindbodyonline.com/public/v6`)
 - `CACHE_TTL_MINUTES` - Cache TTL override
 
+## Spec Conformance: the rules that matter most
+
+`docs/openapi.json` is the contract, and it is verified rather than trusted:
+`docs/openapi.lock` pins its SHA-256 and **must be updated whenever the file
+changes**. Before writing or reviewing a tool, read the actual model in the spec
+for every field you send and every field you read. Do not infer a field name
+from a neighbouring one — `Substitute` is not `IsSubstitute`, `ImageURL` is not
+`ImageUrl`, and `LiabilityRelease` is a boolean while `Liability` is the object.
+
+Three classes of defect have been found here, and all three are worth
+watching for:
+
+1. **Phantom response fields.** A field that exists in neither the spec nor the
+   API always renders empty. Resolve it through one of the three cached
+   catalogues (`/site/locations`, `/staff/staff`, `/site/sessiontypes` — see
+   `src/tools/lookups.ts`), or drop it and say so in the tool's documentation. A
+   field that renders as `''` or `"Unknown"` without an explanation is a defect.
+2. **Undocumented request parameters.** Unknown query parameters are **ignored
+   silently** by the v6 API, so a wrong name degrades to a full-table read with
+   an HTTP 200 rather than an error. One is worse than that: `SessionTypeIds` on
+   `GET /site/resources` returns HTTP 500. `tests/spec-validating-client.ts`
+   fails any parameter the spec does not define, which is the cheapest guard.
+3. **Type lies.** A field can have the right name and the wrong type, which is
+   worse than a missing field because it produces a plausible-looking wrong
+   value. `Service.Priority` is the string `"High"|"Medium"|"Low"`, not a
+   number; `Service.TaxIncluded` and `Product.TaxIncluded` are money amounts,
+   not booleans. Check `type` in the spec, not just the property list.
+
+**Where the spec and the sandbox disagree, the sandbox wins** — and the
+divergence is recorded in three places: a `// SANDBOX-OBSERVED (differs from
+spec):` comment at the call site, a "Deliberate deviations from the spec"
+section in [`docs/API.md`](docs/API.md), and
+[`docs/adr/0001-write-to-observed-sandbox-behaviour.md`](docs/adr/0001-write-to-observed-sandbox-behaviour.md),
+which states the five conditions for adding a new one. A write that cannot be
+probed without committing a real record is aligned to the spec and marked
+`// SPEC-ALIGNED BUT UNVERIFIED:` instead — a weaker claim, and never added to
+the deviations table.
+
+The full audit of all 46 call sites, with the evidence for every finding, is
+[`docs/mindbody-spec-discrepancies.md`](docs/mindbody-spec-discrepancies.md).
+Its section F lists what was found *after* the audit, including the same class
+of defect still live in `nextjs-app/`.
+
 ## Adding a New Tool
 
 1. **Create tool file** in `src/tools/` following naming pattern

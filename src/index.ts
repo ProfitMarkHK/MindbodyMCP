@@ -146,15 +146,15 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getStaff',
-        description: 'Get all staff members with optional filters',
+        description: 'Get all staff members with optional filters. `sessionTypeId` and `locationId` are SINGLE ids — the API has no plural form of either, and the plural spelling is silently ignored. They only narrow the result when `startDateTime` is also supplied.',
         inputSchema: {
           type: 'object',
           properties: {
             staffIds: { type: 'array', items: { type: 'number' }, description: 'Specific staff IDs to retrieve' },
             filters: { type: 'array', items: { type: 'string' }, description: 'Filters to apply' },
-            sessionTypeIds: { type: 'array', items: { type: 'number' }, description: 'Session type IDs' },
-            locationIds: { type: 'array', items: { type: 'number' }, description: 'Location IDs' },
-            startDateTime: { type: 'string', description: 'Start date/time in ISO format' },
+            sessionTypeId: { type: 'number', description: 'Session type ID (single id, not a list)' },
+            locationId: { type: 'number', description: 'Location ID (single id, not a list)' },
+            startDateTime: { type: 'string', description: 'Start date/time in ISO format; required for sessionTypeId/locationId to narrow' },
           },
         },
       },
@@ -181,12 +181,12 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getClassSchedules',
-        description: 'Get class schedules (recurring class templates)',
+        description: 'Get class schedules (recurring class templates). `days` lists the weekdays each schedule runs on, built from the schedule\'s seven Day* flags, and `isAvailable` is the schedule\'s own availability flag. `sessionTypeIds` filters by session type; there is no class-description filter on this endpoint.',
         inputSchema: {
           type: 'object',
           properties: {
             locationIds: { type: 'array', items: { type: 'number' }, description: 'Location IDs' },
-            classDescriptionIds: { type: 'array', items: { type: 'number' }, description: 'Class description IDs' },
+            sessionTypeIds: { type: 'array', items: { type: 'number' }, description: 'Session type IDs' },
             staffIds: { type: 'array', items: { type: 'number' }, description: 'Staff IDs' },
             programIds: { type: 'array', items: { type: 'number' }, description: 'Program IDs' },
           },
@@ -221,7 +221,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getWaitlistEntries',
-        description: 'Get waitlist entries for classes',
+        description: 'Get waitlist entries for classes. At least one of classScheduleIds, classIds or clientIds is REQUIRED: the API answers HTTP 400 MissingRequiredFields when it receives none of ClassScheduleIds, ClientIds, WaitlistEntryIds or ClassIds. Entries carry no queue position — the endpoint has no such field.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -233,16 +233,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'substituteClassTeacher',
-        description: 'Substitute a teacher for a class',
+        description: 'Substitute the teacher for a class. The API takes the INCOMING teacher\'s staff id in `substituteTeacherId`; the original teacher is implied by the class, so it is not a parameter. The response is unverified against the sandbox (the endpoint has no Test flag) — see the tool documentation.',
         inputSchema: {
           type: 'object',
           properties: {
             classId: { type: 'number', description: 'Class ID' },
-            originalTeacherId: { type: 'number', description: 'Original teacher ID' },
-            substituteTeacherId: { type: 'number', description: 'Substitute teacher ID' },
-            substituteTeacherName: { type: 'string', description: 'Substitute teacher name (optional)' },
+            substituteTeacherId: { type: 'number', description: 'Substitute (incoming) teacher staff ID' },
           },
-          required: ['classId', 'originalTeacherId', 'substituteTeacherId'],
+          required: ['classId', 'substituteTeacherId'],
         },
       },
       {
@@ -402,12 +400,13 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getPackages',
-        description: 'Get class packages',
+        description: 'Get class packages. A package has no price of its own: classCount and price are summed from the services it contains, and per-service prices are in services[].',
         inputSchema: {
           type: 'object',
           properties: {
             locationId: { type: 'number', description: 'Location ID' },
-            classScheduleId: { type: 'number', description: 'Class schedule ID' },
+            packageIds: { type: 'array', items: { type: 'number' }, description: 'Package IDs' },
+            sellOnline: { type: 'boolean', description: 'Only packages that can be sold online' },
           },
         },
       },
@@ -419,22 +418,23 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           properties: {
             productIds: { type: 'array', items: { type: 'number' }, description: 'Product IDs' },
             searchText: { type: 'string', description: 'Search text' },
-            categoryIds: { type: 'array', items: { type: 'string' }, description: 'Category IDs' },
-            subCategoryIds: { type: 'array', items: { type: 'string' }, description: 'Subcategory IDs' },
+            categoryIds: { type: 'array', items: { type: 'number' }, description: 'Category IDs' },
+            subCategoryIds: { type: 'array', items: { type: 'number' }, description: 'Subcategory IDs' },
             sellOnline: { type: 'boolean', description: 'Filter for online products' },
           },
         },
       },
       {
         name: 'getContracts',
-        description: 'Get available contracts/memberships',
+        description: 'Get available contracts/memberships. `locationId` is REQUIRED: the API answers HTTP 400 MissingRequiredFields without it. Categories of a product and the type of a contract are not returned by the API, so only their ids are exposed.',
         inputSchema: {
           type: 'object',
           properties: {
+            locationId: { type: 'number', description: 'Location ID (required)' },
             contractIds: { type: 'array', items: { type: 'number' }, description: 'Contract IDs' },
             soldOnline: { type: 'boolean', description: 'Filter for online contracts' },
-            locationId: { type: 'number', description: 'Location ID' },
           },
+          required: ['locationId'],
         },
       },
       {
@@ -542,14 +542,15 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getResources',
-        description: 'Get resources (rooms, equipment)',
+        description: 'Get resources (rooms, equipment). Only the filters below are sent: the endpoint has no session-type or date filter, and passing an undocumented `sessionTypeIds` to it returns HTTP 500 rather than being ignored.',
         inputSchema: {
           type: 'object',
           properties: {
-            sessionTypeIds: { type: 'array', items: { type: 'number' }, description: 'Session type IDs' },
-            locationId: { type: 'number', description: 'Location ID' },
-            startDateTime: { type: 'string', description: 'Start date/time' },
-            endDateTime: { type: 'string', description: 'End date/time' },
+            locationIds: { type: 'array', items: { type: 'number' }, description: 'Location IDs' },
+            programIds: { type: 'array', items: { type: 'number' }, description: 'Program IDs' },
+            resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
+            scheduleTypes: { type: 'array', items: { type: 'string' }, description: 'Schedule types' },
+            includeInactive: { type: 'boolean', description: 'Include inactive resources' },
           },
         },
       },
@@ -696,8 +697,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             scheduleType: { type: 'string', enum: ['All', 'Class', 'Enrollment', 'Appointment'] },
             sessionTypeIds: { type: 'array', items: { type: 'number' }, description: 'Session type IDs' },
             startTime: { type: 'string', description: 'Start time' },
-            endTime: { type: 'string', description: 'End time' },
-            days: { type: 'array', items: { type: 'string' }, description: 'Days of week' },
+            endTime: { type: 'string', description: 'End time (HH:MM:SS)' },
           },
         },
       },
@@ -711,7 +711,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             staffIds: { type: 'array', items: { type: 'number' }, description: 'Staff IDs' },
             startDate: { type: 'string', description: 'Start date' },
             endDate: { type: 'string', description: 'End date' },
-            ignorePrepFinishBuffer: { type: 'boolean', description: 'Ignore prep/finish buffer' },
+            ignorePrepFinishTimes: { type: 'boolean', description: 'Ignore appointment prep/finish times' },
           },
         },
       },
@@ -800,8 +800,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         const staffResult = await getStaffTool(
           args.staffIds as number[] | undefined,
           args.filters as string[] | undefined,
-          args.sessionTypeIds as number[] | undefined,
-          args.locationIds as number[] | undefined,
+          args.sessionTypeId as number | undefined,
+          args.locationId as number | undefined,
           args.startDateTime as string | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(staffResult, null, 2) }] };
@@ -858,9 +858,7 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       case 'substituteClassTeacher':
         const subResult = await substituteClassTeacherTool(
           args.classId as number,
-          args.originalTeacherId as number,
-          args.substituteTeacherId as number,
-          args.substituteTeacherName as string | undefined
+          args.substituteTeacherId as number
         );
         return { content: [{ type: 'text', text: JSON.stringify(subResult, null, 2) }] };
 
@@ -952,7 +950,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       case 'getPackages':
         const packagesResult = await getPackagesTool(
           args.locationId as number | undefined,
-          args.classScheduleId as number | undefined
+          args.packageIds as number[] | undefined,
+          args.sellOnline as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(packagesResult, null, 2) }] };
       
@@ -960,17 +959,17 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         const productsResult = await getProductsTool(
           args.productIds as number[] | undefined,
           args.searchText as string | undefined,
-          args.categoryIds as string[] | undefined,
-          args.subCategoryIds as string[] | undefined,
+          args.categoryIds as number[] | undefined,
+          args.subCategoryIds as number[] | undefined,
           args.sellOnline as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(productsResult, null, 2) }] };
       
       case 'getContracts':
         const getContractsResult = await getContractsTool(
+          args.locationId as number,
           args.contractIds as number[] | undefined,
-          args.soldOnline as boolean | undefined,
-          args.locationId as number | undefined
+          args.soldOnline as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(getContractsResult, null, 2) }] };
       
@@ -1017,10 +1016,11 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       
       case 'getResources':
         const resourcesResult = await getResourcesTool(
-          args.sessionTypeIds as number[] | undefined,
-          args.locationId as number | undefined,
-          args.startDateTime as string | undefined,
-          args.endDateTime as string | undefined
+          args.locationIds as number[] | undefined,
+          args.programIds as number[] | undefined,
+          args.resourceIds as number[] | undefined,
+          args.scheduleTypes as string[] | undefined,
+          args.includeInactive as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(resourcesResult, null, 2) }] };
       
@@ -1104,8 +1104,7 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.scheduleType as any,
           args.sessionTypeIds as number[] | undefined,
           args.startTime as string | undefined,
-          args.endTime as string | undefined,
-          args.days as string[] | undefined
+          args.endTime as string | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(activeTimesResult, null, 2) }] };
       
@@ -1115,7 +1114,7 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.staffIds as number[] | undefined,
           args.startDate as string | undefined,
           args.endDate as string | undefined,
-          args.ignorePrepFinishBuffer as boolean | undefined
+          args.ignorePrepFinishTimes as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(scheduleItemsResult, null, 2) }] };
       

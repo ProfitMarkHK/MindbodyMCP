@@ -5,8 +5,15 @@ import {
   GetClassesRequest,
   Class,
 } from '../types/mindbody.js';
+import { locationNames } from './lookups.js';
 
 // Get all classes with filtering options
+/**
+ * `GET /class/classes`, paged to the end.
+ *
+ * `substitute` comes from `Class.Substitute` (the spec field; there is no
+ * `IsSubstitute`, so the output field is named `substitute` to match).
+ */
 export async function getClassesTool(
   startDate?: string,
   endDate?: string,
@@ -28,7 +35,7 @@ export async function getClassesTool(
     totalSpots: number;
     isWaitlistAvailable: boolean;
     isCanceled: boolean;
-    isSubstitute: boolean;
+    substitute: boolean;
     virtualStreamLink?: string;
   }>;
   summary: {
@@ -75,7 +82,7 @@ export async function getClassesTool(
     totalSpots: cls.MaxCapacity,
     isWaitlistAvailable: cls.IsWaitlistAvailable,
     isCanceled: cls.IsCanceled,
-    isSubstitute: cls.IsSubstitute,
+    substitute: cls.Substitute,
     virtualStreamLink: (cls as any).VirtualStreamLink,
   }));
 
@@ -100,6 +107,7 @@ export async function getClassesTool(
 }
 
 // Get class descriptions (types of classes offered)
+/** `GET /class/classdescriptions`, paged. `imageUrl` comes from `ImageURL`. */
 export async function getClassDescriptionsTool(
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
@@ -126,7 +134,7 @@ export async function getClassDescriptionsTool(
     id: desc.Id,
     name: desc.Name,
     description: desc.Description || '',
-    imageUrl: desc.ImageUrl,
+    imageUrl: desc.ImageURL,
     prerequisites: desc.Prereq,
     level: desc.Level?.Name,
   }));
@@ -138,6 +146,15 @@ export async function getClassDescriptionsTool(
 }
 
 // Add client to class (book a class)
+/**
+ * `POST /class/addclienttoclass`.
+ *
+ * `AddClientToClassResponse` contains ONLY `Visit`. It carries no
+ * `PaymentRequired` flag and no `ServicePaymentInfo`, so this tool does not
+ * report an amount due: `serviceId` being absent or null on the returned Visit
+ * is the only payment signal the endpoint offers, and it is returned as
+ * `serviceId` rather than being interpreted here.
+ */
 export async function addClientToClassTool(
   clientId: string,
   classId: number,
@@ -148,9 +165,8 @@ export async function addClientToClassTool(
 ): Promise<{
   success: boolean;
   visitId?: number;
+  serviceId?: number;
   message: string;
-  requiresPayment?: boolean;
-  amountDue?: number;
 }> {
   try {
     const response = await client.post<any>('/class/addclienttoclass', {
@@ -166,9 +182,8 @@ export async function addClientToClassTool(
     return {
       success: true,
       visitId: response.Visit?.Id,
+      serviceId: response.Visit?.ServiceId ?? undefined,
       message: waitlist ? 'Successfully added to waitlist' : 'Successfully booked class',
-      requiresPayment: response.PaymentRequired,
-      amountDue: response.ServicePaymentInfo?.Amount,
     };
   } catch (error: any) {
     return {
@@ -212,6 +227,25 @@ export async function removeClientFromClassTool(
 }
 
 // Get waitlist entries for a class
+
+/** Filters this tool accepts; the endpoint needs at least one of them. */
+const WAITLIST_FILTERS = ['classScheduleIds', 'classIds', 'clientIds'] as const;
+
+/**
+ * `GET /class/waitlistentries`, paged.
+ *
+ * **At least one filter is required.** The endpoint answers HTTP 400
+ * `At least one of the following parameters must be passed: ClassScheduleIds,
+ * ClientIds, WaitlistEntryIds, ClassIds (Code: MissingRequiredFields)` when it
+ * gets none, so this tool refuses the call itself rather than spending a request
+ * on a guaranteed failure.
+ *
+ * **There is no queue position here.** `WaitlistEntry` is
+ * `{Id, ClassId, ClassDate, ClassSchedule, Client, EnrollmentDateForward,
+ * RequestDateTime, VisitRefNo, Web}` and carries no position field, so none is
+ * returned. `GET /client/clientschedule` exposes `WaitlistInfo.WaitlistOrderNumber`
+ * per client instead.
+ */
 export async function getWaitlistEntriesTool(
   classScheduleIds?: number[],
   classIds?: number[],
@@ -219,17 +253,33 @@ export async function getWaitlistEntriesTool(
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   entries: Array<{
+    id: number;
     classId: number;
-    className: string;
-    classDate: string;
-    clientId: string;
-    clientName: string;
-    enrollmentDatetime: string;
-    requestDatetime: string;
-    position: number;
+    className?: string;
+    classDate?: string;
+    classScheduleId?: number;
+    clientId?: string;
+    clientName?: string;
+    enrollmentDateForward?: string;
+    requestDatetime?: string;
+    visitRefNo?: number;
+    web?: boolean;
   }>;
   totalEntries: number;
 }> {
+  const filters: Record<string, unknown[]> = { classScheduleIds, classIds, clientIds };
+  const supplied = WAITLIST_FILTERS.filter((name) => {
+    const value = filters[name];
+    return Array.isArray(value) && value.length > 0;
+  });
+  if (supplied.length === 0) {
+    throw new Error(
+      `getWaitlistEntries needs at least one filter: pass one of ${WAITLIST_FILTERS.join(', ')}. ` +
+        'GET /class/waitlistentries rejects a request that carries none of ClassScheduleIds, ' +
+        'ClientIds, WaitlistEntryIds or ClassIds.'
+    );
+  }
+
   const { items: entryRows } = await fetchAllPages<any>(
     client,
     '/class/waitlistentries',
@@ -241,16 +291,27 @@ export async function getWaitlistEntriesTool(
     'WaitlistEntries'
   );
 
-  const entries = entryRows.map((entry: any) => ({
-    classId: entry.ClassId,
-    className: entry.ClassName,
-    classDate: entry.ClassDate,
-    clientId: entry.ClientId,
-    clientName: entry.ClientName,
-    enrollmentDatetime: entry.EnrollmentDatetime,
-    requestDatetime: entry.RequestDatetime,
-    position: entry.Position,
-  }));
+  const entries = entryRows.map((entry: any) => {
+    const classDescription = entry.ClassSchedule?.ClassDescription;
+    const clientObject = entry.Client;
+    const clientName =
+      clientObject?.FirstName || clientObject?.LastName
+        ? `${clientObject.FirstName ?? ''} ${clientObject.LastName ?? ''}`.trim()
+        : undefined;
+    return {
+      id: entry.Id,
+      classId: entry.ClassId,
+      className: classDescription?.Name,
+      classDate: entry.ClassDate,
+      classScheduleId: entry.ClassSchedule?.Id,
+      clientId: clientObject?.Id,
+      clientName,
+      enrollmentDateForward: entry.EnrollmentDateForward,
+      requestDatetime: entry.RequestDateTime,
+      visitRefNo: entry.VisitRefNo,
+      web: entry.Web,
+    };
+  });
 
   return {
     entries,
@@ -259,11 +320,25 @@ export async function getWaitlistEntriesTool(
 }
 
 // Substitute class teacher
+/**
+ * `POST /class/substituteclassteacher`.
+ *
+ * `SubstituteClassTeacherRequest` is `{ClassId, StaffId, OverrideConflicts,
+ * SendClientEmail, SendOriginalTeacherEmail, SendSubstituteTeacherEmail}`, and
+ * `StaffId` is documented as "the staff ID of the teacher to substitute" — the
+ * incoming teacher. The original teacher is implied by the class, so it is not
+ * a parameter here: sending it as `StaffId` would substitute the original
+ * teacher with themselves.
+ *
+ * The response row is a `SubstituteTeacherClass` carrying `Staff` and the
+ * boolean `Substitute`. There is no `Class.SubstituteTeacher` field, so
+ * `teacherName` is the (now substituting) staff member's name.
+ */
+// SPEC-ALIGNED BUT UNVERIFIED: POST /class/substituteclassteacher has no Test flag, so the request
+// and response shapes above are taken from docs/openapi.json alone and have never been exercised against the sandbox.
 export async function substituteClassTeacherTool(
   classId: number,
-  originalTeacherId: number,
   substituteTeacherId: number,
-  substituteTeacherName?: string,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<{
@@ -272,32 +347,41 @@ export async function substituteClassTeacherTool(
   updatedClass?: {
     id: number;
     name: string;
-    originalTeacher: string;
-    substituteTeacher: string;
-    startTime: string;
+    teacherId?: number;
+    teacherName?: string;
+    substitute?: boolean;
+    startTime?: string;
   };
 }> {
   try {
     const response = await client.post<any>('/class/substituteclassteacher', {
       ClassId: classId,
-      StaffId: originalTeacherId,
-      SubstituteStaffId: substituteTeacherId,
-      SubstituteStaffName: substituteTeacherName,
+      StaffId: substituteTeacherId,
     });
 
     // Clear cache after substitution
     cache.clear();
 
+    const staff = response.Class?.Staff;
+    const teacherName =
+      staff?.Name ||
+      (staff?.FirstName || staff?.LastName
+        ? `${staff.FirstName ?? ''} ${staff.LastName ?? ''}`.trim()
+        : undefined);
+
     return {
       success: true,
       message: 'Successfully substituted teacher',
-      updatedClass: response.Class ? {
-        id: response.Class.Id,
-        name: response.Class.ClassDescription?.Name || '',
-        originalTeacher: response.Class.Staff?.Name || `${response.Class.Staff?.FirstName || ''} ${response.Class.Staff?.LastName || ''}`.trim() || '',
-        substituteTeacher: response.Class.SubstituteTeacher?.Name || substituteTeacherName || 'Unknown',
-        startTime: response.Class.StartDateTime,
-      } : undefined,
+      updatedClass: response.Class
+        ? {
+            id: response.Class.Id,
+            name: response.Class.ClassDescription?.Name,
+            teacherId: staff?.Id,
+            teacherName,
+            substitute: response.Class.Substitute,
+            startTime: response.Class.StartDateTime,
+          }
+        : undefined,
     };
   } catch (error: any) {
     return {
@@ -308,9 +392,33 @@ export async function substituteClassTeacherTool(
 }
 
 // Get class schedules
+/** Weekday order, matching `ClassSchedule.Day*`'s seven booleans. */
+const SCHEDULE_DAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+
+/**
+ * `GET /class/classschedules`, paged.
+ *
+ * `ClassSchedule` carries seven booleans (`DaySunday`..`DaySaturday`) rather
+ * than a single day, so `days` lists the weekdays the schedule runs on. There
+ * is no `DayOfWeek` and no `IsActive`; the schedule's own availability flag is
+ * `IsAvailable`, returned as `isAvailable`.
+ *
+ * `classDescriptionIds` is not a parameter of this endpoint. It is accepted by
+ * the sandbox only because unknown query parameters are ignored there, so it
+ * never filtered anything; use `sessionTypeIds`, which the endpoint does
+ * define.
+ */
 export async function getClassSchedulesTool(
   locationIds?: number[],
-  classDescriptionIds?: number[],
+  sessionTypeIds?: number[],
   staffIds?: number[],
   programIds?: number[],
   client: IMindbodyClient = mindbodyClient
@@ -320,12 +428,12 @@ export async function getClassSchedulesTool(
     className: string;
     instructor: string;
     location: string;
-    dayOfWeek: string;
+    days: string[];
     startTime: string;
     endTime: string;
     startDate: string;
     endDate?: string;
-    isActive: boolean;
+    isAvailable: boolean;
   }>;
   totalSchedules: number;
 }> {
@@ -334,7 +442,7 @@ export async function getClassSchedulesTool(
     '/class/classschedules',
     {
       LocationIds: locationIds,
-      ClassDescriptionIds: classDescriptionIds,
+      SessionTypeIds: sessionTypeIds,
       StaffIds: staffIds,
       ProgramIds: programIds,
     },
@@ -346,12 +454,12 @@ export async function getClassSchedulesTool(
     className: schedule.ClassDescription?.Name || '',
     instructor: schedule.Staff?.Name || `${schedule.Staff?.FirstName || ''} ${schedule.Staff?.LastName || ''}`.trim() || '',
     location: schedule.Location?.Name || '',
-    dayOfWeek: schedule.DayOfWeek,
+    days: SCHEDULE_DAYS.filter((day) => schedule[`Day${day}`] === true),
     startTime: schedule.StartTime,
     endTime: schedule.EndTime,
     startDate: schedule.StartDate,
     endDate: schedule.EndDate,
-    isActive: schedule.IsActive,
+    isAvailable: schedule.IsAvailable,
   }));
 
   return {
@@ -361,10 +469,22 @@ export async function getClassSchedulesTool(
 }
 
 // Get visits for a specific class (attendance/booking history)
+/**
+ * `GET /class/classvisits` — a single GET; the endpoint is not paginated in the spec.
+ *
+ * **No client names here.** A `Visit` carries `ClientId`, `ClientUniqueId`,
+ * `ClientPhotoUrl`, `LocationId`, `StaffId`, `Service`, `ServiceId` and
+ * `ServiceName`, with no `Client` object and no first name, last name, email or
+ * phone, so those fields are gone and `clientId`/`clientUniqueId` are returned
+ * instead. Resolving names needs `GET /client/clients`, which this tool does not
+ * call. `locationName` is resolved through the cached `/site/locations`
+ * catalogue and is `undefined` when `locationId` is not in it.
+ */
 export async function getClassVisitsTool(
   classId: number,
   lastModifiedDate?: string,
-  client: IMindbodyClient = mindbodyClient
+  client: IMindbodyClient = mindbodyClient,
+  cache: SimpleCache = classCache
 ): Promise<{
   classInfo: {
     id: number;
@@ -377,11 +497,9 @@ export async function getClassVisitsTool(
   visits: Array<{
     id: number;
     classId: number;
-    clientId: string;
-    clientFirstName: string;
-    clientLastName: string;
-    clientEmail?: string;
-    clientPhone?: string;
+    clientId?: string;
+    clientUniqueId?: number;
+    staffId?: number;
     startDateTime: string;
     endDateTime: string;
     signedIn: boolean;
@@ -417,24 +535,29 @@ export async function getClassVisitsTool(
     location: response.Class?.Location?.Name || '',
   };
 
-  const visits = (response.Class?.Visits || []).map((visit: any) => ({
+  const rawVisits: any[] = response.Class?.Visits || [];
+  // Read the catalogue only when a visit actually carries a LocationId to
+  // resolve, so a class with no visits costs exactly the one request it always did.
+  const locations = rawVisits.some((v: any) => typeof v?.LocationId === 'number')
+    ? await locationNames(client, cache)
+    : new Map<number, string>();
+
+  const visits = rawVisits.map((visit: any) => ({
     id: visit.Id,
     classId: visit.ClassId || classId,
     clientId: visit.ClientId,
-    clientFirstName: visit.Client?.FirstName || visit.FirstName || '',
-    clientLastName: visit.Client?.LastName || visit.LastName || '',
-    clientEmail: visit.Client?.Email || visit.Email,
-    clientPhone: visit.Client?.MobilePhone || visit.Client?.HomePhone || visit.Phone,
+    clientUniqueId: visit.ClientUniqueId,
+    staffId: visit.StaffId,
     startDateTime: visit.StartDateTime,
     endDateTime: visit.EndDateTime,
     signedIn: visit.SignedIn || false,
     webSignup: visit.WebSignup || false,
     makeUp: visit.MakeUp || false,
     lateCancel: visit.LateCancelled || false,
-    serviceName: visit.Service?.Name || visit.ServiceName,
-    serviceId: visit.Service?.Id || visit.ServiceId,
-    locationId: visit.Location?.Id || visit.LocationId,
-    locationName: visit.Location?.Name || visit.LocationName,
+    serviceName: visit.ServiceName ?? visit.Service?.Name,
+    serviceId: visit.ServiceId ?? visit.Service?.Id,
+    locationId: visit.LocationId,
+    locationName: locations.get(visit.LocationId as number),
   }));
 
   // Generate summary

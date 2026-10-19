@@ -56,7 +56,7 @@ and is labelled as such.
 
 The working-tree refresh adds, among other things, `GetActiveSessionTimesResponse.SessionTypeActiveSessionTimes`, `Staff.Active`, `request.includeInactive` on `GET /staff/staff`, `ClientCreditCard.CardId`, `AddClientToClassRequest.AutoAssignSpot` and `request.excludeTypeTakenDescriptions` on `GET /client/clientvisits`. Everything below is checked against the working-tree file, whose bytes are now the committed `docs/openapi.json`.
 
-**Code scanned.** Every `fetchAllPages(...)`, `client.get(...)` and `client.post(...)` in `src/**/*.ts`, plus the token call in `src/api/auth.ts`. Forty-six call sites across seven tool files, `src/utils/siteTime.ts` and `src/api/auth.ts`. Line numbers are from the working tree as of this audit; three other sessions are editing the checkout, and `src/tools/enrollmentManagement.ts`, `src/tools/siteManagement.ts` and `src/utils/siteTime.ts` changed while the audit ran. Their rows were re-read after the change.
+**Code scanned.** Every `fetchAllPages(...)`, `client.get(...)` and `client.post(...)` in `src/**/*.ts`, plus the token call in `src/api/auth.ts`. Forty-six call sites across seven tool files, `src/utils/siteTime.ts` and `src/api/auth.ts`. Line numbers are from the working tree as of this audit, which is the pre-fix revision now committed as `f21ad01`; three other sessions were editing the checkout, and `src/tools/enrollmentManagement.ts`, `src/tools/siteManagement.ts` and `src/utils/siteTime.ts` changed while the audit ran. Their rows were re-read after the change. The section-C fixes landed after this audit and moved many of these lines: read a `file:line` here as a pointer into `f21ad01`, not into the fixed tree, and prefer the file-and-path in the same row to locate the call site.
 
 **Checks per call site.** (1) Path and method exist in the spec. (2) Every request parameter or body field the code sends exists in the spec with the right name and type. (3) Every response field the code reads exists in the spec's response definition. (4) Spec-required parameters the code can omit.
 
@@ -118,7 +118,7 @@ Verdict key: OK, CODE-BUG, SPEC-BUG, UNVERIFIED. "C-n" and "D-n" refer to entrie
 | 37 | `src/tools/salesManagement.ts` | POST `/sale/purchasecontract` | RESOLVED 2026-10-20 | Body OK. Read `response.ClientContract.*`; the spec response is flat (`ClientContractId`, `ContractId`, `Totals`, ...). Fixed as C-23 and confirmed against the sandbox, which also closed E-3. |
 | 38 | `src/tools/salesManagement.ts:482` | GET `/sale/contracts` | CODE-BUG | `request.locationId` is spec-required; code can omit it; sandbox 400 (C-24). Reads `ContractType`, `LocationId`, `AutopaySchedule.PaymentAmount`, `IntroOffer.{Id,Name,Price}`; `IntroOffer` is a string (C-25). |
 | 39 | `src/tools/siteManagement.ts:119` | GET `/site/locations` | CODE-BUG | Reads `AdditionalImageURLs[].Id/Name` (they are strings) and `BusinessHours` (not in spec or sandbox) (C-27). |
-| 40 | `src/tools/siteManagement.ts:176` | GET `/site/programs` | OK | Request and reads in spec. Sandbox adds undocumented `ScheduleOffset`, `ScheduleOffsetEnd` (D-9). |
+| 40 | `src/tools/siteManagement.ts:176` | GET `/site/programs` | OK | Request and reads in spec. Sandbox adds undocumented `ScheduleOffset`, `ScheduleOffsetEnd` (D-3). |
 | 41 | `src/tools/siteManagement.ts:214` | GET `/site/resources` | CODE-BUG | Sends `SessionTypeIds`, `LocationId`, `StartDateTime`, `EndDateTime`; spec has `locationIds`, `programIds`, `resourceIds`, `scheduleTypes`, `includeInactive`. `SessionTypeIds` makes the sandbox return HTTP 500 (C-28). Response untyped in spec (D-2). |
 | 42 | `src/tools/siteManagement.ts:261` | GET `/site/sessiontypes` | CODE-BUG | `ProgramIds` accepted for `request.programIDs`. Reads `DefaultTimeLengthType`, not in spec or sandbox (C-29). |
 | 43 | `src/tools/siteManagement.ts:325` | GET `/staff/staff` | CODE-BUG | Sends `SessionTypeIds`, `LocationIds` (plural); spec has singular `sessionTypeId`, `locationId`; sandbox ignores the plural forms. Reads `isMale`; spec has `IsMale` (C-30). |
@@ -130,7 +130,7 @@ Tally: OK 16 (rows 1, 5, 6, 7, 8, 14, 24, 27, 28, 29, 30, 31, 32, 40, 44, 45), C
 
 ## C. Code bugs
 
-Each entry: the wrong field(s), the correct field(s), evidence, and a one-line fix. Nothing was implemented.
+Each entry: the wrong field(s), the correct field(s), evidence, and a one-line fix. **Status:** every entry in this section was implemented on the branch that carries this document (`fix/sandbox-observed-behaviour`). The audit text below describes the pre-fix state it was written against, now committed as `f21ad01`; the `file:line` pointers belong to that revision.
 
 ### C-1. `getStaffAppointments` reads client, session type and location objects that `Appointment` does not carry
 
@@ -372,7 +372,11 @@ Each entry: the wrong field(s), the correct field(s), evidence, and a one-line f
 
 Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, impact, and a paragraph ready to send.
 
+**Status:** every entry below was raised with Mindbody support by email on 2026-10-18. D-9 is recorded for completeness only and is not a report.
+
 ### D-1. `GET /appointment/activesessiontimes`: `SessionTypeActiveSessionTimes` missing from the published response schema
+
+**Resolved in this repository.** The refreshed spec, now committed as `f21ad01` and pinned in `docs/openapi.lock`, carries `SessionTypeActiveSessionTimes`. The finding remains valid against the older published Swagger document, so the write-up below is kept for that audience.
 
 - **Spec:** The committed `docs/openapi.json` at audit time (`b1652cb0…`, **SHA-1**; SHA-256 `063ac47a…`, since replaced — see the status note in section A) defines `#/definitions/Mindbody.PublicApi.Dto.Models.V6.AppointmentController.GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes: string[]`. The refresh adds `SessionTypeActiveSessionTimes: SessionTypeActiveSessionTimes[]` with the description "Omitted when `SessionTypeIds` is not supplied."
 - **Sandbox:** `ScheduleType=All` → `{PaginationResponse, ActiveSessionTimes}` (216 strings, e.g. `"05:00:00"`). `SessionTypeIds=23,41` → `{PaginationResponse, ActiveSessionTimes, SessionTypeActiveSessionTimes: [{SessionTypeId: 23, ActiveSessionTimes: ["06:00:00", "06:30:00", ...]}, ...]}`. `ActiveSessionTimes` is an array of plain strings in both cases.
@@ -439,6 +443,35 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Spec:** Both request definitions document `Test: boolean` ("input information is validated, but not committed").
 - **Sandbox:** `addclient` with `Test: true` → 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`, so the flag cannot be used there at all. `purchasecontract` with `Test: true` and no payment parameter → 400 `At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`; `Test` does not stand alone. With one supplied it does behave as documented: `Test: true` + `UseAccountCredit: true` → 200, `ClientContractId: null`, `Totals.Total: 0`, and nothing committed — verified 2026-10-20 for payloads with and without `StartDate`, and with `SendNotifications`.
 - **Write-up:** "`AddClientRequest.Test` is documented but the endpoint answers `Test mode is not allowed for this endpoint`. Please either honour the flag or remove it from the schema. For `PurchaseContractRequest`, `Test: true` still demands one of the four payment parameters, so a dry run cannot be expressed without naming a payment method — and naming a real one requires credentials a test environment cannot hold. Either let `Test` stand alone, or document that a payment parameter must be supplied and is not used when `Test` is true."
+
+## F. Follow-ups found after this audit (not fixed here)
+
+### F-1. `nextjs-app/` reads the same phantom fields section C fixed in `src/`
+
+**File:** `nextjs-app/src/lib/mindbody/service.ts`
+
+The audit's scope was the 46 call sites in `src/**/*.ts`. The Next.js app is a
+second, independent Mindbody client in this repository that was not in that
+scope, and it still reads fields section C established do not exist:
+
+| Reads | Spec field | Same defect as |
+|---|---|---|
+| `c.LiabilityRelease.IsReleased` / `.AgreementDate` | `c.Liability`; `LiabilityRelease` is a boolean | C-14 |
+| `client?.ClientCreditCards` | `client.ClientCreditCard`, a single object | C-17 |
+| `ImageUrl` | `ImageURL` | C-7 |
+| `c.IsSubstitute` | `c.Substitute` | C-6 |
+| `isMale` | `IsMale` | C-30 |
+| `IntroOffer.Id` / `.Name` / `.Price` | `IntroOffer` is a string | C-25 |
+
+**Why it is recorded rather than fixed.** The same shapes are consumed
+downstream: `nextjs-app/src/lib/sync/index.ts` and the Prisma schema depend on
+them, and Gates 14 and 15 type-check and build that app. Changing them is a
+migration with its own test surface, not a mechanical field rename, and it
+deserves its own change rather than landing silently inside a fix to `src/`.
+
+**Consequence if unfixed.** The Next.js app renders the same always-empty
+fields this audit removed from the MCP server. Both code bases are wrong in the
+same way, so a fix applied to one should be applied to the other.
 
 ## E. Unverified items
 
