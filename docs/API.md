@@ -249,7 +249,7 @@ interface CancelAppointmentsResponse {
 | `duplicate appointment id in request` | The same ID appears twice | Remove the duplicate |
 | `at most 3 appointments may be cancelled per request` | More than 3 IDs. Nothing is cancelled. | Split into several calls |
 | `appointment lookup failed` | Verification lookup failed. Nothing is cancelled. | Retry |
-| `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`, or set `MINDBODY_SITE_TIMEZONE` |
+| `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`; set `MINDBODY_SITE_TIMEZONE` only if the record has none, and unset it if it disagrees with the record |
 | Mindbody write error | Cancellations already made stand and appear in `cancelled`; the call stops at the failing ID. | Re-check the listed appointments with `getStaffAppointments` |
 
 ### checkoutShoppingCart
@@ -670,7 +670,10 @@ Mindbody takes and returns every date and time as the site's local time with no 
 
 - **Site zone.** The server reads the site's IANA timezone from `GET /site/sites` (`TimeZone`), cached for 60 minutes under the same key `getSites` uses.
 - **Multi-site keys.** The lookup sends `SiteIds` for the chosen site (explicit `siteId` argument, else `MINDBODY_SITE_ID`) and must resolve to exactly one site. If the key reaches several sites and none was chosen, or the chosen one is not reachable, `getSites` returns `{ error, availableSites }` with no `site`, and the timezone cannot be resolved (so `cancelAppointments` refuses to write). The first site returned is never used by default.
-- **Override.** `MINDBODY_SITE_TIMEZONE` (an IANA name, e.g. `America/Los_Angeles`) is used only when the site record gives no usable `TimeZone`. A valid `TimeZone` from the API takes precedence.
+- **Override.** `MINDBODY_SITE_TIMEZONE` (an IANA name, e.g. `America/Los_Angeles`) is used only when the site record is reachable but gives no usable `TimeZone`. A valid `TimeZone` from the API takes precedence, with two refusal cases on write paths (`cancelAppointments`, `cancelEnrollmentVisits`):
+  - The site lookup failed (including the multi-site refusal above): the override is never consulted, and the write is refused.
+  - The record has a usable `TimeZone` and the override names a different zone: the write is refused (`... disagrees with the site record's TimeZone ...`). Read tools ignore the override and use the record's zone.
+- **No site configured.** If `MINDBODY_SITE_ID` is unset or blank, no `SiteId` header is sent (never the string `undefined`) and Mindbody applies the key's default; a multi-site key is then refused as above.
 - **Default date ranges** are the site's calendar date, not the host machine's. For example, `getStaffAppointments` defaults to the site's today through seven days out.
 - **Cancellation guard.** `cancelAppointments` compares each start time with now in the site zone. If the zone cannot be resolved, it refuses to write.
 - **Read tools.** If the zone cannot be resolved, read tools with a default date range fall back to UTC and print one warning to stderr per process.
