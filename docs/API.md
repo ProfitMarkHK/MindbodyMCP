@@ -322,6 +322,69 @@ The API returns the per-session-type breakdown in `SessionTypeActiveSessionTimes
 { "scheduleType": "Appointment", "sessionTypeIds": [111] }
 ```
 
+### getBookableItems
+
+Searches for windows in which a session could be booked. Read the name carefully: **"bookable items" is only the name of the endpoint and the tool — no response field is called `BookableItems`.** The response list key is `Availabilities`.
+
+```
+GET /appointment/bookableitems   →  { PaginationResponse, Availabilities: Availability[] }
+```
+
+`docs/openapi.json` agrees: `GetBookableItemsResponse` has exactly `PaginationResponse` and `Availabilities`, whose items are `#/definitions/Mindbody.PublicApi.Dto.Models.V6.Availability`.
+
+#### The trap
+
+Reading `BookableItems` off the response returns `undefined`, which reads back as an empty list — so a correct answer from the API is indistinguishable from "nothing is bookable". One probe hit exactly this: the response carried `PaginationResponse | Availabilities` with `TotalResults: 125`, while `response.BookableItems ?? []` yielded `0`. Always read `Availabilities`.
+
+#### `Availabilities` appears in two endpoints with two different jobs
+
+The same key name, and the same `Availability` item type, is returned in two places. The placement differs:
+
+| Where | Path | Shape | Use case |
+|-------|------|-------|----------|
+| Top level | `GET /appointment/bookableitems` | `response.Availabilities[]` | **Booking discovery.** "Is there room for this session type, for whom, and roughly when?" Input to `addAppointment`. |
+| Nested per staff | `GET /appointment/scheduleitems` | `response.StaffMembers[].Availabilities[]` | **Schedule display.** Rendering one staff member's working day (alongside their `Appointments[]` and `Unavailabilities[]`). Not a booking pre-check. |
+
+`GET /appointment/scheduleitems` has no top-level `Availabilities` at all: `GetScheduleItemsResponse` is `{ PaginationResponse, StaffMembers }`, so a `scheduleitems` row is only reachable through its staff member.
+
+#### An availability row is a window, not a slot
+
+Live shape from `-99`, session type 23, on 2026-10-20:
+
+```
+row keys   : Id, Staff, SessionType, Programs, StartDateTime, EndDateTime,
+             BookableEndDateTime, Location, PrepTime, FinishTime, IsMasked,
+             ShowPublic, ResourceAvailabilities
+StartDateTime      = 2026-10-20T05:00:00
+EndDateTime        = 2026-10-20T10:00:00
+BookableEndDateTime= 2026-10-20T09:55:00
+```
+
+Observed row spans run from 120 to 750 minutes. So a row says "staff 100000061 is available for session type 23 at location 1 between 05:00 and 10:00" — it does **not** assert that `05:00:00` is bookable. Three separate filters apply after this read:
+
+1. **Active session times.** A start must also fall on one of the session type's active times, or the booking fails with `InvalidBookingTime`. Get them from `getActiveSessionTimes`.
+2. **Staff must actually be able to sell it.** A window can belong to staff who cannot take that booking, refused at `addAppointment` with a validation error availability alone cannot predict. Observed on `-99`: `ValidationFailed — The staff member does not have availability configured for the requested service.` (`tests/live/README.md` records the sibling refusal `The staff member is not an instructor for the requested service`.)
+3. **The session must fit.** `BookableEndDateTime` is the last permitted start, per the spec's own description.
+
+Treat `bookableitems` as narrowing the search space, never as a pre-flight that guarantees `addAppointment` will succeed.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `sessionTypeIds` | number[] | **Yes in practice** | Session types to find availability for. The spec marks it optional; `-99` answers `SessionTypeIds is a required parameter.` (`MissingRequiredFields`) without it. On `-99`, 66 of 95 session types are `Type: "Appointment"`; the live tier filters to those, since the other types (e.g. `Type: "Enrollment"`) are not what an appointment booking needs. | - |
+| `locationIds` | number[] | No | Locations. Leave it out when discovering: filtering can narrow to nothing (`locationIds=98` → `0` rows for session type 23, while the same unfiltered query reports `TotalResults: 125`). | all |
+| `staffIds` | number[] | No | Restrict to specific staff | all |
+| `startDate` | string | No | Window start (`YYYY-MM-DD`) | today |
+| `endDate` | string | No | Window end (`YYYY-MM-DD`) | - |
+| `limit`, `offset` | number | No | Pagination — see `PaginationResponse` (`TotalResults` counts beyond the returned page) | 100 |
+
+#### Use case summary
+
+- **"Where can I book this client in?"** → `getBookableItems` (`Availabilities`), then intersect with `getActiveSessionTimes`, then attempt `addAppointment`.
+- **"What does this staff member's day look like?"** → `getScheduleItems` and read `StaffMembers[].Availabilities`.
+- **"At what times of day can this type of session start at all?"** → `getActiveSessionTimes`. That answer is neither an availability nor a bookable item; it is a repeating list of times-of-day with no date attached.
+
 ### updateClient
 
 Updates an existing client. The server nests the changed fields under `Client`, sets `Id` to the client, and sends `CrossRegionalUpdate: false`. Mindbody refuses the fields at the top level with `Client (Code: MissingRequiredFields)`, and it refuses `CrossRegionalUpdate: true` at a site outside a region ("The current site does not belong to a region").

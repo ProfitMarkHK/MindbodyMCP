@@ -463,7 +463,9 @@ All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` giv
 **Returns:** `{ success, cancelled: [{ id, status, startDateTime }], rejected: [{ id, reason }], message }`
 
 #### `getBookableItems`
-Find available appointment slots.
+Find availability windows in which a session could be booked — **windows, not slots**. Each row spans a range (typically 120–750 minutes), so a start must still be validated against `getActiveSessionTimes` before it can be booked.
+
+**Naming:** "bookable items" is only the endpoint and tool name. No response field is called `BookableItems`; the list key is `Availabilities`, and reading `BookableItems` silently yields an empty list. The same `Availabilities` key also appears nested under `StaffMembers[]` from `getScheduleItems`, where it serves schedule display rather than booking discovery. See "getBookableItems" in `docs/API.md` for the distinction and use cases.
 
 **Parameters:**
 - `sessionTypeIds` (required): Service types
