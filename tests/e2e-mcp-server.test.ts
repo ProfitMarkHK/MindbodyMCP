@@ -649,7 +649,7 @@ describe('OAuth user token — failure fallback', () => {
   beforeAll(async () => {
     failedStub = await MindbodyStub.start();
     // Every issue attempt is refused. 403 is not retried by the API client's
-    // shouldRetry(), and the token fetch has no retry of its own, so the count
+    // isTransient() check, and the token fetch has no retry of its own, so the count
     // below is exact and fast.
     failedStub.setTokenResponder(() => ({
       status: 403,
@@ -2387,9 +2387,9 @@ describe('tools/call — error handling', () => {
   });
 
   itE2E('surfaces an upstream rejection as an error result and keeps serving', async () => {
-    // Deliberately a 4xx: `shouldRetry` retries only network errors and 5xx, and
+    // Deliberately a 4xx: GETs are retried only on network errors and 5xx, and
     // the 5xx backoff (1s + 2s + 4s) would make this suite too slow for a
-    // pre-commit hook. Retry-on-5xx is therefore NOT covered here.
+    // pre-commit hook. Retry-on-5xx is covered in tests/api-client-retry.test.ts.
     stub.setFault('GET', CLIENTS_PATH, {
       status: 400,
       body: { Error: { Code: 'BadRequest', Message: 'stub rejected the request' } },

@@ -258,11 +258,15 @@ and not needed" from "forgotten":
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
   - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
     manual script needing a server already listening.
-  - **Retry-on-5xx.** `src/api/client.ts` retries network errors and 5xx with a
-    1s + 2s + 4s backoff; exercising it would add ~7s to a pre-commit hook, so the
-    upstream-fault test deliberately uses a 4xx. The retry path is untested.
-  - **Retry/refresh on 401** (`src/api/client.ts` response interceptor) is also
-    untested — the token-failure path falls back to API-key-only auth instead.
+  - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
+    servers, a 1 ms backoff injected through the client's constructor), not by the
+    E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
+    and a POST is never replayed, because Mindbody's v6 spec has no idempotency
+    key. The E2E upstream-fault test still uses a 4xx to keep the hook fast.
+  - **Refresh on 401** (`src/api/client.ts` response interceptor) is covered only
+    for the replay-once step (`tests/api-client-retry.test.ts`, no source
+    credentials); the token re-issue itself is untested, because the E2E
+    token-failure path falls back to API-key-only auth instead.
   - **Per-property `description` coverage** in `inputSchema` is not asserted:
     `updateClient.updates` and its 13 nested properties carry no `description`, so
     a universal check would fail on the current source. Tool-level descriptions

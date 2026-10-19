@@ -7,13 +7,20 @@ export interface IMindbodyClient {
   post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>;
 }
 
-class MindbodyApiClient implements IMindbodyClient {
+/** Methods that are safe to replay: repeating one cannot change server state. */
+const REPLAYABLE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+const isReplayable = (config: AxiosRequestConfig | undefined): boolean =>
+  REPLAYABLE_METHODS.has((config?.method ?? 'GET').toUpperCase());
+
+export class MindbodyApiClient implements IMindbodyClient {
   private client: AxiosInstance;
   private readonly maxRetries = 3;
-  private readonly retryDelay = 1000;
+  private readonly retryDelay: number;
 
-  constructor() {
-    const apiUrl = process.env.MINDBODY_API_URL || 'https://api.mindbodyonline.com/public/v6';
+  constructor(options: { apiUrl?: string; retryDelayMs?: number } = {}) {
+    const apiUrl = options.apiUrl ?? (process.env.MINDBODY_API_URL || 'https://api.mindbodyonline.com/public/v6');
+    this.retryDelay = options.retryDelayMs ?? 1000;
 
     this.client = axios.create({
       baseURL: apiUrl,
@@ -49,17 +56,27 @@ class MindbodyApiClient implements IMindbodyClient {
       const response = await this.client.request<T>(config);
       return response.data;
     } catch (error: any) {
-      if (retries < this.maxRetries && this.shouldRetry(error)) {
+      if (retries < this.maxRetries && isReplayable(config) && this.isTransient(error)) {
         await this.delay(this.retryDelay * Math.pow(2, retries));
         return this.request<T>(config, retries + 1);
       }
 
-      throw this.formatError(error);
+      const formatted = this.formatError(error);
+      if (!isReplayable(config) && this.isTransient(error)) {
+        throw new Error(
+          `${formatted.message}. The ${(config.method ?? 'GET').toUpperCase()} ${config.url} was NOT retried: ` +
+          `the server may already have applied it, and Mindbody's public API v6 documents no idempotency key ` +
+          `that would make a replay safe. Reconcile before retrying: read the record back ` +
+          `(appointments, visits, sales, client) and repeat the write only if it did not land.`
+        );
+      }
+      throw formatted;
     }
   }
 
-  private shouldRetry(error: any): boolean {
-    // Retry on network errors or 5xx errors, but NOT on 401/403 auth errors
+  /** A lost response or a 5xx: the outcome of the request is unknown, or the server is faulting. */
+  private isTransient(error: any): boolean {
+    // Not 401/403 auth errors, not 4xx: those are definitive answers.
     if (!error.response) return true;
     return error.response.status >= 500;
   }
