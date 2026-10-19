@@ -12,7 +12,7 @@ Date: 2026-10-17. Sandbox site: `-99`. Read-only audit; no source files were cha
 | UNVERIFIED | 0 |
 | **Total call sites** | **46** |
 
-Distinct findings: **30 code bugs** (section C), **10 spec issues to raise with Mindbody** (section D), **5 unverified items** (section E). No call site is wholly unverified, but five individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
+Distinct findings: **30 code bugs** (section C), **10 spec issues to raise with Mindbody** (section D), **4 unverified items** (section E). No call site is wholly unverified, but four individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
 
 One finding has since been fixed and verified live, and is kept here for provenance rather than deleted: **C-23** (`purchaseContract` reading a `ClientContract` object the response does not contain). Doing so also closed **E-3**, which existed only because the runtime shape could not be probed.
 
@@ -413,11 +413,11 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Sandbox:** `GET /public/v6/client/clientenrollments` → HTTP 404 with an HTML body.
 - **Impact:** Earlier versions of this server called the path; the current code reads `/client/clientschedule`. Nothing to raise with Mindbody beyond confirming that no enrollment-specific client endpoint is planned.
 
-### D-10. `POST /client/addclient` and `POST /sale/purchasecontract` cannot be exercised in Test mode
+### D-10. `POST /client/addclient` refuses `Test`; `POST /sale/purchasecontract` will not test without a payment parameter
 
 - **Spec:** Both request definitions document `Test: boolean` ("input information is validated, but not committed").
-- **Sandbox:** `addclient` with `Test: true` → 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`. `purchasecontract` with `Test: true` and no card → 400 `At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`, so validation-only runs need payment details the sandbox cannot supply.
-- **Write-up:** "`AddClientRequest.Test` is documented but the endpoint answers `Test mode is not allowed for this endpoint`. Please either honour the flag or remove it from the schema. For `PurchaseContractRequest`, a `Test: true` request still requires a payment instrument, which makes dry-run validation impossible on the sandbox; a sandbox-only payment method or a relaxed Test path would help."
+- **Sandbox:** `addclient` with `Test: true` → 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`, so the flag cannot be used there at all. `purchasecontract` with `Test: true` and no payment parameter → 400 `At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`; `Test` does not stand alone. With one supplied it does behave as documented: `Test: true` + `UseAccountCredit: true` → 200, `ClientContractId: null`, `Totals.Total: 0`, and nothing committed — verified 2026-10-20 for payloads with and without `StartDate`, and with `SendNotifications`.
+- **Write-up:** "`AddClientRequest.Test` is documented but the endpoint answers `Test mode is not allowed for this endpoint`. Please either honour the flag or remove it from the schema. For `PurchaseContractRequest`, `Test: true` still demands one of the four payment parameters, so a dry run cannot be expressed without naming a payment method — and naming a real one requires credentials a test environment cannot hold. Either let `Test` stand alone, or document that a payment parameter must be supplied and is not used when `Test` is true."
 
 ## E. Unverified items
 
@@ -425,7 +425,7 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 |---|---|---|
 | E-1 | `POST /class/substituteclassteacher` request semantics (C-11): whether `StaffId` is the incoming substitute, and the real response shape | The request has no `Test` flag, so any call would write to the sandbox. Finding is static against the spec only. |
 | E-2 | `POST /client/addclient` requiring `Birthday` (D-5) and whether `Street`/`MobileNumber` are needed | `Test: true` is refused on the endpoint; a real call would create a client. Evidence is the repo's recorded live run, not this audit. |
-| E-3 | `POST /sale/purchasecontract` runtime response shape (C-23) | The sandbox rejects the call before producing a body unless a payment instrument is supplied. The code bug is certain from the spec; its runtime symptom is inferred. |
+| E-3 | `POST /sale/purchasecontract` runtime response shape (C-23) | **RESOLVED 2026-10-20.** Probed with `Test: true` + `UseAccountCredit: true` (commits nothing, so it was safe to run) and then as a real purchase. The body is flat — `ClientId, UniqueClientId, LocationId, ContractId, ClientContractId, Totals, PaymentProcessingFailures` — with no nested `ClientContract`. |
 | E-4 | Whether `GET /appointment/staffappointments` can ever return `Cancelled`/`LateCancelled` rows (D-4) | Only absence was observed (6,919 rows, none cancelled; live tier saw a just-cancelled row vanish). Proving the negative needs a write. |
 | E-5 | `GET /site/resources` documented filters (`locationIds`, `resourceIds`) narrowing on a real site | On `-99` they returned the full list; the sandbox may simply have every resource at every location. Not a code defect either way. |
 
