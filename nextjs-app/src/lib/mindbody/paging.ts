@@ -28,6 +28,9 @@
 //     source rows, a concurrent insert, overlapping list keys); a one-row page is
 //     judged against the previous page alone.
 //
+// Unlike the root implementation this port has no `onPage` hook: nothing in the
+// Next.js service reads a second, non-list structure off a paged response.
+//
 // Covered by tests/nextjs-paging.test.ts in the repo root (run by `bun test`).
 
 export const DEFAULT_PAGE_SIZE = 200;
@@ -42,16 +45,6 @@ export const MAX_PAGES = 100;
 /** The subset of MindbodyApiClient that the pager needs. */
 export interface PagedGetClient {
   get<T>(endpoint: string, options?: { params?: Record<string, any> }): Promise<T>;
-}
-
-export interface FetchAllPagesOptions {
-  /**
-   * Called with every raw page response, in order, before its rows are
-   * collected. For endpoints that return a second, non-list structure alongside
-   * the paged list, so it can be merged across pages instead of being read from
-   * page one only.
-   */
-  onPage?: (page: any) => void;
 }
 
 /** A non-negative integer from a PaginationResponse field, or undefined. */
@@ -74,8 +67,7 @@ export async function fetchAllPages<T>(
   url: string,
   params: Record<string, unknown> = {},
   listKeys: string | string[],
-  pageSize: number = DEFAULT_PAGE_SIZE,
-  options: FetchAllPagesOptions = {}
+  pageSize: number = DEFAULT_PAGE_SIZE
 ): Promise<{ items: T[]; totalResults: number }> {
   if (!Number.isInteger(pageSize) || pageSize < 1) {
     throw new RangeError(`fetchAllPages: pageSize must be a positive integer, got ${pageSize}`);
@@ -105,7 +97,6 @@ export async function fetchAllPages<T>(
         Offset: offset,
       },
     });
-    options.onPage?.(response);
 
     const pageItems: T[] = keys.flatMap((key) => (Array.isArray(response?.[key]) ? response[key] : []));
     const pagination = response?.PaginationResponse;

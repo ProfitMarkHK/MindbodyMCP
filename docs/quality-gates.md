@@ -586,14 +586,17 @@ and not needed" from "forgotten":
   (a verbatim, reordered or wrapped-around replay: the server is ignoring
   `Offset`). A page that merely shares some rows with earlier ones is accepted,
   because duplicate source rows, a concurrent insert and overlapping list keys
-  all produce that; a one-row page is judged against the previous page alone. Covered by `tests/fetchAllPages.test.ts`.
+  all produce that; a one-row page is judged against the previous page alone.
+  Covered by `tests/fetchAllPages.test.ts`.
   The live API does honour a `Limit` above 200: `Limit=500` returned
   `RequestedLimit 500, PageSize 141, TotalResults 141`.
 
   The Next.js port in `nextjs-app/src/lib/mindbody/paging.ts` has the same
   constants (`DEFAULT_PAGE_SIZE` 200, `MAX_PAGES` 100), termination rules and
-  two throws. `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to
-  that contract and then drives the real `MindbodyService` against a paging fake
+  throws; the one difference is that it has no `onPage` hook (only the MCP
+  server's `getActiveSessionTimes` merges a second structure across pages).
+  `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to that contract, walks
+  a loopback HTTP server through the real `MindbodyApiClient`, and then drives the real `MindbodyService` against a paging fake
   server: every one of its list methods is asserted to send `Limit=200`, walk
   `Offset` 0 → 2 → 4 over a server that caps pages at 2 rows, hit the spec path
   under the spec's list key, and return all rows; `getClientVisits`,

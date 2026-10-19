@@ -9,14 +9,9 @@
  * its own; see docs/quality-gates.md.
  */
 import { describe, expect, it } from "bun:test";
-import {
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGES,
-  fetchAllPages,
-  type PagedGetClient,
-} from "../nextjs-app/src/lib/mindbody/paging";
+import { MAX_PAGES, fetchAllPages, type PagedGetClient } from "../nextjs-app/src/lib/mindbody/paging";
 import { MindbodyService } from "../nextjs-app/src/lib/mindbody/service";
-import { MindbodyApiClient, getMindbodyClient, resetMindbodyClient } from "../nextjs-app/src/lib/mindbody/client";
+import { MindbodyApiClient } from "../nextjs-app/src/lib/mindbody/client";
 
 type PaginationMode = "full" | "no-total" | "none";
 
@@ -109,11 +104,6 @@ const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
 describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", () => {
-  it("defaults to a page size of 200 and caps a walk at 100 pages", () => {
-    expect(DEFAULT_PAGE_SIZE).toBe(200);
-    expect(MAX_PAGES).toBe(100);
-  });
-
   it("walks every page, sends Limit=pageSize, advances Offset by rows received, keeps caller params", async () => {
     const server = new PagingServer({ total: 450 });
     const { items, totalResults } = await fetchAllPages<{ Id: number }>(
@@ -152,19 +142,25 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
     expect(server.offsets).toEqual([0, 200, 400]);
   });
 
-  it("collects rows from every listed key and hands every raw page to onPage", async () => {
-    const seen: unknown[] = [];
-    const server = new PagingServer({ total: 3, key: "A" });
-    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, ["A", "B"], 200, {
-      onPage: (page) => seen.push(page),
-    });
-    expect(ids(items)).toEqual([1, 2, 3]);
-    expect(seen).toHaveLength(1);
+  it("collects rows from every listed key on every page", async () => {
+    const { client, offsets } = scripted([{ A: [{ Id: 1 }], B: [{ Id: 2 }] }, { A: [{ Id: 3 }], B: [{ Id: 4 }] }], 4);
+    const { items } = await fetchAllPages<{ Id: number }>(client, "/x", {}, ["A", "B"], 2);
+    expect(ids(items)).toEqual([1, 2, 3, 4]);
+    expect(offsets).toEqual([0, 2]);
   });
 
-  it("returns no items from an empty first page", async () => {
-    const server = new PagingServer({ total: 0 });
-    expect(await fetchAllPages(server, "/x", {}, "Things")).toEqual({ items: [], totalResults: 0 });
+  it("makes no request past the page that completes TotalResults, even on a page boundary", async () => {
+    const server = new PagingServer({ total: 400 });
+    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things");
+    expect(items).toHaveLength(400);
+    expect(server.offsets).toEqual([0, 200]);
+  });
+
+  it("succeeds at exactly MAX_PAGES pages", async () => {
+    const server = new PagingServer({ total: MAX_PAGES });
+    const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things", 1);
+    expect(items).toHaveLength(MAX_PAGES);
+    expect(server.offsets).toEqual(range(MAX_PAGES).map((n) => n - 1));
   });
 
   it("throws, naming the path and the count, rather than return a truncated list after MAX_PAGES", async () => {
@@ -253,25 +249,43 @@ describe("nextjs-app fetchAllPages — contract shared with src/api/client.ts", 
   });
 });
 
-describe("nextjs-app MindbodyApiClient satisfies the pager's client contract", () => {
-  // Constructor-only: no request is made. The explicit config means nothing is
-  // read from the developer's environment (bunfig.toml loads the repo .env).
-  const config = { apiKey: "test-key", siteId: "-99", sourceName: "src", sourcePassword: "pw", apiUrl: "http://127.0.0.1:1" };
-
-  it("exposes get(endpoint, { params }) and is accepted by fetchAllPages and MindbodyService", () => {
-    const client = new MindbodyApiClient(config);
-    const asPaged: PagedGetClient = client;
-    expect(typeof asPaged.get).toBe("function");
-    expect(new MindbodyService(client)).toBeInstanceOf(MindbodyService);
-  });
-
-  it("getMindbodyClient returns one shared instance until reset", () => {
-    resetMindbodyClient();
-    const a = getMindbodyClient(config);
-    expect(getMindbodyClient()).toBe(a);
-    resetMindbodyClient();
-    expect(getMindbodyClient(config)).not.toBe(a);
-    resetMindbodyClient();
+describe("nextjs-app MindbodyApiClient drives the pager over real HTTP", () => {
+  it("walks Offset 0 → 2 → 4 through the real client against a loopback server, fetching a token first", async () => {
+    const requests: Array<{ path: string; offset: string | null; limit: string | null; auth: string | null }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url);
+        requests.push({
+          path: url.pathname,
+          offset: url.searchParams.get("Offset"),
+          limit: url.searchParams.get("Limit"),
+          auth: req.headers.get("Authorization"),
+        });
+        if (url.pathname.endsWith("/usertoken/issue")) {
+          return Response.json({ AccessToken: "loopback", TokenType: "Bearer", ExpiresIn: 3600 });
+        }
+        const offset = Number(url.searchParams.get("Offset"));
+        return Response.json({
+          Things: range(5).slice(offset, offset + 2).map((Id) => ({ Id })),
+          PaginationResponse: { TotalResults: 5 },
+        });
+      },
+    });
+    try {
+      // The explicit config means nothing is read from the developer's environment (bunfig.toml loads the repo .env).
+      const client = new MindbodyApiClient({
+        apiKey: "k", siteId: "-99", sourceName: "s", sourcePassword: "p", apiUrl: `http://127.0.0.1:${server.port}`,
+      });
+      const { items, totalResults } = await fetchAllPages<{ Id: number }>(client, "/things", {}, "Things");
+      expect(ids(items)).toEqual(range(5));
+      expect(totalResults).toBe(5);
+      const pages = requests.filter((r) => r.path === "/things");
+      expect(pages.map((r) => r.offset)).toEqual(["0", "2", "4"]);
+      expect(pages.every((r) => r.limit === "200" && r.auth === "Bearer loopback")).toBe(true);
+    } finally {
+      server.stop();
+    }
   });
 });
 

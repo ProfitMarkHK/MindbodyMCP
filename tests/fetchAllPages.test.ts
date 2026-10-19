@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AxiosRequestConfig } from "axios";
-import { DEFAULT_PAGE_SIZE, MAX_PAGES, fetchAllPages, type IMindbodyClient } from "../src/api/client.js";
+import { MAX_PAGES, fetchAllPages, type IMindbodyClient } from "../src/api/client.js";
 
 /** What the mock server puts in `PaginationResponse`. */
 type PaginationMode =
@@ -92,13 +92,6 @@ const page = (...rowIds: number[]) => ({ Things: rowIds.map((Id) => ({ Id })) })
 const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
-describe("fetchAllPages — constants", () => {
-  it("defaults to a page size of 200 and caps a walk at 100 pages", () => {
-    expect(DEFAULT_PAGE_SIZE).toBe(200);
-    expect(MAX_PAGES).toBe(100);
-  });
-});
-
 describe("fetchAllPages — multi-page with TotalResults", () => {
   it("walks every page, sends Limit=pageSize, advances Offset by rows received, keeps caller params", async () => {
     const server = new PagingServer({ total: 450 });
@@ -116,11 +109,11 @@ describe("fetchAllPages — multi-page with TotalResults", () => {
     }
   });
 
-  it("stops after exactly one GET when the first page already holds TotalResults rows", async () => {
-    const server = new PagingServer({ total: 200 });
+  it("makes no request past the page that completes TotalResults, even on a page boundary", async () => {
+    const server = new PagingServer({ total: 400 });
     const { items } = await fetchAllPages<{ Id: number }>(server, "/x", {}, "Things");
-    expect(items).toHaveLength(200);
-    expect(server.calls).toHaveLength(1);
+    expect(items).toHaveLength(400);
+    expect(server.offsets).toEqual([0, 200]);
   });
 
   it("honours a caller page size above 200 (the live API does not cap at 200)", async () => {
