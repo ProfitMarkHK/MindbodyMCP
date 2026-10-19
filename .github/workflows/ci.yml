@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+# Least privilege: this workflow only reads the repo. Without this block the
+# GITHUB_TOKEN inherits the repository default (often contents: write).
+permissions:
+  contents: read
+
 jobs:
   test-bun:
     name: Test with Bun
@@ -23,18 +28,16 @@ jobs:
         run: bun install
         
       - name: Run type checking
-        run: bunx tsc --noEmit || true
+        run: bunx tsc --noEmit
         
       - name: Run tests
-        run: echo "Skipping tests - no test files yet"
-        continue-on-error: true
+        run: bun test
         
-      - name: Test tool loading
-        run: echo "Skipping tool test - would require env vars"
-        continue-on-error: true
-        
+      # Known gap: there is no gate that exercises the tool layer end to end
+      # (calling a tool against the Mindbody API). It needs credentials, so it
+      # cannot run here. Tracked for a future end-to-end gate.
       - name: Build check
-        run: bun run src/index.ts --help || true
+        run: bun run src/index.ts --help
 
   test-node:
     name: Test with Node.js
@@ -57,13 +60,13 @@ jobs:
           npm ci
         
       - name: Run type checking
-        run: npx tsc --noEmit || true
+        run: npx tsc --noEmit
         
       - name: Build
         run: npm run node:build
         
       - name: Test build output
-        run: node dist/index.js --help || true
+        run: node dist/index.js --help
 
   validate-mcp:
     name: Validate MCP Server
@@ -79,11 +82,15 @@ jobs:
       - name: Install dependencies
         run: bun install
         
-      - name: Validate tool schemas
-        run: |
-          echo "Validating MCP tool schemas..."
-          bun run src/index.ts 2>&1 | head -n 5 || true
-          
+      # No standalone schema-validation step is needed here. Gate 2
+      # (tests/e2e-mcp-server.test.ts) spawns the real src/index.ts over
+      # STDIO and asserts against the inputSchemas the server actually
+      # advertises over MCP JSON-RPC: each parses as a valid JSON Schema,
+      # is type "object", declares every `required` field inside
+      # `properties`, and types every property. That is the replacement for
+      # the old validate-mcp step, whose exit code came from `head` rather
+      # than from the server. The steps below check the environment template
+      # exists and that the types compile.
       - name: Check environment template
         run: |
           if [ ! -f ".env.example" ]; then
@@ -92,7 +99,7 @@ jobs:
           fi
           
       - name: Validate TypeScript types
-        run: bunx tsc --noEmit || true
+        run: bunx tsc --noEmit
 
   security:
     name: Security Scan
@@ -102,7 +109,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Run security audit
-        run: npm audit --audit-level=moderate || true
+        run: npm audit --audit-level=moderate
         
       - name: Check for secrets
         run: bash scripts/secret-scan.sh
