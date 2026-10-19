@@ -20,18 +20,39 @@ Headline items:
 - Three request shapes are silently ignored by the sandbox because the parameter names are not in the spec: `Days` on active session times, `IgnorePrepFinishBuffer` on schedule items, plural `LocationIds`/`SessionTypeIds` on staff. One (`SessionTypeIds` on resources) makes the sandbox return HTTP 500.
 - `purchaseContract` reads a `ClientContract` object that the spec response does not contain, so a successful purchase would be reported as a failure.
 - `getContracts` can omit the spec-required `locationId`; the sandbox answers HTTP 400.
-- The sandbox matches the working-tree spec for every response model probed (the only extra fields are `Program.ScheduleOffset` and `Program.ScheduleOffsetEnd`). The committed spec is older and lacks `SessionTypeActiveSessionTimes`.
+- The sandbox matches the working-tree spec for every response model probed (the only extra fields are `Program.ScheduleOffset` and `Program.ScheduleOffsetEnd`). The committed spec is older and lacks `SessionTypeActiveSessionTimes`. *(Status 2026-10-18: "the committed spec" no longer describes a separate older file — the refreshed spec is now committed and is the one this audit was run against. See the status note in section A.)*
 
 ## A. Method and scope
 
-**Spec.** `docs/openapi.json`, Swagger 2.0, paths under `/public/v{version}/...`, schemas under `#/definitions`. Two versions are relevant because the working tree carries an uncommitted refresh of the file:
+**Spec.** `docs/openapi.json`, Swagger 2.0, paths under `/public/v{version}/...`, schemas under `#/definitions`. Two versions were relevant because the working tree carried an uncommitted refresh of the file:
 
-| Version | `shasum docs/openapi.json` |
-|---|---|
-| Working tree (audited against) | `a1e5abfd939ad4b6205e753e6f4acc460e47ce69` |
-| Committed at `HEAD` (67e0b11) | `b1652cb00ea213038fa3889e5bc6fd40c2255308` |
+> **Status update, 2026-10-18.** The refresh audited here is now committed
+> (spec-pair commit `6af1d36`), and Gate 16 in `scripts/check-gates.sh`
+> verifies it offline on every commit. The digests below are recorded for
+> provenance; the SHA-256 is the authoritative one, because it is what
+> `docs/openapi.lock` holds and what Gate 16 compares.
+>
+> **The SHA-256 every verdict in this document depends on:**
+> `970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`
+> (SHA-256, 759,319 bytes, also served unauthenticated at
+> `https://api.mindbodyonline.com/public/v6/swagger/doc`).
+> **If the file in front of you does not hash to this value, the verdicts below
+> do not describe it and must be re-derived** — a SHA change triggers a re-run
+> of this reconciliation, not a routine sync. See the drift policy under Gate 16
+> in [`docs/quality-gates.md`](quality-gates.md).
 
-The working-tree refresh adds, among other things, `GetActiveSessionTimesResponse.SessionTypeActiveSessionTimes`, `Staff.Active`, `request.includeInactive` on `GET /staff/staff`, `ClientCreditCard.CardId`, `AddClientToClassRequest.AutoAssignSpot` and `request.excludeTypeTakenDescriptions` on `GET /client/clientvisits`. Everything below is checked against the working-tree file.
+| Version | Algorithm | Digest |
+|---|---|---|
+| Working tree (audited against) | **SHA-1** (`shasum`, historical — this is the digest earlier briefs quoted) | `a1e5abfd939ad4b6205e753e6f4acc460e47ce69` |
+| Working tree (audited against) | **SHA-256** (authoritative; what `docs/openapi.lock` holds) | `970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941` |
+| Committed at `HEAD` at audit time (`67e0b11`) | **SHA-1** (historical) | `b1652cb00ea213038fa3889e5bc6fd40c2255308` |
+| Committed at `HEAD` at audit time (`67e0b11`) | **SHA-256** (historical) | `063ac47ab4cb7630081be74157e5ec02194161fe5404ccc9d714b10c6e0638df` |
+
+Two algorithms were in circulation for one file, which is how verification goes
+wrong. Prefer SHA-256 everywhere; every SHA-1 above is a historical reference
+and is labelled as such.
+
+The working-tree refresh adds, among other things, `GetActiveSessionTimesResponse.SessionTypeActiveSessionTimes`, `Staff.Active`, `request.includeInactive` on `GET /staff/staff`, `ClientCreditCard.CardId`, `AddClientToClassRequest.AutoAssignSpot` and `request.excludeTypeTakenDescriptions` on `GET /client/clientvisits`. Everything below is checked against the working-tree file, whose bytes are now the committed `docs/openapi.json`.
 
 **Code scanned.** Every `fetchAllPages(...)`, `client.get(...)` and `client.post(...)` in `src/**/*.ts`, plus the token call in `src/api/auth.ts`. Forty-six call sites across seven tool files, `src/utils/siteTime.ts` and `src/api/auth.ts`. Line numbers are from the working tree as of this audit; three other sessions are editing the checkout, and `src/tools/enrollmentManagement.ts`, `src/tools/siteManagement.ts` and `src/utils/siteTime.ts` changed while the audit ran. Their rows were re-read after the change.
 
@@ -350,7 +371,7 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 
 ### D-1. `GET /appointment/activesessiontimes`: `SessionTypeActiveSessionTimes` missing from the published response schema
 
-- **Spec:** The committed `docs/openapi.json` (`b1652cb0...`) defines `#/definitions/Mindbody.PublicApi.Dto.Models.V6.AppointmentController.GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes: string[]`. The working-tree refresh adds `SessionTypeActiveSessionTimes: SessionTypeActiveSessionTimes[]` with the description "Omitted when `SessionTypeIds` is not supplied."
+- **Spec:** The committed `docs/openapi.json` at audit time (`b1652cb0…`, **SHA-1**; SHA-256 `063ac47a…`, since replaced — see the status note in section A) defines `#/definitions/Mindbody.PublicApi.Dto.Models.V6.AppointmentController.GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes: string[]`. The refresh adds `SessionTypeActiveSessionTimes: SessionTypeActiveSessionTimes[]` with the description "Omitted when `SessionTypeIds` is not supplied."
 - **Sandbox:** `ScheduleType=All` → `{PaginationResponse, ActiveSessionTimes}` (216 strings, e.g. `"05:00:00"`). `SessionTypeIds=23,41` → `{PaginationResponse, ActiveSessionTimes, SessionTypeActiveSessionTimes: [{SessionTypeId: 23, ActiveSessionTimes: ["06:00:00", "06:30:00", ...]}, ...]}`. `ActiveSessionTimes` is an array of plain strings in both cases.
 - **Impact:** Clients built from the older published spec cannot know the per-session-type grid exists. The code already handles both.
 - **Write-up:** "GET /public/v6/appointment/activesessiontimes returns an undocumented top-level `SessionTypeActiveSessionTimes` array (`[{SessionTypeId, ActiveSessionTimes: string[]}]`) whenever `SessionTypeIds` is supplied. The Swagger document served for v6 defines `GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes`. Please add the property and note that `ActiveSessionTimes` are `HH:MM:SS` strings, not objects."

@@ -314,7 +314,7 @@ interface GetActiveSessionTimesResponse {
 }
 ```
 
-The API returns the per-session-type breakdown in `SessionTypeActiveSessionTimes`. That field is absent from `docs/openapi.json`.
+The API returns the per-session-type breakdown in `SessionTypeActiveSessionTimes`. That field was absent from the older `docs/openapi.json` and **is present in the current one** (the refreshed spec pinned at SHA-256 `970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`).
 
 #### Examples
 
