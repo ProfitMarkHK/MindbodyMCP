@@ -11,6 +11,16 @@ interface UserToken {
   expiresAt: Date;
 }
 
+/**
+ * `SiteId` header from MINDBODY_SITE_ID, omitted when unset/blank. Never send the
+ * string "undefined": with no site configured the API key's default applies, and
+ * `selectSite` (siteTime.ts) refuses to pick one when the key reaches several.
+ */
+function siteIdHeader(): Record<string, string> {
+  const siteId = process.env.MINDBODY_SITE_ID?.trim();
+  return siteId ? { SiteId: siteId } : {};
+}
+
 class MindbodyAuth {
   private userToken: UserToken | null = null;
   private tokenFailed: boolean = false;
@@ -51,7 +61,7 @@ class MindbodyAuth {
         {
           headers: {
             'Api-Key': process.env.MINDBODY_API_KEY!,
-            'SiteId': process.env.MINDBODY_SITE_ID!,
+            ...siteIdHeader(),
             'Content-Type': 'application/json',
           },
         }
@@ -89,7 +99,7 @@ class MindbodyAuth {
   getHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       'Api-Key': process.env.MINDBODY_API_KEY!,
-      'SiteId': process.env.MINDBODY_SITE_ID!,
+      ...siteIdHeader(),
       'Content-Type': 'application/json',
     };
 

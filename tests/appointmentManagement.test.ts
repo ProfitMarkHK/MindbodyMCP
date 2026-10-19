@@ -341,6 +341,37 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
     expect(result.success).toBe(true);
     expect(client.posts).toHaveLength(1);
   });
+
+  it("refuses to write when MINDBODY_SITE_TIMEZONE disagrees with the site record's zone", async () => {
+    process.env[SITE_TIMEZONE_ENV] = "Asia/Hong_Kong";
+    const client = new RecordingClient([row(1)]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].id).toBe(-1);
+    expect(result.rejected[0].reason).toContain("disagrees with the site record's TimeZone");
+    expect(client.dataGets).toHaveLength(0);
+    expect(client.posts).toHaveLength(0);
+  });
+
+  it("refuses to write on an ambiguous multi-site key even with MINDBODY_SITE_TIMEZONE set", async () => {
+    process.env[SITE_TIMEZONE_ENV] = SITE_TZ;
+    const savedSiteId = process.env.MINDBODY_SITE_ID;
+    delete process.env.MINDBODY_SITE_ID;
+    try {
+      const client = new RecordingClient([row(1)]);
+      client.get = async () =>
+        ({
+          Sites: [{ Id: 1, Name: "A", TimeZone: SITE_TZ }, { Id: 2, Name: "B", TimeZone: SITE_TZ }],
+          PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: 2, TotalResults: 2 },
+        }) as any;
+      const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+      expect(result.success).toBe(false);
+      expect(result.rejected[0].reason).toContain("this API key reaches 2 sites");
+      expect(client.posts).toHaveLength(0);
+    } finally {
+      if (savedSiteId !== undefined) process.env.MINDBODY_SITE_ID = savedSiteId;
+    }
+  });
 });
 
 describe("cancelAppointmentsTool — execution", () => {

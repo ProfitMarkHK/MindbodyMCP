@@ -95,7 +95,7 @@ MCP_SERVER_VERSION=2.0.0
 
 ### Dates and timezones
 
-Mindbody takes and returns every date and time as the studio's local time with no UTC offset (for example `2026-10-18T08:00:00`). Send dates and times the same way. The server reads the site's IANA timezone from Mindbody's site record (`GET /site/sites`, cached for 60 minutes), so "today" in default date ranges is the studio's calendar date, not your machine's. `cancelAppointments` compares start times in that zone and refuses to write if the zone cannot be resolved. `MINDBODY_SITE_TIMEZONE` is a fallback for a site record with no usable zone; leave it unset otherwise.
+Mindbody takes and returns every date and time as the studio's local time with no UTC offset (for example `2026-10-18T08:00:00`). Send dates and times the same way. The server reads the site's IANA timezone from Mindbody's site record (`GET /site/sites`, cached for 60 minutes), so "today" in default date ranges is the studio's calendar date, not your machine's. `cancelAppointments` compares start times in that zone and refuses to write if the zone cannot be resolved. `MINDBODY_SITE_TIMEZONE` is a fallback for a reachable site record with no usable zone; leave it unset otherwise. It is never used when the site lookup fails (for example a multi-site key with no `MINDBODY_SITE_ID`), and if it disagrees with the record's zone, `cancelAppointments` and `cancelEnrollmentVisits` refuse to write. If `MINDBODY_SITE_ID` is unset or blank, no `SiteId` header is sent.
 
 ### 3. Configure Claude Desktop
 

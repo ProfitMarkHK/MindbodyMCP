@@ -197,13 +197,18 @@ class SiteClient implements IMindbodyClient {
 
 describe("getSiteTimeZone", () => {
   let savedEnv: string | undefined;
+  let savedSiteId: string | undefined;
   beforeEach(() => {
     savedEnv = process.env[SITE_TIMEZONE_ENV];
+    savedSiteId = process.env[SITE_ID_ENV];
     delete process.env[SITE_TIMEZONE_ENV];
+    delete process.env[SITE_ID_ENV];
   });
   afterEach(() => {
     if (savedEnv === undefined) delete process.env[SITE_TIMEZONE_ENV];
     else process.env[SITE_TIMEZONE_ENV] = savedEnv;
+    if (savedSiteId === undefined) delete process.env[SITE_ID_ENV];
+    else process.env[SITE_ID_ENV] = savedSiteId;
   });
 
   it("reads Sites[0].TimeZone and caches the site record under 'site-info'", async () => {
@@ -219,8 +224,8 @@ describe("getSiteTimeZone", () => {
     expect(client.calls).toHaveLength(1);
   });
 
-  it("prefers the API zone over the env override", async () => {
-    process.env[SITE_TIMEZONE_ENV] = HK;
+  it("returns the API zone when the env override agrees with it", async () => {
+    process.env[SITE_TIMEZONE_ENV] = LA;
     expect(await getSiteTimeZone(new SiteClient({ TimeZone: LA }), new SimpleCache(5))).toBe(LA);
   });
 
@@ -228,7 +233,41 @@ describe("getSiteTimeZone", () => {
     process.env[SITE_TIMEZONE_ENV] = HK;
     expect(await getSiteTimeZone(new SiteClient({ Id: 1 }), new SimpleCache(5))).toBe(HK);
     expect(await getSiteTimeZone(new SiteClient({ TimeZone: "Pacific Standard Time" }), new SimpleCache(5))).toBe(HK);
-    expect(await getSiteTimeZone(new SiteClient(undefined, new Error("down")), new SimpleCache(5))).toBe(HK);
+  });
+
+  it("never consults the override when the site lookup fails", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    await expect(getSiteTimeZone(new SiteClient(undefined, new Error("down")), new SimpleCache(5))).rejects.toThrow(
+      /^Cannot determine the site timezone: site lookup failed: down$/
+    );
+  });
+
+  it("returns the multi-site refusal instead of the override", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    await expect(getSiteTimeZone(new MultiSiteClient(TWO_SITES), new SimpleCache(5))).rejects.toThrow(
+      /site lookup failed: this API key reaches 2 sites/
+    );
+    // reads refuse too (UTC fallback), they do not adopt the override
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await resolveReadTimeZone(new MultiSiteClient(TWO_SITES), new SimpleCache(5))).toBe("UTC");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("write path refuses an override that disagrees with the record; a case-only difference is fine", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    await expect(getSiteTimeZone(new SiteClient({ TimeZone: LA }), new SimpleCache(5))).rejects.toThrow(
+      /disagrees with the site record's TimeZone "America\/Los_Angeles"/
+    );
+    process.env[SITE_TIMEZONE_ENV] = "america/los_angeles";
+    expect(await getSiteTimeZone(new SiteClient({ TimeZone: LA }), new SimpleCache(5))).toBe(LA);
+  });
+
+  it("read path keeps the record's zone and ignores a disagreeing override", async () => {
+    process.env[SITE_TIMEZONE_ENV] = HK;
+    expect(await resolveReadTimeZone(new SiteClient({ TimeZone: LA }), new SimpleCache(5))).toBe(LA);
   });
 
   it("throws a clear error when neither source is usable", async () => {
