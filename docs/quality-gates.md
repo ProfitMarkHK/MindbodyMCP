@@ -70,7 +70,7 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
-| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/` and `nextjs-app/src/` is scanned, 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
+| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/`, `nextjs-app/src/` and `scripts/` is scanned (shell scripts, the Prisma schema and the app's config files are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 14 | nextjs-app type checking passes | applies | `cd nextjs-app && ./node_modules/.bin/tsc --noEmit` — exits 0. Run by the runner; **fails, never skips, when `nextjs-app/node_modules` is absent** (it prints the `bun install` to run). See Gates 14 and 15 below. |
 | 15 | nextjs-app build succeeds | applies | `cd nextjs-app && next build` — exits 0, ~11s warm, 8 routes; writes `nextjs-app/.next/` and `tsconfig.tsbuildinfo`, both ignored by `nextjs-app/.gitignore`. Run by the runner with `NEXT_TELEMETRY_DISABLED=1` and no stdin so it can never block a hook; fail-closed on missing dependencies like Gate 14. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
@@ -534,40 +534,98 @@ and not needed" from "forgotten":
   ```
   It is static and deterministic: no network, no subprocess, no credentials. It
   loads `docs/openapi.json`, classifies every GET path (prefix
-  `/public/v{version}` stripped, lowercased) as paginated or not, then scans every
-  `.ts` and `.tsx` file under **both** `src/` and `nextjs-app/src/` (the roots
+  `/public/v{version}` stripped, lowercased) as paginated or not, then parses every
+  `.ts` and `.tsx` file under `src/`, `nextjs-app/src/` and `scripts/` (the roots
   are listed in `SCAN_ROOTS`; `node_modules` and `.next` are outside them) with
-  comments blanked out (line numbers preserved), so a commented-out call is not
-  counted. Rule 4 also asserts that every root contributed at least one call
-  site, so a root silently dropped from the scan cannot pass.
+  the TypeScript compiler, one program per root under that root's own tsconfig
+  (so `@/` imports resolve; `nextjs-app/node_modules` is not needed). Comments
+  are not code, so a commented-out call is not counted. Rule 4 also asserts that
+  every root has files to parse, so a root silently dropped from the scan cannot
+  pass.
+
+  **How a call is recognised: by the type of its receiver, not its name.** The
+  scanner does not look for the identifiers `client` / `mindbodyClient`. It looks
+  at every `.get(…)` and `.request(…)` call, whatever the receiver is called and
+  however it is written: `api.get(p)`, `mb.get(p)` after
+  `import { mindbodyClient as mb }`, `this.mindbody.get(p)`, `client?.get(p)`,
+  `client['get'](p)`, `(client.get as any)(p)`, or a receiver on the line below.
+  A call is ignored only when the receiver's **type** is on the benign list
+  (`BENIGN_RECEIVER_TYPES` in the test: `Map`, `ReadonlyMap`, `WeakMap`,
+  `URLSearchParams`, `Headers`, and this repo's `SimpleCache` / `SimpleTtlCache` /
+  `TtlCache`), because those `.get` calls are keyed lookups, never an HTTP read.
+  Anything else, including an `any`-typed receiver or axios itself, is treated as
+  a possible Mindbody client. That is fail-closed: a new cache type must be added
+  to the list to be ignored, a visible one-line change. The path argument is
+  resolved by type too, so a hoisted `const CLASSES_PATH = '/class/classes'`
+  counts as the literal it is. The known false positive, a path-keyed
+  `routeTable.get('/class/classes')` on a `Map`, is excluded deliberately by that
+  type rule; the same call on a renamed Mindbody client is a call site.
 
   **What counts as a violation** — one `test` per rule; each failure lists every
   offender as `file:line → path`:
   1. a `.get('/…')` / `.get<T>('/…')` call (single line or multi-line, any
-     receiver) whose path the spec paginates;
+     non-benign receiver) whose path the spec paginates;
   2. any GET path — through `.get` or `fetchAllPages` — that is not a GET in the
      spec (an unknown endpoint cannot be classified, so it fails);
   3. a `fetchAllPages` call on a path the spec does **not** paginate;
-  4. fewer than 58 call sites found, or a scan root with none (the count
-     observed on 2026-10-17 and cross-checked by an independent grep: `src/` 32 =
-     30 `fetchAllPages` calls plus single GETs to the two non-paginated endpoints
-     `/class/classvisits` and `/site/activationcode`; `nextjs-app/src/` 26 = 25
-     `fetchAllPages` calls plus one single GET to `/site/activationcode`), so a
-     broken scanner can never pass vacuously. The number is a floor; lower it
-     only when call sites are really removed;
+  4. a scan root holding fewer call sites than its own floor (`minSites` in
+     `SCAN_ROOTS`), checked per root and independently of the total, or a floor
+     that has gone stale. Floors as of 2026-10-19: `src/` **40** = 38
+     `fetchAllPages` calls plus single GETs to the two non-paginated endpoints
+     `/class/classvisits` and `/site/activationcode`; `nextjs-app/src/` **28** =
+     27 `fetchAllPages` calls plus one single GET to `/site/activationcode`;
+     `scripts/` **0** (it holds no Mindbody read, and must still be scanned);
+     total 68, which is the `sites=` the runner prints. Each floor equals the found
+     count today, so deleting a call site, or turning one into a read the scanner
+     cannot see, fails. The suite prints
+     `GATE13_PAGINATION_ROOTS src/=40/40 nextjs-app/src/=28/28 scripts/=0/0 (found/floor)`
+     (informational, not parsed by the runner): recount from that line, never
+     from this document. A root more than 5 sites (`ROOT_FLOOR_SLACK`) above its
+     floor also fails with "raise minSites", so the floor cannot quietly fall
+     behind again (it sat at a total of 58 while the real count was 68). Lower a
+     floor only when call sites are really removed;
   5. a call site the scanner cannot resolve to a literal path: `fetchAllPages`
-     with a non-literal path, `client.get(…)` / `mindbodyClient.get(…)` /
-     `this.client.get(…)` with a non-literal path, or any `.request(…)` on those
-     receivers. Two exemptions, both found structurally (by parsing the file),
-     never by line number: the request `fetchAllPages` itself issues (inside
-     that function's body), and the forwarding calls inside the body of `class
-     MindbodyApiClient` — the axios wrapper both code bases define under that
-     name, whose `get(endpoint)` hands a caller-supplied path to `this.client`.
-     Those are the transport; the wrapper's own callers are what the scan checks.
-  A scanner self-test runs the scanner over a fixture covering multi-line,
-  generic, chained, commented-out and unresolvable calls, `this.client`
-  receivers, the wrapper-class exemption and `.tsx` discovery, so a regex
-  regression fails the suite directly rather than only lowering the count.
+     with a non-literal path (aliased imports and `paging.fetchAllPages(…)` are
+     followed), a `.get(…)` on a non-benign receiver whose path is not a literal
+     `'/…'`, any `.request(…)` on a non-benign receiver, and `.get` / `.request`
+     / `fetchAllPages` taken as a value (`const read = client.get`,
+     `client.get.bind(client)`, `const page = fetchAllPages`), where the call site
+     no longer shows the path. Two exemptions, both found structurally (by
+     parsing the file), never by line number: the request `fetchAllPages` itself
+     issues (inside that function's body), and everything inside the body of
+     `class MindbodyApiClient` — the axios wrapper both code bases define under
+     that name, whose `get(endpoint)` hands a caller-supplied path to
+     `this.client`. Those are the transport; the wrapper's own callers are what
+     the scan checks. The global `fetch(url)` (what a script would use) is read
+     the same way: a Mindbody URL or `/…` path is a call site, the public spec
+     document `/swagger/doc` (what `scripts/update-spec.ts` fetches) is not a site
+     read, and a URL that is not a literal fails here;
+  6. a network client on a live line of code the scanner cannot parse. The
+     TypeScript scan cannot read shell, so **shell scripts are not parsed**:
+     every `*.sh` under `scripts/`, everything under `nextjs-app/prisma/` and the
+     Next.js app's top-level config files (`tailwind.config.ts`, …) must contain no
+     `curl`, `wget`, `ncat`, `socat`, `telnet`, `fetch`, `axios`,
+     `XMLHttpRequest`, `/dev/tcp/`, absolute `http(s)://` URL or `mindbodyonline`
+     on a non-comment line. The list is checked to be non-empty (the runner, the
+     live-tier launcher and the Prisma schema must be in it), so a moved directory
+     cannot make it vacuous. A shell script that needs the network must be
+     rewritten as a `.ts` file under `scripts/`, where it is scanned.
+
+  A scanner self-test runs the same scanner over
+  [`tests/fixtures/gate13/`](../tests/fixtures/gate13/README.md), which sits
+  outside every scan root so the real gate never sees it. There is one `escape-*`
+  fixture per way a read once got past the scanner (renamed receiver parameter
+  with a hoisted path, the same with a dynamic path, an aliased import,
+  `this.mindbody`, a computed member, a cast call, a method taken as a value,
+  `fetchAllPages` taken as a value, a script's global `fetch` with a hoisted or a
+  dynamic URL), and the test asserts the gate goes red on each; a temporary file
+  exercises the rule 6 detector.
+  `still-caught.ts` pins the forms that were always caught (axios, `client?.get`,
+  a receiver on the previous line, `fetchAllPages as pageAll`, a dynamic path),
+  and the `ok-*` fixtures pin what must stay green: multi-line and generic calls,
+  comments, the `Map` route table, and the exempt transport. A `.tsx` test covers
+  file discovery. A scanner regression fails the suite directly rather than only
+  lowering the count.
 
   **How `fetchAllPages` pages.** It sends `Limit` = page size (default 200, set
   per call) and advances `Offset` by the number of rows actually received. An
@@ -640,14 +698,21 @@ and not needed" from "forgotten":
   `Offset`. That holds because every GET route the stub serves is paginated in
   the spec, so a single-GET regression on a stubbed route also fails Gate 2.
 
-  **Scope limits (residual gap).** The scan covers `src/` and `nextjs-app/src/`;
-  any further code base must be added to `SCAN_ROOTS`. The scanner recognises
-  the receiver names `client`, `mindbodyClient` and `this.client` for rule 5; a
-  GET issued through a differently named client object with a non-literal path,
-  or through axios directly, would not be seen. The scan checks paths, not query
-  parameters, so a call that sends a parameter the spec does not document (for
-  example `Days` on `/appointment/activesessiontimes`) passes Gate 13. That is
-  Gate 11 work.
+  **Scope limits (residual gap).** The scan covers `src/`, `nextjs-app/src/` and
+  `scripts/*.ts`; any further code base must be added to `SCAN_ROOTS`. `tests/` is
+  deliberately outside: its reads go to stubs and fakes, never a live site, and
+  the opt-in live tier under `tests/live/` is run by hand against the sandbox.
+  Shell scripts are only held to rule 6's deny-list, not parsed, so a script that
+  reaches the network through an interpreter one-liner or a tool that list does not
+  name (`python -c`, `nc`) would not be seen. Receiver detection is by
+  type, so it is only as good as the types: a receiver the compiler types as `any`
+  is flagged rather than trusted, but a Mindbody client deliberately laundered
+  through a type on the benign list (`as Map<…>`) would not be seen, and neither
+  would a method pulled apart by destructuring (`const { get } = client`) or
+  reached through a computed, non-literal key (`client[name](path)`). The scan
+  checks paths, not query parameters, so a call that sends a parameter the spec
+  does not document (for example `Days` on `/appointment/activesessiontimes`)
+  passes Gate 13. That is Gate 11 work.
 - **Gates 14 and 15 — nextjs-app type check and build (apply; pass).**
   [`nextjs-app/`](../nextjs-app/README.md) is a second code base in the repo: a
   Next.js 14 app with its own axios Mindbody client, tRPC routers, Prisma schema

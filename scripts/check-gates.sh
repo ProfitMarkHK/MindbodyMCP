@@ -257,7 +257,7 @@ else
   elif [ "$PAGINATION_VIOLATIONS" -gt 0 ]; then
     fail "Gate 13 mandatory pagination (${PAGINATION_VIOLATIONS} violation(s) across ${PAGINATION_SITES} call sites; see tests/pagination-gate.test.ts output above)"
   else
-    pass "Gate 13 mandatory pagination (${PAGINATION_SITES} API GET call sites across src/ and nextjs-app/src/; every paginated endpoint goes through fetchAllPages)"
+    pass "Gate 13 mandatory pagination (${PAGINATION_SITES} API GET call sites across src/, nextjs-app/src/ and scripts/; every paginated endpoint goes through fetchAllPages)"
   fi
 fi
 
