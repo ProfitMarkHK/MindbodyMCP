@@ -19,7 +19,7 @@ dotenv.config();
 markers.envLoaded = process.hrtime.bigint();
 
 // Import our modules
-const { getTeacherScheduleTool } = await import('../src/tools/teacherSchedule');
+const { getTeacherScheduleTool } = await import('../src/tools/teacherSchedule.js');
 markers.toolsLoaded = process.hrtime.bigint();
 
 // Create server instance
