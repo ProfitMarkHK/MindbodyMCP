@@ -20,20 +20,20 @@ Headline items:
 - Three request shapes are silently ignored by the sandbox because the parameter names are not in the spec: `Days` on active session times, `IgnorePrepFinishBuffer` on schedule items, plural `LocationIds`/`SessionTypeIds` on staff. One (`SessionTypeIds` on resources) makes the sandbox return HTTP 500.
 - `purchaseContract` reads a `ClientContract` object that the spec response does not contain, so a successful purchase would be reported as a failure.
 - `getContracts` can omit the spec-required `locationId`; the sandbox answers HTTP 400.
-- The sandbox matches the working-tree spec for every response model probed (the only extra fields are `Program.ScheduleOffset` and `Program.ScheduleOffsetEnd`). The committed spec is older and lacks `SessionTypeActiveSessionTimes`.
+- The sandbox matches the refreshed spec for every response model probed (the only extra fields are `Program.ScheduleOffset` and `Program.ScheduleOffsetEnd`, D-3). The previously committed spec was older and lacked `SessionTypeActiveSessionTimes`; the refresh, now committed as `97aa763`, supplies it (D-1).
 
 ## A. Method and scope
 
-**Spec.** `docs/openapi.json`, Swagger 2.0, paths under `/public/v{version}/...`, schemas under `#/definitions`. Two versions are relevant because the working tree carries an uncommitted refresh of the file:
+**Spec.** `docs/openapi.json`, Swagger 2.0, paths under `/public/v{version}/...`, schemas under `#/definitions`. The refresh this audit probed was uncommitted in the working tree when the audit ran; it is now committed on this branch as `97aa763` and pinned in `docs/openapi.lock` by SHA-256 `970ffa10...`. Two versions are recorded, because the older committed spec is what makes several findings below visible:
 
-| Version | `shasum docs/openapi.json` |
+| Version | `shasum docs/openapi.json` (SHA-1) |
 |---|---|
-| Working tree (audited against) | `a1e5abfd939ad4b6205e753e6f4acc460e47ce69` |
-| Committed at `HEAD` (67e0b11) | `b1652cb00ea213038fa3889e5bc6fd40c2255308` |
+| Refresh, audited against, now committed (`97aa763`); pinned by SHA-256 `970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941` | `a1e5abfd939ad4b6205e753e6f4acc460e47ce69` |
+| Previously committed at `HEAD` (`67e0b11`) | `b1652cb00ea213038fa3889e5bc6fd40c2255308` |
 
-The working-tree refresh adds, among other things, `GetActiveSessionTimesResponse.SessionTypeActiveSessionTimes`, `Staff.Active`, `request.includeInactive` on `GET /staff/staff`, `ClientCreditCard.CardId`, `AddClientToClassRequest.AutoAssignSpot` and `request.excludeTypeTakenDescriptions` on `GET /client/clientvisits`. Everything below is checked against the working-tree file.
+`a1e5abfd` is the SHA-1 of the refreshed file, not of a different document; the two digests name the same bytes. The refresh adds, among other things, `GetActiveSessionTimesResponse.SessionTypeActiveSessionTimes`, `Staff.Active`, `request.includeInactive` on `GET /staff/staff`, `ClientCreditCard.CardId`, `AddClientToClassRequest.AutoAssignSpot` and `request.excludeTypeTakenDescriptions` on `GET /client/clientvisits`. Everything below is checked against the refreshed file.
 
-**Code scanned.** Every `fetchAllPages(...)`, `client.get(...)` and `client.post(...)` in `src/**/*.ts`, plus the token call in `src/api/auth.ts`. Forty-six call sites across seven tool files, `src/utils/siteTime.ts` and `src/api/auth.ts`. Line numbers are from the working tree as of this audit; three other sessions are editing the checkout, and `src/tools/enrollmentManagement.ts`, `src/tools/siteManagement.ts` and `src/utils/siteTime.ts` changed while the audit ran. Their rows were re-read after the change.
+**Code scanned.** Every `fetchAllPages(...)`, `client.get(...)` and `client.post(...)` in `src/**/*.ts`, plus the token call in `src/api/auth.ts`. Forty-six call sites across seven tool files, `src/utils/siteTime.ts` and `src/api/auth.ts`. Line numbers are from the working tree as of this audit, which is the pre-fix revision now committed as `97aa763`; three other sessions were editing the checkout, and `src/tools/enrollmentManagement.ts`, `src/tools/siteManagement.ts` and `src/utils/siteTime.ts` changed while the audit ran. Their rows were re-read after the change. The section-C fixes landed after this audit and moved many of these lines: read a `file:line` here as a pointer into `97aa763`, not into the fixed tree, and prefer the file-and-path in the same row to locate the call site.
 
 **Checks per call site.** (1) Path and method exist in the spec. (2) Every request parameter or body field the code sends exists in the spec with the right name and type. (3) Every response field the code reads exists in the spec's response definition. (4) Spec-required parameters the code can omit.
 
@@ -95,7 +95,7 @@ Verdict key: OK, CODE-BUG, SPEC-BUG, UNVERIFIED. "C-n" and "D-n" refer to entrie
 | 37 | `src/tools/salesManagement.ts:418` | POST `/sale/purchasecontract` | CODE-BUG | Body OK. Reads `response.ClientContract.*`; the spec response is flat (`ClientContractId`, `ContractId`, `Totals`, ...) (C-23). Runtime shape not probeable (E-3). |
 | 38 | `src/tools/salesManagement.ts:482` | GET `/sale/contracts` | CODE-BUG | `request.locationId` is spec-required; code can omit it; sandbox 400 (C-24). Reads `ContractType`, `LocationId`, `AutopaySchedule.PaymentAmount`, `IntroOffer.{Id,Name,Price}`; `IntroOffer` is a string (C-25). |
 | 39 | `src/tools/siteManagement.ts:119` | GET `/site/locations` | CODE-BUG | Reads `AdditionalImageURLs[].Id/Name` (they are strings) and `BusinessHours` (not in spec or sandbox) (C-27). |
-| 40 | `src/tools/siteManagement.ts:176` | GET `/site/programs` | OK | Request and reads in spec. Sandbox adds undocumented `ScheduleOffset`, `ScheduleOffsetEnd` (D-9). |
+| 40 | `src/tools/siteManagement.ts:176` | GET `/site/programs` | OK | Request and reads in spec. Sandbox adds undocumented `ScheduleOffset`, `ScheduleOffsetEnd` (D-3). |
 | 41 | `src/tools/siteManagement.ts:214` | GET `/site/resources` | CODE-BUG | Sends `SessionTypeIds`, `LocationId`, `StartDateTime`, `EndDateTime`; spec has `locationIds`, `programIds`, `resourceIds`, `scheduleTypes`, `includeInactive`. `SessionTypeIds` makes the sandbox return HTTP 500 (C-28). Response untyped in spec (D-2). |
 | 42 | `src/tools/siteManagement.ts:261` | GET `/site/sessiontypes` | CODE-BUG | `ProgramIds` accepted for `request.programIDs`. Reads `DefaultTimeLengthType`, not in spec or sandbox (C-29). |
 | 43 | `src/tools/siteManagement.ts:325` | GET `/staff/staff` | CODE-BUG | Sends `SessionTypeIds`, `LocationIds` (plural); spec has singular `sessionTypeId`, `locationId`; sandbox ignores the plural forms. Reads `isMale`; spec has `IsMale` (C-30). |
@@ -107,7 +107,7 @@ Tally: OK 16 (rows 1, 5, 6, 7, 8, 14, 24, 27, 28, 29, 30, 31, 32, 40, 44, 45), C
 
 ## C. Code bugs
 
-Each entry: the wrong field(s), the correct field(s), evidence, and a one-line fix. Nothing was implemented.
+Each entry: the wrong field(s), the correct field(s), evidence, and a one-line fix. **Status:** every entry in this section was implemented on the branch that carries this document (`fix/sandbox-observed-behaviour`). The audit text below describes the pre-fix state it was written against, now committed as `97aa763`; the `file:line` pointers belong to that revision.
 
 ### C-1. `getStaffAppointments` reads client, session type and location objects that `Appointment` does not carry
 
@@ -348,9 +348,13 @@ Each entry: the wrong field(s), the correct field(s), evidence, and a one-line f
 
 Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, impact, and a paragraph ready to send.
 
+**Status:** every entry below was raised with Mindbody support by email on 2026-10-18. D-9 is recorded for completeness only and is not a report.
+
 ### D-1. `GET /appointment/activesessiontimes`: `SessionTypeActiveSessionTimes` missing from the published response schema
 
-- **Spec:** The committed `docs/openapi.json` (`b1652cb0...`) defines `#/definitions/Mindbody.PublicApi.Dto.Models.V6.AppointmentController.GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes: string[]`. The working-tree refresh adds `SessionTypeActiveSessionTimes: SessionTypeActiveSessionTimes[]` with the description "Omitted when `SessionTypeIds` is not supplied."
+**Resolved in this repository.** The refreshed spec, now committed as `97aa763` and pinned in `docs/openapi.lock`, carries `SessionTypeActiveSessionTimes`. The finding remains valid against the older published Swagger document, so the write-up below is kept for that audience.
+
+- **Spec:** The previously committed `docs/openapi.json` (`b1652cb0...`) defines `#/definitions/Mindbody.PublicApi.Dto.Models.V6.AppointmentController.GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes: string[]`. The refresh adds `SessionTypeActiveSessionTimes: SessionTypeActiveSessionTimes[]` with the description "Omitted when `SessionTypeIds` is not supplied."
 - **Sandbox:** `ScheduleType=All` → `{PaginationResponse, ActiveSessionTimes}` (216 strings, e.g. `"05:00:00"`). `SessionTypeIds=23,41` → `{PaginationResponse, ActiveSessionTimes, SessionTypeActiveSessionTimes: [{SessionTypeId: 23, ActiveSessionTimes: ["06:00:00", "06:30:00", ...]}, ...]}`. `ActiveSessionTimes` is an array of plain strings in both cases.
 - **Impact:** Clients built from the older published spec cannot know the per-session-type grid exists. The code already handles both.
 - **Write-up:** "GET /public/v6/appointment/activesessiontimes returns an undocumented top-level `SessionTypeActiveSessionTimes` array (`[{SessionTypeId, ActiveSessionTimes: string[]}]`) whenever `SessionTypeIds` is supplied. The Swagger document served for v6 defines `GetActiveSessionTimesResponse` with only `PaginationResponse` and `ActiveSessionTimes`. Please add the property and note that `ActiveSessionTimes` are `HH:MM:SS` strings, not objects."
