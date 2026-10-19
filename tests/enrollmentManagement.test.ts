@@ -13,6 +13,7 @@ import {
   getEnrollmentsTool,
 } from "../src/tools/enrollmentManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
+import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import {
   SITE_TIMEZONE_ENV,
   epochMsToSiteLocal,
@@ -161,9 +162,11 @@ function clientWithEnrollment(client: RecordingClient) {
 beforeEach(() => {
   resetSiteTimeWarningForTests();
   delete process.env[SITE_TIMEZONE_ENV];
+  delete process.env[LATE_CANCEL_WINDOW_ENV];
 });
 afterEach(() => {
   delete process.env[SITE_TIMEZONE_ENV];
+  delete process.env[LATE_CANCEL_WINDOW_ENV];
 });
 
 describe("getEnrollmentsTool", () => {
@@ -538,6 +541,7 @@ describe("cancelEnrollmentVisitsTool — writes", () => {
   it("posts /class/removeclientfromclass per visit with ClientId, ClassId, VisitId, LateCancel, SendEmail", async () => {
     const client = new RecordingClient();
     const { a, b } = clientWithEnrollment(client);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "300"; // sessions start in 3 and 10 days (72h, 240h)
     const result = await cancelEnrollmentVisitsTool(CLIENT, [100002, 100003], true, true, client, client.cache);
 
     expect(result).toEqual({
@@ -553,6 +557,32 @@ describe("cancelEnrollmentVisitsTool — writes", () => {
       { url: "/class/removeclientfromclass", data: { ClientId: CLIENT, ClassId: 25202, VisitId: 100002, LateCancel: true, SendEmail: true, Test: false } },
       { url: "/class/removeclientfromclass", data: { ClientId: CLIENT, ClassId: 25203, VisitId: 100003, LateCancel: true, SendEmail: true, Test: false } },
     ]);
+  });
+
+  it("refuses a late cancel outside the window, whole request, with no write", async () => {
+    const client = new RecordingClient();
+    clientWithEnrollment(client);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "100"; // 100002 is inside (72h), 100003 outside (240h)
+    const result = await cancelEnrollmentVisitsTool(CLIENT, [100002, 100003], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].visitId).toBe(100003);
+    expect(result.rejected[0].reason).toContain("outside the site's late-cancel window");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("refuses lateCancel with no call at all when the window is unset or invalid", async () => {
+    for (const value of [undefined, "nope", "0"]) {
+      if (value === undefined) delete process.env[LATE_CANCEL_WINDOW_ENV];
+      else process.env[LATE_CANCEL_WINDOW_ENV] = value;
+      const client = new RecordingClient();
+      clientWithEnrollment(client);
+      const result = await cancelEnrollmentVisitsTool(CLIENT, [100002], true, false, client, client.cache);
+      expect(result.success).toBe(false);
+      expect(result.rejected).toEqual([expect.objectContaining({ visitId: -1 })]);
+      expect(result.rejected[0].reason).toContain(LATE_CANCEL_WINDOW_ENV);
+      expect(client.callCount).toBe(0);
+    }
   });
 
   it("defaults LateCancel and SendEmail to false", async () => {

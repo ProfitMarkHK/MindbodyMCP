@@ -23,6 +23,7 @@
  */
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 import {
   getSiteTimeZone,
   siteDateString,
@@ -514,7 +515,8 @@ function visitRejectionReason(
   clientId: string,
   classes: Map<number, any>,
   nowMs: number,
-  timeZone: string
+  timeZone: string,
+  lateCancelWindowHrs?: number
 ): string | null {
   if (rows.length === 0) return NOT_FOUND_FOR_CLIENT;
   if (rows.length > 1) return 'visit returned more than once by lookup; refusing ambiguous data';
@@ -540,7 +542,7 @@ function visitRejectionReason(
   if (row.SignedIn) return 'visit is already signed in';
   // `Missed` is NOT a guard: the sandbox reports Missed: true on every future,
   // not-yet-attended enrollment visit, so it says nothing about cancellability.
-  return null;
+  return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
 }
 
 /**
@@ -571,6 +573,18 @@ export async function cancelEnrollmentVisitsTool(
   const shapeErrors = validateCancellationRequest(clientId, visitIds);
   if (shapeErrors.length > 0) {
     return { success: false, cancelled: [], rejected: shapeErrors, message: 'Request rejected; no visits were cancelled.' };
+  }
+
+  // `lateCancel` forfeits the session, so it is honoured only inside the site's
+  // late-cancel window, which the spec does not expose. Unknown window: refuse.
+  const lateWindowHours = lateCancel ? lateCancelWindowHours() : undefined;
+  if (lateCancel && lateWindowHours === undefined) {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ visitId: -1, reason: LATE_CANCEL_WINDOW_UNKNOWN }],
+      message: 'Late-cancel window unknown; no visits were cancelled.',
+    };
   }
 
   let timeZone: string;
@@ -617,7 +631,7 @@ export async function cancelEnrollmentVisitsTool(
   const verified = new Map<number, any>();
   for (const id of visitIds) {
     const matches = rows.filter((row) => Number(row?.Id) === id);
-    const reason = visitRejectionReason(matches, clientId, classes, Date.now(), timeZone);
+    const reason = visitRejectionReason(matches, clientId, classes, Date.now(), timeZone, lateWindowHours);
     if (reason) rejected.push({ visitId: id, reason });
     else verified.set(id, matches[0]);
   }

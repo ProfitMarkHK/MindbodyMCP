@@ -461,7 +461,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                   appointmentIds: {
                     type: 'array',
                     items: { type: 'number' },
-                    description: 'Existing appointment IDs this item pays for (reconciles)',
+                    description: 'Existing appointment IDs this item pays for (reconciles). Each must belong to clientId, else the whole checkout is refused',
                   },
                 },
               },
@@ -654,7 +654,8 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           `Cancel future appointments for a single client. Guards, all checked before anything is cancelled: ` +
           `one client per call; 1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs, no duplicates; ` +
           `each appointment must belong to that client, start in the future, and not already be ` +
-          `cancelled, late-cancelled, completed or a no-show. All-or-nothing: if any ID fails a guard, ` +
+          `cancelled, late-cancelled, completed, a no-show or arrived (un-arrive it or cancel in Mindbody directly). ` +
+          `Not a dry run: sendEmail (default false) can email a real client. All-or-nothing: if any ID fails a guard, ` +
           `none are cancelled. Cancellations run one at a time and stop at the first failure.`,
         inputSchema: {
           type: 'object',
@@ -665,7 +666,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
               items: { type: 'number' },
               description: `1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs to cancel`,
             },
-            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false)' },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for sessions starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'appointmentIds'],
@@ -772,7 +773,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           properties: {
             clientId: { type: 'string', description: 'Client ID who owns every visit' },
             visitIds: { type: 'array', items: { type: 'number' }, description: `1 to ${MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST} visit IDs, no duplicates` },
-            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false)' },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for sessions starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
           },
           required: ['clientId', 'visitIds'],

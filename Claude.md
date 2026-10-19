@@ -324,7 +324,7 @@ Process a complete purchase transaction.
 - `clientId` (required): Client ID
 - `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds? }`
   - `item.type`: `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the service, product or package; a `Tip` uses `item.metadata.amount` instead.
-  - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`.
+  - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`. Every ID is verified to belong to `clientId` (same lookup as `cancelAppointments`) before anything is sent; if any fails, or the lookup cannot run, the whole checkout is refused and nothing is charged.
 - `payments` (required): Payment methods, each `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`.
 - `inStore` (optional): In-store purchase
 - `promotionCode` (optional): Discount code
@@ -462,7 +462,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 **Parameters:**
 - `clientId` (required): Client ID who owns every appointment
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
-- `lateCancel` (optional): Record as late cancellations (default false)
+- `lateCancel` (optional): Record as late cancellations (default false). Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window)
 - `sendEmail` (optional): Email the client about the cancellation (default false)
 
 **Guards.** All are checked before any cancellation is sent:
@@ -470,7 +470,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 - 1 to 3 IDs (`MAX_CANCELLATIONS_PER_REQUEST`), no duplicates.
 - Each appointment must belong to `clientId`. Ownership is checked with `GET /appointment/staffappointments` filtered by `ClientId`. An appointment that belongs to someone else, or falls outside the lookup window (today through two years out), is reported as "not found for this client".
 - Each appointment must start in the future, compared in the site's timezone (see "Dates and timezones" under Configuration). If that zone cannot be resolved, nothing is written.
-- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed` or `NoShow`.
+- Each appointment must not already be `Cancelled`, `LateCancelled`, `Completed`, `NoShow` or `Arrived`. `Arrived` is refused by decision: see "Arrived appointments" in `docs/API.md`.
 
 All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` gives the reason for each failing ID. If the verification lookup itself fails, nothing is cancelled. Once the guards pass, cancellations are sent one at a time via `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`). If one of those writes fails, the cancellations already made stand: they are listed in `cancelled`, and the failing ID appears in `rejected`.
 
@@ -553,7 +553,7 @@ Cancel 1 to 3 future enrollment sessions for one client, by visit ID, via `POST 
 **Parameters:**
 - `clientId` (required): owner of every visit
 - `visitIds` (required): 1 to 3 visit IDs (`MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST`), no duplicates
-- `lateCancel` (optional, default false), `sendEmail` (optional, default false)
+- `lateCancel` (optional, default false; bounded by `MINDBODY_LATE_CANCEL_WINDOW_HOURS` as in `cancelAppointments`), `sendEmail` (optional, default false)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call; 1 to 3 IDs; no duplicates.
@@ -665,6 +665,7 @@ CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
+# MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
 ```
 
 ### Dates and timezones

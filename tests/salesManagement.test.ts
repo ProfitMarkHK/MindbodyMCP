@@ -12,6 +12,7 @@ import {
   getContractsTool,
 } from "../src/tools/salesManagement.js";
 import type { IMindbodyClient } from "../src/api/client.js";
+import { SimpleCache } from "../src/cache/index.js";
 
 const spec = JSON.parse(
   readFileSync(resolve(__dirname, "../docs/openapi.json"), "utf-8")
@@ -44,6 +45,40 @@ class RecordingClient implements IMindbodyClient {
     throw new Error("not used");
   }
 }
+
+/**
+ * A RecordingClient that also answers the ownership lookup checkout runs before
+ * it sends `AppointmentIds`: GET /site/sites, then GET /appointment/staffappointments
+ * returning `appointments`. Each instance carries its own cache.
+ */
+class OwnershipClient extends RecordingClient {
+  gets: string[] = [];
+  readonly cache = new SimpleCache(5);
+
+  constructor(
+    response: unknown,
+    private readonly appointments: unknown[],
+    private readonly failLookup = false
+  ) {
+    super(response);
+  }
+
+  async get<T>(url: string, _config?: AxiosRequestConfig): Promise<T> {
+    this.gets.push(url);
+    if (url === "/site/sites") {
+      return { Sites: [{ Id: -99, Name: "Stub", TimeZone: "America/Los_Angeles" }], PaginationResponse: { TotalResults: 1 } } as T;
+    }
+    if (this.failLookup) throw new Error("boom");
+    return { Appointments: this.appointments, PaginationResponse: { TotalResults: this.appointments.length } } as T;
+  }
+}
+
+const OWNED = { Id: 4321, ClientId: "c1", Status: "Booked" };
+const FOREIGN = { Id: 8888, ClientId: "someone-else", Status: "Booked" };
+const apptItem = (appointmentIds: number[]) => [
+  { item: { type: "Service" as const, metadata: { id: 1395 } }, quantity: 1, appointmentIds },
+];
+const compPayment = [{ type: "Comp" as const, metadata: { amount: 90 } }];
 
 // ---------------------------------------------------------------------------
 // C-19 — getServicesTool
@@ -395,7 +430,7 @@ describe("checkoutShoppingCartTool (C-22)", () => {
   });
 
   it("still sends AppointmentIds when reconciling (D-8)", async () => {
-    const client = new RecordingClient(checkoutResponse);
+    const client = new OwnershipClient(checkoutResponse, [OWNED]);
     await checkoutShoppingCartTool(
       "c1",
       [{ ...items[0], appointmentIds: [4321] }],
@@ -404,7 +439,8 @@ describe("checkoutShoppingCartTool (C-22)", () => {
       undefined,
       false,
       1,
-      client
+      client,
+      client.cache
     );
     expect(client.bodies[0].data.Items[0].AppointmentIds).toEqual([4321]);
   });
@@ -418,7 +454,7 @@ describe("reconciledAppointmentIds (D-8)", () => {
   it("reports an empty list, not a failure, when the sandbox reconciles nothing back", async () => {
     // Sandboxed evidence: a committed reconciling sale returns empty
     // Appointments/AppointmentIds. The sale still succeeded.
-    const client = new RecordingClient(checkoutResponse);
+    const client = new OwnershipClient(checkoutResponse, [OWNED]);
     const result = await checkoutShoppingCartTool(
       "c1",
       [{ item: { type: "Service", metadata: { id: 1395 } }, quantity: 1, appointmentIds: [4321] }],
@@ -427,7 +463,8 @@ describe("reconciledAppointmentIds (D-8)", () => {
       undefined,
       false,
       1,
-      client
+      client,
+      client.cache
     );
     expect(result.success).toBe(true);
     expect(result.shoppingCart!.items[0].appointments).toEqual([]);
@@ -448,6 +485,84 @@ describe("reconciledAppointmentIds (D-8)", () => {
       client
     );
     expect(result.shoppingCart!.items[0].appointments).toEqual([4321]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkoutShoppingCart — appointmentIds ownership
+// ---------------------------------------------------------------------------
+
+describe("checkoutShoppingCartTool — appointmentIds must belong to clientId", () => {
+  const run = (client: OwnershipClient, ids: number[]) =>
+    checkoutShoppingCartTool("c1", apptItem(ids), compPayment, true, undefined, false, 1, client, client.cache);
+
+  it("refuses another client's appointment and POSTs nothing", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED, FOREIGN]);
+    const result = await run(client, [8888]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("8888: not found for this client");
+    expect(result.message).not.toContain("someone-else");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("refuses a mixed list whole: the owned id is not charged either", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED, FOREIGN]);
+    const result = await run(client, [4321, 8888]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("8888");
+    expect(result.message).not.toContain("4321:");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("treats an id the lookup does not return as not found", async () => {
+    const client = new OwnershipClient(checkoutResponse, []);
+    const result = await run(client, [4321]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("4321: not found for this client");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("refuses non-integer ids before any lookup", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED]);
+    const result = await run(client, [4321, 2.5]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("not positive integers");
+    expect(client.gets).toEqual([]);
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("fails closed when the lookup fails", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED], true);
+    const result = await run(client, [4321]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("appointment lookup failed");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("fails closed when the site timezone is unavailable", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED]);
+    client.get = async () => {
+      throw new Error("no site");
+    };
+    const result = await run(client, [4321]);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("site timezone unavailable");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("proceeds when every id is the client's own, and looks up once", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED, { ...OWNED, Id: 4322 }]);
+    const result = await run(client, [4321, 4322]);
+    expect(result.success).toBe(true);
+    expect(client.bodies).toHaveLength(1);
+    expect(client.gets.filter((url) => url === "/appointment/staffappointments")).toHaveLength(1);
+  });
+
+  it("makes no lookup when no item carries appointmentIds", async () => {
+    const client = new OwnershipClient(checkoutResponse, []);
+    const result = await checkoutShoppingCartTool("c1", apptItem([]), compPayment, true, undefined, false, 1, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.gets).toEqual([]);
   });
 });
 

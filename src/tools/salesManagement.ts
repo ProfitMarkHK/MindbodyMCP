@@ -1,4 +1,10 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { classCache, type SimpleCache } from '../cache/index.js';
+import {
+  lookupAppointmentsForClient,
+  ownedAppointmentRow,
+  OWNERSHIP_LOOKBACK_DAYS,
+} from './appointmentManagement.js';
 
 /**
  * Get available services (pricing options: class packs, memberships).
@@ -309,7 +315,8 @@ export async function checkoutShoppingCartTool(
   promotionCode?: string,
   sendEmail: boolean = true,
   locationId?: number,
-  client: IMindbodyClient = mindbodyClient
+  client: IMindbodyClient = mindbodyClient,
+  cache: SimpleCache = classCache
 ): Promise<{
   success: boolean;
   shoppingCart?: {
@@ -339,6 +346,31 @@ export async function checkoutShoppingCartTool(
   }>;
   message: string;
 }> {
+  // A cart item's appointmentIds are paid for by THIS client's payments, so each
+  // must be this client's own. All-or-nothing, before anything is sent; fails
+  // closed when the site zone or the lookup is unavailable.
+  const appointmentIds = [...new Set(items.flatMap((item) => item.appointmentIds ?? []))];
+  if (appointmentIds.length > 0) {
+    const invalid = appointmentIds.filter((id) => !Number.isInteger(id) || id <= 0);
+    if (invalid.length > 0) {
+      return {
+        success: false,
+        message: `Appointment id(s) ${invalid.map((id) => JSON.stringify(id)).join(', ')} are not positive integers; nothing was charged.`,
+      };
+    }
+    const lookup = await lookupAppointmentsForClient(client, cache, clientId, appointmentIds, OWNERSHIP_LOOKBACK_DAYS);
+    if (!lookup.ok) {
+      return { success: false, message: `Could not verify the appointments (${lookup.reason}); nothing was charged.` };
+    }
+    const refused = appointmentIds
+      .map((id) => ({ id, owned: ownedAppointmentRow(lookup.rows, id, clientId) }))
+      .filter((entry) => 'reason' in entry.owned)
+      .map((entry) => `${entry.id}: ${(entry.owned as { reason: string }).reason}`);
+    if (refused.length > 0) {
+      return { success: false, message: `Appointment(s) failed verification (${refused.join('; ')}); nothing was charged.` };
+    }
+  }
+
   try {
     // Map items to API format
     const cartItems = items.map(item => {

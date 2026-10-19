@@ -1411,6 +1411,30 @@ describe('domain — orders (read and write)', () => {
   });
 });
 
+describe('domain — checkout appointment ownership', () => {
+  itE2E('checkoutShoppingCart refuses another client\'s appointment and posts nothing', async () => {
+    stub.resetLog();
+    const foreign = CANCELLATION_FIXTURES.otherClientFutureBooked;
+
+    const result = await client.callTool({
+      name: 'checkoutShoppingCart',
+      arguments: {
+        clientId: CANCELLATION_FIXTURES.clientId,
+        items: [
+          { item: { type: 'Service', metadata: { id: 501 } }, quantity: 1, appointmentIds: [CANCELLATION_FIXTURES.futureBookedA, foreign] },
+        ],
+        payments: [{ type: 'Cash', metadata: { amount: 220 } }],
+      },
+    });
+
+    const payload = resultJson(result);
+    expect(payload.success).toBe(false);
+    expect(payload.message).toContain(`${foreign}: not found for this client`);
+    expect(resultText(result)).not.toContain(CANCELLATION_FIXTURES.otherClientId);
+    expect(stub.countTo('/public/v6/sale/checkoutshoppingcart', 'POST')).toBe(0);
+  });
+});
+
 describe('domain — appointments (read and write)', () => {
   itE2E('getStaffAppointments flattens staff, session, location and client', async () => {
     stub.resetLog();

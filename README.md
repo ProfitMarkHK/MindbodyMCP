@@ -88,6 +88,7 @@ MINDBODY_SOURCE_PASSWORD=your_source_password
 # Optional settings
 MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
+# MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless this is set; then only within N hours of the start
 CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
@@ -169,7 +170,7 @@ The server provides 41 tools across 6 categories:
 - `getPackages` - List class packages. A package has no price of its own: `classCount` and `price` are summed from the services it contains
 - `getProducts` - Browse retail products. Categories are exposed as ids; the API returns no category names
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
-- `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds`
+- `checkoutShoppingCart` - Process purchases; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
@@ -191,7 +192,7 @@ The server provides 41 tools across 6 categories:
 - `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that. The endpoint documents no day-of-week filter, so there is no `days` parameter
 - `getScheduleItems` - View schedules. Returns three lists — `appointments`, `availabilities` and `unavailabilities` — because the API keeps them separate
 
-**Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed or NoShow. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
+**Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). `lateCancel: true` is refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set (the Mindbody API does not expose the site's late-cancel window), and then only for appointments starting within that many hours. Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed, NoShow or Arrived. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
 
 ### 🎓 Enrollments
 - `getEnrollments` - List courses/workshops/series (class schedules whose program is an Enrollment program); the `id` is what `addClientToEnrollment` takes

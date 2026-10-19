@@ -15,6 +15,7 @@ import {
 } from "../src/tools/appointmentManagement.js";
 import { checkoutShoppingCartTool } from "../src/tools/salesManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
+import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import {
   SITE_TIMEZONE_ENV,
   epochMsToSiteLocal,
@@ -210,6 +211,24 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
     });
   }
 
+  it("rejects an Arrived appointment that has not started yet, plain or late, and says how to proceed", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "72"; // the window must not let an arrived client through
+    try {
+      for (const lateCancel of [false, true]) {
+        const client = new RecordingClient([row(1, { Status: "Arrived" })]);
+        const result = await cancelAppointmentsTool(CLIENT, [1], lateCancel, false, client, client.cache);
+        expect(result.success).toBe(false);
+        expect(result.rejected).toHaveLength(1);
+        expect(result.rejected[0].reason).toContain("appointment status is Arrived, which cannot be cancelled");
+        expect(result.rejected[0].reason).toContain("unarrive");
+        expect(result.rejected[0].reason).toContain("Mindbody directly");
+        expect(client.posts).toHaveLength(0);
+      }
+    } finally {
+      delete process.env[LATE_CANCEL_WINDOW_ENV];
+    }
+  });
+
   it("is all-or-nothing: one good and one bad id cancels neither", async () => {
     const client = new RecordingClient([row(1), row(2, { Status: "Cancelled" })]);
     const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, client, client.cache);
@@ -283,6 +302,54 @@ describe("cancelAppointmentsTool — the start-time guard uses the SITE's zone, 
         });
       });
     }
+  }
+});
+
+describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-cancel window", () => {
+  beforeEach(() => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+  });
+  afterEach(() => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+  });
+
+  it("late-cancels an appointment inside the window", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(6 * HOUR_MS) })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.posts.map((post) => post.data.Execute)).toEqual(["latecancel"]);
+  });
+
+  it("refuses a late cancel outside the window, whole request, with no write", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(6 * HOUR_MS) }), row(2, { StartDateTime: siteLocal(30 * DAY_MS) })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].id).toBe(2);
+    expect(result.rejected[0].reason).toContain("outside the site's late-cancel window");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("still allows a plain cancel outside the window", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(30 * DAY_MS) })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.posts.map((post) => post.data.Execute)).toEqual(["cancel"]);
+  });
+
+  for (const value of [undefined, "", "abc", "0", "-5", "Infinity"]) {
+    it(`refuses lateCancel with no call at all when the window is ${JSON.stringify(value)}`, async () => {
+      if (value !== undefined) process.env[LATE_CANCEL_WINDOW_ENV] = value;
+      const client = new RecordingClient([row(1)]);
+      const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+      expect(result.success).toBe(false);
+      expect(result.rejected[0].id).toBe(-1);
+      expect(result.rejected[0].reason).toContain(LATE_CANCEL_WINDOW_ENV);
+      expect(client.callCount).toBe(0);
+    });
   }
 });
 
@@ -391,10 +458,15 @@ describe("cancelAppointmentsTool — execution", () => {
   });
 
   it("sends Execute latecancel and honours sendEmail", async () => {
-    const client = new RecordingClient([row(1)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, true, client, client.cache);
-    expect(result.cancelled).toEqual([{ id: 1, status: "LateCancelled", startDateTime: "echoed" }]);
-    expect(client.posts.map((post) => post.data)).toEqual([{ AppointmentId: 1, Execute: "latecancel", SendEmail: true }]);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "72"; // row() starts in 48h
+    try {
+      const client = new RecordingClient([row(1)]);
+      const result = await cancelAppointmentsTool(CLIENT, [1], true, true, client, client.cache);
+      expect(result.cancelled).toEqual([{ id: 1, status: "LateCancelled", startDateTime: "echoed" }]);
+      expect(client.posts.map((post) => post.data)).toEqual([{ AppointmentId: 1, Execute: "latecancel", SendEmail: true }]);
+    } finally {
+      delete process.env[LATE_CANCEL_WINDOW_ENV];
+    }
   });
 
   it("falls back to the looked-up start time when the response omits it", async () => {
@@ -743,12 +815,12 @@ describe("checkoutShoppingCartTool — appointment reconciliation", () => {
   });
 
   it("sends AppointmentIds on the item wrapper and maps reconciled appointments", async () => {
-    const client = new RecordingClient([], () => cart([{ Id: 9001, Status: "Booked" }]));
+    const client = new RecordingClient([row(9001)], () => cart([{ Id: 9001, Status: "Booked" }]));
     const result = await checkoutShoppingCartTool(
       CLIENT,
       [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001] }],
       [{ type: "Cash", metadata: { amount: 1 } }],
-      false, undefined, false, undefined, client
+      false, undefined, false, undefined, client, client.cache
     );
     expect(result.success).toBe(true);
     expect(client.posts[0].data.Items[0].AppointmentIds).toEqual([9001]);
@@ -757,8 +829,8 @@ describe("checkoutShoppingCartTool — appointment reconciliation", () => {
   });
 
   it("accepts reconciled appointments returned as bare ids", async () => {
-    const client = new RecordingClient([], () => cart([9001, 9002]));
-    const result = await checkoutShoppingCartTool(CLIENT, [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001, 9002] }], [], false, undefined, false, undefined, client);
+    const client = new RecordingClient([row(9001), row(9002)], () => cart([9001, 9002]));
+    const result = await checkoutShoppingCartTool(CLIENT, [{ item: { type: "Service", metadata: { id: 501 } }, quantity: 1, appointmentIds: [9001, 9002] }], [], false, undefined, false, undefined, client, client.cache);
     expect(result.shoppingCart?.items[0].appointments).toEqual([9001, 9002]);
   });
 

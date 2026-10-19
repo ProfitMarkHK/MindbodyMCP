@@ -7,6 +7,7 @@ import {
   siteLocalToEpochMs,
   withDefaultDates,
 } from '../utils/siteTime.js';
+import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 
 /**
  * The name on an embedded `AppointmentStaff`: `DisplayName` if present, else
@@ -210,14 +211,15 @@ export async function addAppointmentTool(
 
 // Appointment ownership verification
 //
-// updateAppointment and cancelAppointments both act on ONE appointment that must
-// belong to ONE client, so they share one lookup and one comparison. A row whose
+// updateAppointment, cancelAppointments and checkoutShoppingCart (appointmentIds)
+// all act on appointments that must belong to ONE client, so they share one
+// lookup and one comparison. A row whose
 // owner cannot be read, or whose owner is not the requested client, is reported
 // exactly as a row that was never returned, so a guessed appointment id cannot
 // be used to discover whose an appointment is.
 
 /** How far the shared lookup reaches into the past, in site-calendar days. */
-const OWNERSHIP_LOOKBACK_DAYS = 365;
+export const OWNERSHIP_LOOKBACK_DAYS = 365;
 /** How far the shared lookup reaches into the future, in site-calendar days. */
 const OWNERSHIP_LOOKAHEAD_DAYS = 365 * 2;
 
@@ -235,8 +237,22 @@ const ATTENDANCE_FINAL_STATUSES = new Set(['Completed', 'NoShow']);
  */
 const TERMINAL_STATUSES = new Set(['Cancelled', 'LateCancelled']);
 
-/** Statuses from which a cancellation is refused. */
-const NON_CANCELLABLE_STATUSES = new Set([...TERMINAL_STATUSES, ...ATTENDANCE_FINAL_STATUSES]);
+/**
+ * An arrived client is physically present, so cancelling (and above all
+ * late-cancelling, which forfeits the service) is a staff-side correction that
+ * belongs in the Mindbody front desk, not in an AI-driven tool. The future-start
+ * guard does not catch it: a client can be marked arrived on an appointment
+ * booked for later. Fail closed; the caller is told how to proceed.
+ */
+const ARRIVED_STATUS = 'Arrived';
+
+/**
+ * Statuses from which a cancellation is refused. The Cancelled/LateCancelled
+ * entries are defence in depth: the sandbox never returns those rows from
+ * /appointment/staffappointments (D-4), so a re-cancel normally ends at "not
+ * found for this client" before reaching this check.
+ */
+const NON_CANCELLABLE_STATUSES = new Set([...TERMINAL_STATUSES, ...ATTENDANCE_FINAL_STATUSES, ARRIVED_STATUS]);
 
 const NOT_FOUND_FOR_CLIENT = 'not found for this client';
 const AMBIGUOUS_LOOKUP = 'appointment returned more than once by lookup; refusing ambiguous data';
@@ -256,7 +272,7 @@ interface OwnershipLookup {
  * Fails closed: without the zone the caller cannot decide a timing guard, so the
  * failure is reported rather than guessed.
  */
-async function lookupAppointmentsForClient(
+export async function lookupAppointmentsForClient(
   client: IMindbodyClient,
   cache: SimpleCache,
   clientId: string,
@@ -299,7 +315,7 @@ async function lookupAppointmentsForClient(
 }
 
 /** The single row for `appointmentId` when it is unambiguously this client's. */
-function ownedAppointmentRow(
+export function ownedAppointmentRow(
   rows: any[],
   appointmentId: number,
   clientId: string
@@ -600,7 +616,12 @@ function validateCancellationRequest(
  * Why an OWNED appointment may not be cancelled, or null if it may. Ownership is
  * already settled by `ownedAppointmentRow`; this is the timing and status half.
  */
-function cancellationRejectionReason(row: any, nowMs: number, timeZone: string): string | null {
+function cancellationRejectionReason(
+  row: any,
+  nowMs: number,
+  timeZone: string,
+  lateCancelWindowHrs?: number
+): string | null {
   // Mindbody returns StartDateTime as site-local wall time with no UTC offset.
   // It is converted to a UTC instant using the SITE's IANA zone (never this
   // process's zone), so the comparison with "now" is correct wherever the server
@@ -611,9 +632,12 @@ function cancellationRejectionReason(row: any, nowMs: number, timeZone: string):
   if (startMs <= nowMs) return 'appointment has already started or is in the past';
 
   if (NON_CANCELLABLE_STATUSES.has(row.Status)) {
-    return `appointment status is ${row.Status}, which cannot be cancelled`;
+    const hint = row.Status === ARRIVED_STATUS
+      ? '; un-arrive it (updateAppointment execute "unarrive") or cancel it in Mindbody directly'
+      : '';
+    return `appointment status is ${row.Status}, which cannot be cancelled${hint}`;
   }
-  return null;
+  return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
 }
 
 /**
@@ -641,6 +665,18 @@ export async function cancelAppointmentsTool(
     };
   }
 
+  // `lateCancel` forfeits the service, so it is honoured only inside the site's
+  // late-cancel window, which the spec does not expose. Unknown window: refuse.
+  const lateWindowHours = lateCancel ? lateCancelWindowHours() : undefined;
+  if (lateCancel && lateWindowHours === undefined) {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ id: -1, reason: LATE_CANCEL_WINDOW_UNKNOWN }],
+      message: 'Late-cancel window unknown; no appointments were cancelled.',
+    };
+  }
+
   // Fail closed, via the shared lookup: without the site's zone "today" and
   // "already started" cannot be decided, so nothing is looked up or written.
   const lookup = await lookupAppointmentsForClient(client, cache, clientId, appointmentIds, 0);
@@ -664,7 +700,7 @@ export async function cancelAppointmentsTool(
       rejected.push({ id, reason: owned.reason });
       continue;
     }
-    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone);
+    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone, lateWindowHours);
     if (reason) {
       rejected.push({ id, reason });
     } else {
