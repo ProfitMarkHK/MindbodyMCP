@@ -252,7 +252,7 @@ falling back to the viewer's zone.
 | Variable | Purpose |
 |----------|---------|
 | `MINDBODY_SITE_ID` | Already required; also pins the `SiteIds` filter on the site lookup, so a multi-site API key resolves **its** site and never a neighbour's. An ambiguous key with no site chosen raises `SiteSelectionError` listing the reachable sites. |
-| `MINDBODY_SITE_TIMEZONE` | Optional IANA override, used **only** when the site record has no usable `TimeZone`. A valid one is honoured; an invalid one raises a clear error. |
+| `MINDBODY_SITE_TIMEZONE` | Optional IANA override, used **only** when the site record is reachable but has no usable `TimeZone`. It is never consulted when the site lookup fails (including the multi-site refusal), and a disagreeing override is refused on write paths. A valid one is honoured; an invalid one raises a clear error. |
 
 When neither source yields a usable zone, **reads do not fail**: they fall back
 to UTC and log one `console.error` per process
