@@ -1,6 +1,7 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
 import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
 import { getSiteTimeZone, withDefaultDates } from './siteTime';
+import { errorMessage } from '../errors';
 import type {
   // Site & Location
   Site, Location, Resource,
@@ -416,8 +417,8 @@ export class MindbodyService {
         },
         message: 'Client created successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to create client' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to create client') };
     }
   }
 
@@ -456,8 +457,8 @@ export class MindbodyService {
         },
         message: 'Client updated successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to update client' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to update client') };
     }
   }
 
@@ -584,8 +585,8 @@ export class MindbodyService {
         data: { arrivalAdded: response.ArrivalAdded },
         message: response.Message || 'Client checked in successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to check in client' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to check in client') };
     }
   }
 
@@ -716,8 +717,8 @@ export class MindbodyService {
         },
         message: 'Client added to class successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to add client to class' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to add client to class') };
     }
   }
 
@@ -730,8 +731,8 @@ export class MindbodyService {
         SendEmail: params.sendEmail,
       });
       return { success: true, message: 'Client removed from class successfully' };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to remove client from class' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to remove client from class') };
     }
   }
 
@@ -768,8 +769,8 @@ export class MindbodyService {
         SendSubstituteTeacherEmail: params.sendSubstituteTeacherEmail,
       });
       return { success: true, message: 'Teacher substituted successfully' };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to substitute teacher' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to substitute teacher') };
     }
   }
 
@@ -920,8 +921,8 @@ export class MindbodyService {
         },
         message: 'Appointment booked successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to book appointment' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to book appointment') };
     }
   }
 
@@ -958,8 +959,8 @@ export class MindbodyService {
         },
         message: 'Appointment updated successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to update appointment' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to update appointment') };
     }
   }
 
@@ -1158,8 +1159,8 @@ export class MindbodyService {
         },
         message: `${params.test ? '[test] ' : ''}Client ${params.clientId} ${what} enrollment ${params.classScheduleId} (${sessions.length} session(s) on the schedule)`,
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to add client to enrollment' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to add client to enrollment') };
     }
   }
 
@@ -1472,8 +1473,8 @@ export class MindbodyService {
         },
         message: 'Checkout completed successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to checkout' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to checkout') };
     }
   }
 
@@ -1503,8 +1504,8 @@ export class MindbodyService {
         },
         message: 'Contract purchased successfully',
       };
-    } catch (error: any) {
-      return { success: false, message: error.message || 'Failed to purchase contract' };
+    } catch (error: unknown) {
+      return { success: false, message: errorMessage(error, 'Failed to purchase contract') };
     }
   }
 }

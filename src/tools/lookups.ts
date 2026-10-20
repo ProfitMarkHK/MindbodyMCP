@@ -18,9 +18,19 @@
  */
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 
 /** Catalogue data is stable for an hour, matching the other static caches. */
 const TTL_MINUTES = 60;
+
+/** Minimal row shape shared by the three catalogue endpoints this file reads. */
+interface CatalogueRow {
+  Id?: unknown;
+  Name?: unknown;
+  DisplayName?: unknown;
+  FirstName?: unknown;
+  LastName?: unknown;
+}
 
 /** Ids arrive as numbers or as numeric strings from different endpoints. */
 function asId(value: unknown): number | undefined {
@@ -43,7 +53,7 @@ function warnOnce(key: string, error: unknown): void {
   if (warned.has(key)) return;
   warned.add(key);
   console.error(
-    `[lookups] GET ${key} failed (${(error as any)?.message ?? 'unknown error'}); ` +
+    `[lookups] GET ${key} failed (${errorMessage(error, 'unknown error')}); ` +
       'names for that catalogue will be omitted from tool output.'
   );
 }
@@ -59,8 +69,8 @@ function warnOnce(key: string, error: unknown): void {
 async function buildIndex<T>(
   cache: SimpleCache,
   cacheKey: string,
-  rows: T[],
-  pick: (row: any) => { id: number | undefined; name: string | undefined },
+  rows: T[] | undefined,
+  pick: (row: T) => { id: number | undefined; name: string | undefined },
   warnKey: string,
   fetchIt: () => Promise<T[]>
 ): Promise<Map<number, string>> {
@@ -91,14 +101,14 @@ export async function sessionTypeNames(
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<Map<number, string>> {
-  return buildIndex<any>(
+  return buildIndex<CatalogueRow>(
     cache,
     'session-type-names',
-    undefined as unknown as any[],
+    undefined,
     (row) => ({ id: asId(row?.Id), name: firstName(row?.Name) }),
     '/site/sessiontypes',
     async () => {
-      const { items } = await fetchAllPages<any>(client, '/site/sessiontypes', {}, 'SessionTypes');
+      const { items } = await fetchAllPages<CatalogueRow>(client, '/site/sessiontypes', {}, 'SessionTypes');
       return items;
     }
   );
@@ -109,14 +119,14 @@ export async function locationNames(
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<Map<number, string>> {
-  return buildIndex<any>(
+  return buildIndex<CatalogueRow>(
     cache,
     'location-names',
-    undefined as unknown as any[],
+    undefined,
     (row) => ({ id: asId(row?.Id), name: firstName(row?.Name) }),
     '/site/locations',
     async () => {
-      const { items } = await fetchAllPages<any>(client, '/site/locations', {}, 'Locations');
+      const { items } = await fetchAllPages<CatalogueRow>(client, '/site/locations', {}, 'Locations');
       return items;
     }
   );
@@ -127,10 +137,10 @@ export async function staffNames(
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<Map<number, string>> {
-  return buildIndex<any>(
+  return buildIndex<CatalogueRow>(
     cache,
     'staff-names',
-    undefined as unknown as any[],
+    undefined,
     (row) => ({
       id: asId(row?.Id),
       name: firstName(
@@ -141,7 +151,7 @@ export async function staffNames(
     }),
     '/staff/staff',
     async () => {
-      const { items } = await fetchAllPages<any>(client, '/staff/staff', {}, 'StaffMembers');
+      const { items } = await fetchAllPages<CatalogueRow>(client, '/staff/staff', {}, 'StaffMembers');
       return items;
     }
   );

@@ -18,6 +18,7 @@
  */
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from './errors.js';
 
 /** Cache key shared with `getSitesTool`, so there is one cached site record. */
 export const SITE_INFO_CACHE_KEY = 'site-info';
@@ -170,8 +171,8 @@ async function zoneFromApi(
     const zone = site?.TimeZone;
     if (isValidTimeZone(zone)) return { zone };
     return { problem: `site record has no usable TimeZone (got ${JSON.stringify(zone)})` };
-  } catch (error: any) {
-    return { problem: `site lookup failed: ${error?.message ?? 'unknown error'}`, unreachable: true };
+  } catch (error: unknown) {
+    return { problem: `site lookup failed: ${errorMessage(error, 'unknown error')}`, unreachable: true };
   }
 }
 
@@ -238,10 +239,10 @@ export async function resolveReadTimeZone(
   try {
     // Lenient: a read cannot write, so the record's zone wins over a disagreeing override.
     return await resolveSiteTimeZone(client, cache, false);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (!warnedUtcFallback) {
       warnedUtcFallback = true;
-      console.error(`[siteTime] ${error?.message ?? error}; using UTC for default date ranges.`);
+      console.error(`[siteTime] ${errorMessage(error)}; using UTC for default date ranges.`);
     }
     return 'UTC';
   }

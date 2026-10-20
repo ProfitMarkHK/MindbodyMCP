@@ -81,7 +81,7 @@ function visitRow(id: number, classId: number, startDateTime: string, overrides:
  * `enrollments`. POSTs are answered by `onPost`, which may throw.
  */
 class RecordingClient implements IMindbodyClient {
-  readonly gets: Array<{ url: string; params: Record<string, any> }> = [];
+  readonly gets: Array<{ url: string; params: Record<string, unknown> }> = [];
   readonly posts: Array<{ url: string; data: any }> = [];
   readonly cache = new SimpleCache(5);
   siteZone: string | null = SITE_TZ;

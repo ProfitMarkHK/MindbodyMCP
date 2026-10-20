@@ -69,9 +69,10 @@ async function testHealthCheck(): Promise<TestResult> {
     } else {
       throw new Error(`Unexpected health status: ${JSON.stringify(data)}`);
     }
-  } catch (error: any) {
-    logError(`Health check failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`Health check failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -92,9 +93,10 @@ async function testServerInfo(): Promise<TestResult> {
     } else {
       throw new Error(`Invalid server info: ${JSON.stringify(data)}`);
     }
-  } catch (error: any) {
-    logError(`Server info failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`Server info failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -132,9 +134,10 @@ async function testSSEConnection(): Promise<TestResult> {
     await client.close();
     
     return { name, passed: true, duration: Date.now() - start };
-  } catch (error: any) {
-    logError(`SSE connection failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`SSE connection failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -172,9 +175,10 @@ async function testListTools(): Promise<TestResult> {
     await client.close();
     
     return { name, passed: true, duration: Date.now() - start };
-  } catch (error: any) {
-    logError(`List tools failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`List tools failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -215,9 +219,10 @@ async function testCallTool(): Promise<TestResult> {
     await client.close();
     
     return { name, passed: true, duration: Date.now() - start };
-  } catch (error: any) {
-    logError(`Tool call failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`Tool call failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -264,9 +269,10 @@ async function testConcurrentConnections(): Promise<TestResult> {
     await Promise.all(clients.map(client => client.close()));
     
     return { name, passed: true, duration: Date.now() - start };
-  } catch (error: any) {
-    logError(`Concurrent connections failed: ${error.message}`);
-    return { name, passed: false, error: error.message, duration: Date.now() - start };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(`Concurrent connections failed: ${message}`);
+    return { name, passed: false, error: message, duration: Date.now() - start };
   }
 }
 
@@ -303,11 +309,11 @@ async function runTests() {
     try {
       const result = await test();
       results.push(result);
-    } catch (error: any) {
+    } catch (error: unknown) {
       results.push({
         name: test.name,
         passed: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         duration: 0,
       });
     }

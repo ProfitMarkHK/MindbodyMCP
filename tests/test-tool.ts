@@ -33,10 +33,12 @@ async function test() {
     console.log('By Location:', result.summary.byLocation);
     console.log('By Class Type:', result.summary.byClassType);
 
-  } catch (error: any) {
-    console.error('Test failed:', error.message);
-    if (error.response) {
-      console.error('API Response:', error.response.data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Test failed:', message);
+    if (error !== null && typeof error === 'object' && 'response' in error) {
+      const response = (error as { response?: { data?: unknown } }).response;
+      if (response) console.error('API Response:', response.data);
     }
   }
 }

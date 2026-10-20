@@ -21,6 +21,7 @@ dotenv.config();
 
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
+import { errorMessage } from './utils/errors.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -1168,9 +1169,9 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           isError: true,
         };
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
-      content: [{ type: 'text', text: `Error: ${error.message}` }],
+      content: [{ type: 'text', text: `Error: ${errorMessage(error)}` }],
       isError: true,
     };
   }

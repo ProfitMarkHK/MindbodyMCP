@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { MindbodyService, getMindbodyService } from '@/lib/mindbody/service';
+import { errorMessage } from '@/lib/errors';
 
 // ============================================================================
 // DATA SYNC SERVICE - Synchronizes Mindbody API data with local database
@@ -87,13 +88,13 @@ export class MindbodySyncService {
             totalRecords: result.created + result.updated,
           },
         });
-      } catch (error: any) {
+      } catch (error: unknown) {
         results.push({
           entity,
           created: 0,
           updated: 0,
           deleted: 0,
-          errors: [error.message],
+          errors: [errorMessage(error)],
           duration: 0,
         });
       }
@@ -186,8 +187,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -228,8 +229,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -262,8 +263,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -300,8 +301,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -340,8 +341,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -398,8 +399,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -434,8 +435,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -486,8 +487,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -529,8 +530,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -568,8 +569,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -609,8 +610,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;
@@ -653,8 +654,8 @@ export class MindbodySyncService {
           result.created++;
         }
       }
-    } catch (error: any) {
-      result.errors.push(error.message);
+    } catch (error: unknown) {
+      result.errors.push(errorMessage(error));
     }
 
     result.duration = Date.now() - startTime;

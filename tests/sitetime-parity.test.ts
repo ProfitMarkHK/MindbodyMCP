@@ -253,8 +253,8 @@ describe("site timezone resolvers agree", () => {
             let message: string | undefined;
             try {
               await resolver.strict(api);
-            } catch (error: any) {
-              message = error?.message;
+            } catch (error: unknown) {
+              message = error instanceof Error ? error.message : String(error);
             }
             expect(message).toBe(scenario.expect.error);
           }

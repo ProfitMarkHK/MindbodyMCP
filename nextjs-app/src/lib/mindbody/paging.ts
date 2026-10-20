@@ -44,7 +44,7 @@ export const MAX_PAGES = 100;
 
 /** The subset of MindbodyApiClient that the pager needs. */
 export interface PagedGetClient {
-  get<T>(endpoint: string, options?: { params?: Record<string, any> }): Promise<T>;
+  get<T>(endpoint: string, options?: { params?: Record<string, unknown> }): Promise<T>;
 }
 
 /** A non-negative integer from a PaginationResponse field, or undefined. */

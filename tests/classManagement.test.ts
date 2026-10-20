@@ -369,7 +369,7 @@ const HOUR_MS = 3_600_000;
 
 /** Records every call and validates GET params against docs/openapi.json. */
 class RecordingClient implements IMindbodyClient {
-  readonly gets: Array<{ url: string; params: Record<string, any> }> = [];
+  readonly gets: Array<{ url: string; params: Record<string, unknown> }> = [];
   readonly posts: Array<{ url: string; data: any }> = [];
   readonly cache = new SimpleCache(5);
   siteZone: string | null = SITE_TZ;

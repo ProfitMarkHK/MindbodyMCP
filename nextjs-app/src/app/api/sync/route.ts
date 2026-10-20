@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { MindbodySyncService, SyncEntity } from '@/lib/sync';
+import { errorMessage } from '@/lib/errors';
 
 // ============================================================================
 // SYNC API ROUTE - Triggers data synchronization
@@ -19,10 +20,10 @@ export async function POST(request: NextRequest) {
       results,
       timestamp: new Date().toISOString(),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Sync error:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: errorMessage(error) },
       { status: 500 }
     );
   }
@@ -38,10 +39,10 @@ export async function GET() {
       status,
       timestamp: new Date().toISOString(),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Sync status error:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: errorMessage(error) },
       { status: 500 }
     );
   }

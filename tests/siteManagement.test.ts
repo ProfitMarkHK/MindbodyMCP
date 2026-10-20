@@ -205,7 +205,7 @@ class RecordingClient implements IMindbodyClient {
     private readonly inner: SpecValidatingClient,
     private readonly failUrl?: string,
     private readonly pageCap = Number.POSITIVE_INFINITY,
-    private readonly fixtureValue: Record<string, any> = {}
+    private readonly fixtureValue: Record<string, unknown> = {}
   ) {}
 
   async request<T>(config: AxiosRequestConfig, retries?: number): Promise<T> {
@@ -255,7 +255,7 @@ class RecordingClient implements IMindbodyClient {
 }
 
 function recording(fixtureValue: unknown = fixture(), failUrl?: string, pageCap?: number): RecordingClient {
-  return new RecordingClient(makeClient(fixtureValue), failUrl, pageCap, fixtureValue as Record<string, any>);
+  return new RecordingClient(makeClient(fixtureValue), failUrl, pageCap, fixtureValue as Record<string, unknown>);
 }
 
 /** A recording client that does NOT validate: proves the tool's request shape only. */

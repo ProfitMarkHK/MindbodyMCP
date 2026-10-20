@@ -129,7 +129,7 @@ export class MindbodyApiClient {
     return error.message || 'Unknown API error';
   }
 
-  async get<T>(endpoint: string, options?: { params?: Record<string, any> }): Promise<T> {
+  async get<T>(endpoint: string, options?: { params?: Record<string, unknown> }): Promise<T> {
     // Filter out undefined params
     const params = options?.params
       ? Object.fromEntries(Object.entries(options.params).filter(([_, v]) => v !== undefined))
@@ -139,17 +139,17 @@ export class MindbodyApiClient {
     return response.data;
   }
 
-  async post<T>(endpoint: string, data?: any): Promise<T> {
+  async post<T>(endpoint: string, data?: unknown): Promise<T> {
     const response = await this.client.post<T>(endpoint, data);
     return response.data;
   }
 
-  async put<T>(endpoint: string, data?: any): Promise<T> {
+  async put<T>(endpoint: string, data?: unknown): Promise<T> {
     const response = await this.client.put<T>(endpoint, data);
     return response.data;
   }
 
-  async delete<T>(endpoint: string, options?: { params?: Record<string, any> }): Promise<T> {
+  async delete<T>(endpoint: string, options?: { params?: Record<string, unknown> }): Promise<T> {
     const response = await this.client.delete<T>(endpoint, { params: options?.params });
     return response.data;
   }
