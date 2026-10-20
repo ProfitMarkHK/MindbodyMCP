@@ -357,16 +357,18 @@ describe("nextjs-app MindbodyService — every list read walks all pages of its 
     expect(result.total).toBe(5);
     expect(result.summary.totalAttended).toBe(4);
     expect(result.summary.totalLateCancels).toBe(1);
-    expect(result.summary.byLocation).toEqual({ L: 4 });
+    // `Visit` carries no embedded location/staff names (C-15); the roll-ups that
+    // used to key on the phantom `Location.Name`/`Staff.Name` are now empty.
+    expect(result.summary.byLocation).toEqual({});
   });
 
   it("getClientAccountBalances pages /client/clientaccountbalances and reads the client's balance", async () => {
-    const balance = (id: number) => ({ Id: id, AccountBalance: 12.5, ClientCreditCards: [{ Balance: 3, CardType: "Visa", LastFour: "4242" }] });
+    const balance = (id: number) => ({ Id: id, AccountBalance: 12.5, ClientCreditCard: { CardType: "Visa", LastFour: "4242" } });
     const server = new PagingServer({ total: 1, key: "Clients", row: balance });
     const result = await new MindbodyService(server as any).getClientAccountBalances("c1");
     expect(server.calls[0].url).toBe("/client/clientaccountbalances");
     expect(server.calls[0].params).toMatchObject({ ClientIds: ["c1"], Limit: 200, Offset: 0 });
-    expect(result).toEqual({ accountBalance: 12.5, creditCardBalances: [{ amount: 3, cardType: "Visa", lastFour: "4242" }] });
+    expect(result).toEqual({ accountBalance: 12.5, creditCard: { cardType: "Visa", lastFour: "4242" } });
   });
 
   it("getActivationCode is the one single GET: /site/activationcode is not paginated in the spec", async () => {

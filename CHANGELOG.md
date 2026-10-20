@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getBookableItems` returns availability windows rather than bookable slots; book only at a start time from `getActiveSessionTimes`.
 - The pagination gate (Gate 13) uses the TypeScript compiler to find paginated reads, with a minimum count per source root.
 - CI fails the build on type, test, build and audit errors, and the release workflow runs a shared preflight before publishing.
+- Replaced relaxed types across the server, tests and the Next.js app: `catch (error: any)` now uses `unknown`-narrowing through `errorMessage()` helpers, and `Record<string, any>` / `CacheEntry<any>` / `post(…data?: any)` are `unknown`-typed.
+- Typed the client domain against the OpenAPI spec in both the MCP server and the Next.js app: `fetchAllPages<any>` and ad-hoc `(row: any)` mappers are now spec-derived types (`Client`, `Visit`, `ClientMembership`, `ClientContract`, and the POST response wrappers).
 
 ### Fixed
 - Non-idempotent POST requests are no longer retried. A POST that fails transiently is reported for reconciliation, because the v6 API has no idempotency key. Retries apply only to GET, HEAD and OPTIONS.
@@ -34,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected how the OAuth token expiry is read, and made user token authentication optional, which resolves `DeniedAccess` errors on the sandbox.
 - `getClassVisits` reads visits from the class in the response and includes the class details.
 - The Next.js app renders every timestamp in the studio's timezone and syncs classes over the site's calendar day rather than the host's.
+- `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, including the Next.js Prisma schema (`Int?` → `String?`), after a live sandbox probe.
+- The Next.js client reads no longer use phantom fields that the server had already dropped: `LiabilityRelease` read as an object, `Location.Name`/`Staff.Name` on `Visit`, `Program` mapped to a string, `ClientCreditCards[]` with `Balance`, and `Description`/`SoldDate`/`Balance`/`ContractType` on `ClientContract`.
 
 ### Security
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.

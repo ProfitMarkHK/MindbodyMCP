@@ -755,7 +755,7 @@ model ClientMembership {
   expirationDate      DateTime?
   paymentDate         DateTime?
   program             String?
-  iconCode            Int?
+  iconCode            String?
   action              String?
 
   // Timestamps

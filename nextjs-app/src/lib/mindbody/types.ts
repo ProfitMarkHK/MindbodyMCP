@@ -119,8 +119,8 @@ export interface Client {
   notes?: string;
   emergencyContact?: {
     name: string;
-    phone: string;
-    relationship: string;
+    phone?: string;
+    relationship?: string;
   };
   liability?: {
     isReleased: boolean;
@@ -180,8 +180,8 @@ export interface ClientVisit {
   className: string;
   startTime: string;
   endTime: string;
-  location: string;
-  instructor: string;
+  location?: string;
+  instructor?: string;
   signedIn: boolean;
   webSignup: boolean;
   lateCancel: boolean;
@@ -196,22 +196,20 @@ export interface ClientMembership {
   activeDate: string;
   expirationDate?: string;
   paymentDate?: string;
-  program: string;
+  programName?: string;
+  programId?: number;
   siteId: number;
-  iconCode?: number;
+  iconCode?: string;
   action?: string;
 }
 
 export interface ClientContract {
   id: number;
   name: string;
-  description?: string;
-  soldDate: string;
+  soldDate?: string;
   startDate: string;
   endDate?: string;
   autopayStatus?: string;
-  balance?: number;
-  contractType: string;
   siteId: number;
 }
 
