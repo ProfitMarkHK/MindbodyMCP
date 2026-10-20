@@ -2,6 +2,16 @@ import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/clie
 import { classCache, SimpleCache } from '../cache/index.js';
 import { errorMessage } from '../utils/errors.js';
 import { withDefaultDates } from '../utils/siteTime.js';
+import {
+  AddArrivalResponse,
+  AddClientResponse,
+  Client,
+  ClientContract,
+  ClientMembership,
+  ClientWithSuspensionInfo,
+  UpdateClientResponse,
+  Visit,
+} from '../types/mindbody.js';
 import { locationNames, staffNames } from './lookups.js';
 
 /**
@@ -62,8 +72,8 @@ export async function getClientsTool(
     };
     emergencyContact?: {
       name: string;
-      phone: string;
-      relationship: string;
+      phone?: string;
+      relationship?: string;
     };
     createdDate: string;
     status: string;
@@ -71,7 +81,7 @@ export async function getClientsTool(
   }>;
   totalClients: number;
 }> {
-  const { items: clientRows, totalResults } = await fetchAllPages<any>(
+  const { items: clientRows, totalResults } = await fetchAllPages<ClientWithSuspensionInfo>(
     client,
     '/client/clients',
     {
@@ -83,7 +93,7 @@ export async function getClientsTool(
     'Clients'
   );
 
-  const clients = clientRows.map((client: any) => ({
+  const clients = clientRows.map((client: ClientWithSuspensionInfo) => ({
     id: client.Id,
     firstName: client.FirstName,
     lastName: client.LastName,
@@ -179,7 +189,7 @@ export async function addClientTool(
 
     // SANDBOX-OBSERVED (differs from spec): addclient refuses Test: true ("Test mode is not allowed for this endpoint"), so no Test flag is sent and this tool always commits a real client.
     // See docs/mindbody-spec-discrepancies.md section D-10.
-    const response = await client.post<any>('/client/addclient', payload);
+    const response = await client.post<AddClientResponse>('/client/addclient', payload);
 
     return {
       success: true,
@@ -230,7 +240,7 @@ export async function updateClientTool(
   try {
     // UpdateClientRequest (docs/openapi.json) requires the fields nested under
     // `Client`; top-level fields are refused with `Client (Code: MissingRequiredFields)`.
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       Id: clientId,
     };
 
@@ -250,7 +260,7 @@ export async function updateClientTool(
 
     // SANDBOX-OBSERVED (differs from spec): updateclient on a non-regional site answers "The current site does not belong to a region" unless CrossRegionalUpdate is explicitly false; the spec documents no default.
     // See docs/mindbody-spec-discrepancies.md section D-6.
-    const response = await client.post<any>('/client/updateclient', {
+    const response = await client.post<UpdateClientResponse>('/client/updateclient', {
       Client: updateData,
       CrossRegionalUpdate: false,
     });
@@ -320,7 +330,7 @@ export async function getClientVisitsTool(
 }> {
   // Default window: the last 30 site-local days, ending today at the site.
   const dates = await withDefaultDates(startDate, endDate, -30, client, cache);
-  const { items: visitsRaw, totalResults } = await fetchAllPages<any>(
+  const { items: visitsRaw, totalResults } = await fetchAllPages<Visit>(
     client,
     '/client/clientvisits',
     {
@@ -335,14 +345,14 @@ export async function getClientVisitsTool(
   // that cannot be read leaves the names undefined instead of failing the read.
   // Neither is fetched when no visit carries the id it would resolve, so a
   // response with nothing to look up costs no extra requests.
-  const wantsLocations = visitsRaw.some((visit: any) => typeof visit?.LocationId === 'number');
-  const wantsStaff = visitsRaw.some((visit: any) => typeof visit?.StaffId === 'number');
+  const wantsLocations = visitsRaw.some((visit: Visit) => typeof visit?.LocationId === 'number');
+  const wantsStaff = visitsRaw.some((visit: Visit) => typeof visit?.StaffId === 'number');
   const [locations, staff] = await Promise.all([
     wantsLocations ? locationNames(client, cache) : new Map<number, string>(),
     wantsStaff ? staffNames(client, cache) : new Map<number, string>(),
   ]);
 
-  const visits = visitsRaw.map((visit: any) => ({
+  const visits = visitsRaw.map((visit: Visit) => ({
     id: visit.Id,
     classId: visit.ClassId,
     className: visit.Name,
@@ -415,12 +425,12 @@ export async function getClientMembershipsTool(
     programName?: string;
     programId?: number;
     siteId: number;
-    iconCode?: number;
+    iconCode?: string;
     action?: string;
   }>;
   totalMemberships: number;
 }> {
-  const { items: membershipRows } = await fetchAllPages<any>(
+  const { items: membershipRows } = await fetchAllPages<ClientMembership>(
     client,
     '/client/activeclientmemberships',
     {
@@ -430,7 +440,7 @@ export async function getClientMembershipsTool(
     'ClientMemberships'
   );
 
-  const memberships = membershipRows.map((membership: any) => ({
+  const memberships = membershipRows.map((membership: ClientMembership) => ({
     id: membership.Id,
     name: membership.Name,
     remainingClasses: membership.Remaining,
@@ -461,7 +471,7 @@ export async function addClientArrivalTool(
   message: string;
 }> {
   try {
-    const response = await client.post<any>('/client/addarrival', {
+    const response = await client.post<AddArrivalResponse>('/client/addarrival', {
       ClientId: clientId,
       LocationId: locationId,
     });
@@ -469,7 +479,9 @@ export async function addClientArrivalTool(
     return {
       success: true,
       arrivalAdded: response.ArrivalAdded,
-      message: response.Message || 'Client checked in successfully',
+      // `AddArrivalResponse` defines no `Message` field (see docs/mindbody-spec-discrepancies.md),
+      // so the success text is fixed rather than read from the response.
+      message: 'Client checked in successfully',
     };
   } catch (error: unknown) {
     return {
@@ -500,17 +512,17 @@ export async function getClientAccountBalancesTool(
     lastFour?: string;
   };
 }> {
-  const { items: balanceRows } = await fetchAllPages<any>(
+  const { items: balanceRows } = await fetchAllPages<Client>(
     client,
     '/client/clientaccountbalances',
     { ClientIds: [clientId] },
     'Clients'
   );
 
-  const clientData = balanceRows[0] ?? {};
-  const card = clientData.ClientCreditCard;
+  const clientData = balanceRows[0];
+  const card = clientData?.ClientCreditCard;
   return {
-    accountBalance: clientData.AccountBalance || 0,
+    accountBalance: clientData?.AccountBalance || 0,
     creditCard: card ? {
       cardType: card.CardType,
       lastFour: card.LastFour,
@@ -548,14 +560,14 @@ export async function getClientContractsTool(
   }>;
   totalContracts: number;
 }> {
-  const { items: contractsRaw, totalResults } = await fetchAllPages<any>(
+  const { items: contractsRaw, totalResults } = await fetchAllPages<ClientContract>(
     client,
     '/client/clientcontracts',
     { ClientId: clientId },
     'Contracts'
   );
 
-  const contracts = contractsRaw.map((contract: any) => ({
+  const contracts = contractsRaw.map((contract: ClientContract) => ({
     id: contract.Id,
     contractId: contract.ContractID,
     name: contract.ContractName,

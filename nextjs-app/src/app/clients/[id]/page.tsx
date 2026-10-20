@@ -244,7 +244,7 @@ export default function ClientDetailPage() {
                     <div key={contract.id} className="py-2 border-b last:border-0">
                       <p className="font-medium">{contract.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        {contract.contractType}
+                        {contract.autopayStatus}
                       </p>
                       {contract.endDate && (
                         <p className="text-sm text-muted-foreground">

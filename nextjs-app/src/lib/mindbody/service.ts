@@ -27,6 +27,10 @@ import type {
   // Utility
   TeacherSchedule, OperationResult, ListResult, VisitSummary,
 } from './types';
+import type {
+  MindbodyClient, MindbodyVisit, MindbodyClientMembership, MindbodyClientContract,
+  MindbodyAddClientResponse, MindbodyUpdateClientResponse, MindbodyAddArrivalResponse,
+} from './rawTypes';
 
 // ============================================================================
 // ENROLLMENT HELPERS (module-level; see the ENROLLMENT MANAGEMENT section)
@@ -323,7 +327,7 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClients(params?: GetClientsParams): Promise<ListResult<Client>> {
-    const { items: rows, totalResults } = await fetchAllPages<any>(
+    const { items: rows, totalResults } = await fetchAllPages<MindbodyClient>(
       this.client,
       '/client/clients',
       {
@@ -335,7 +339,7 @@ export class MindbodyService {
       'Clients',
       params?.limit || DEFAULT_PAGE_SIZE
     );
-    const clients = rows.map((c: any) => ({
+    const clients = rows.map((c: MindbodyClient) => ({
       id: c.Id,
       firstName: c.FirstName,
       lastName: c.LastName,
@@ -364,9 +368,9 @@ export class MindbodyService {
         phone: c.EmergencyContactInfoPhone,
         relationship: c.EmergencyContactInfoRelationship,
       } : undefined,
-      liability: c.LiabilityRelease ? {
-        isReleased: c.LiabilityRelease.IsReleased,
-        agreedDate: c.LiabilityRelease.AgreementDate,
+      liability: c.Liability ? {
+        isReleased: c.Liability.IsReleased,
+        agreedDate: c.Liability.AgreementDate,
       } : undefined,
       accountBalance: c.AccountBalance || 0,
       creationDate: c.CreationDate,
@@ -382,7 +386,7 @@ export class MindbodyService {
 
   async addClient(params: AddClientParams): Promise<OperationResult<Client>> {
     try {
-      const response = await this.client.post<any>('/client/addclient', {
+      const response = await this.client.post<MindbodyAddClientResponse>('/client/addclient', {
         FirstName: params.firstName,
         LastName: params.lastName,
         Email: params.email,
@@ -424,7 +428,7 @@ export class MindbodyService {
 
   async updateClient(params: UpdateClientParams): Promise<OperationResult<Client>> {
     try {
-      const updateData: any = { Id: params.clientId };
+      const updateData: Record<string, unknown> = { Id: params.clientId };
       if (params.firstName) updateData.FirstName = params.firstName;
       if (params.lastName) updateData.LastName = params.lastName;
       if (params.email) updateData.Email = params.email;
@@ -438,7 +442,7 @@ export class MindbodyService {
       if (params.emergencyContactPhone) updateData.EmergencyContactInfoPhone = params.emergencyContactPhone;
       if (params.sendAccountEmails !== undefined) updateData.SendAccountEmails = params.sendAccountEmails;
 
-      const response = await this.client.post<any>('/client/updateclient', updateData);
+      const response = await this.client.post<MindbodyUpdateClientResponse>('/client/updateclient', updateData);
 
       return {
         success: true,
@@ -465,7 +469,7 @@ export class MindbodyService {
   async getClientVisits(params: GetClientVisitsParams): Promise<{ visits: ClientVisit[]; total: number; summary: VisitSummary }> {
     const { start, end } = await this.defaultRange(params.startDate, params.endDate, -30);
 
-    const { items: rows } = await fetchAllPages<any>(
+    const { items: rows } = await fetchAllPages<MindbodyVisit>(
       this.client,
       '/client/clientvisits',
       {
@@ -476,14 +480,14 @@ export class MindbodyService {
       'Visits'
     );
 
-    const visits: ClientVisit[] = rows.map((v: any) => ({
+    const visits: ClientVisit[] = rows.map((v: MindbodyVisit) => ({
       id: v.Id,
       classId: v.ClassId,
       className: v.Name,
       startTime: v.StartDateTime,
       endTime: v.EndDateTime,
-      location: v.Location?.Name || 'Unknown',
-      instructor: v.Staff?.Name || 'Unknown',
+      // `Visit` carries `LocationId`/`StaffId`, not embedded names (C-15); the old
+      // `|| 'Unknown'` phantom values are dropped.
       signedIn: v.SignedIn,
       webSignup: v.WebSignup,
       lateCancel: v.LateCancelled,
@@ -502,9 +506,14 @@ export class MindbodyService {
     };
 
     visits.forEach((visit) => {
-      if (visit.signedIn) {
+      if (!visit.signedIn) return;
+      if (visit.location !== undefined) {
         summary.byLocation[visit.location] = (summary.byLocation[visit.location] || 0) + 1;
+      }
+      if (visit.className !== undefined) {
         summary.byClassType[visit.className] = (summary.byClassType[visit.className] || 0) + 1;
+      }
+      if (visit.instructor !== undefined) {
         summary.byInstructor[visit.instructor] = (summary.byInstructor[visit.instructor] || 0) + 1;
       }
     });
@@ -513,20 +522,21 @@ export class MindbodyService {
   }
 
   async getClientMemberships(clientId: string, locationId?: number): Promise<ListResult<ClientMembership>> {
-    const { items: rows } = await fetchAllPages<any>(
+    const { items: rows } = await fetchAllPages<MindbodyClientMembership>(
       this.client,
       '/client/activeclientmemberships',
       { ClientId: clientId, LocationId: locationId },
       'ClientMemberships'
     );
-    const memberships = rows.map((m: any) => ({
+    const memberships = rows.map((m: MindbodyClientMembership) => ({
       id: m.Id,
       name: m.Name,
       remainingClasses: m.Remaining,
       activeDate: m.ActiveDate,
       expirationDate: m.ExpirationDate,
       paymentDate: m.PaymentDate,
-      program: m.Program,
+      programName: m.Program?.Name,
+      programId: m.Program?.Id,
       siteId: m.SiteId,
       iconCode: m.IconCode,
       action: m.Action,
@@ -535,55 +545,51 @@ export class MindbodyService {
   }
 
   async getClientContracts(clientId: string): Promise<ListResult<ClientContract>> {
-    const { items: rows } = await fetchAllPages<any>(
+    const { items: rows } = await fetchAllPages<MindbodyClientContract>(
       this.client,
       '/client/clientcontracts',
       { ClientId: clientId },
       'Contracts'
     );
-    const contracts = rows.map((c: any) => ({
+    const contracts = rows.map((c: MindbodyClientContract) => ({
       id: c.Id,
       name: c.ContractName,
-      description: c.Description,
-      soldDate: c.SoldDate,
+      soldDate: c.AgreementDate,
       startDate: c.StartDate,
       endDate: c.EndDate,
       autopayStatus: c.AutopayStatus,
-      balance: c.Balance,
-      contractType: c.ContractType,
       siteId: c.SiteId,
     }));
     return { items: contracts, total: contracts.length };
   }
 
-  async getClientAccountBalances(clientId: string): Promise<{ accountBalance: number; creditCardBalances: Array<{ amount: number; cardType: string; lastFour: string }> }> {
-    const { items: rows } = await fetchAllPages<any>(
+  async getClientAccountBalances(clientId: string): Promise<{ accountBalance: number; creditCard?: { cardType?: string; lastFour?: string } }> {
+    const { items: rows } = await fetchAllPages<MindbodyClient>(
       this.client,
       '/client/clientaccountbalances',
       { ClientIds: [clientId] },
       'Clients'
     );
     const client = rows[0];
+    const card = client?.ClientCreditCard;
     return {
       accountBalance: client?.AccountBalance || 0,
-      creditCardBalances: client?.ClientCreditCards?.map((card: any) => ({
-        amount: card.Balance || 0,
-        cardType: card.CardType,
-        lastFour: card.LastFour,
-      })) || [],
+      // Spec & sandbox: a single stored `ClientCreditCard` with no balance (C-17).
+      creditCard: card ? { cardType: card.CardType, lastFour: card.LastFour } : undefined,
     };
   }
 
   async addClientArrival(clientId: string, locationId: number): Promise<OperationResult<{ arrivalAdded: boolean }>> {
     try {
-      const response = await this.client.post<any>('/client/addarrival', {
+      const response = await this.client.post<MindbodyAddArrivalResponse>('/client/addarrival', {
         ClientId: clientId,
         LocationId: locationId,
       });
       return {
         success: true,
         data: { arrivalAdded: response.ArrivalAdded },
-        message: response.Message || 'Client checked in successfully',
+        // `AddArrivalResponse` defines no `Message` field; the success text is fixed.
+        message: 'Client checked in successfully',
       };
     } catch (error: unknown) {
       return { success: false, message: errorMessage(error, 'Failed to check in client') };

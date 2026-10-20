@@ -399,7 +399,7 @@ const membershipsFixture = {
       // Spec: `Program` is a `Program` object.
       Program: { Id: 3, Name: "Yoga", ScheduleType: "Class" },
       SiteId: 1,
-      IconCode: 4,
+      IconCode: "4",
       Action: "AddToWaitlist",
     },
     {
@@ -409,7 +409,7 @@ const membershipsFixture = {
       ActiveDate: "2026-02-01",
       Program: { Id: 9, Name: "Personal Training", ScheduleType: "Appointment" },
       SiteId: 1,
-      IconCode: 0,
+      IconCode: "0",
     },
   ],
 };
@@ -429,7 +429,7 @@ describe("getClientMembershipsTool", () => {
       programName: "Yoga",
       programId: 3,
       siteId: 1,
-      iconCode: 4,
+      iconCode: "4",
       action: "AddToWaitlist",
     });
 

@@ -368,6 +368,14 @@ Each entry: the wrong field(s), the correct field(s), evidence, and a one-line f
 - **Effect:** The two filters never narrow; `isMale` is always undefined.
 - **Fix:** Accept single `locationId`/`sessionTypeId` with `startDateTime`, or filter client-side; read `IsMale`.
 
+### C-31. `ClientMembership.IconCode` was typed `number`; the wire value is a string — RESOLVED 2026-10-20
+
+- **File:** `src/tools/clientManagement.ts:418` (and the `nextjs-app/` mirror `src/lib/mindbody/service.ts`).
+- **Wrong:** `IconCode` typed `number`, conflating it with `Client.MembershipIcon` (an `integer`).
+- **Correct:** `ClientMembership.IconCode` is `string` — "text code that represents the `MembershipIcon`"; the integer is the separate `Client.MembershipIcon` field.
+- **Evidence:** Live `-99` probe of `GET /client/activeclientmemberships` → `IconCode: "6"` (string), `MembershipIcon: 6` (integer), `Program` an object.
+- **Fix:** `IconCode` typed `string` across `src/`, `nextjs-app/` and the Prisma schema (`Int?` → `String?`); test fixtures updated to `"4"`/`"0"`.
+
 ## D. Spec issues to raise with Mindbody
 
 Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, impact, and a paragraph ready to send.
@@ -462,6 +470,15 @@ scope, and it still reads fields section C established do not exist:
 | `c.IsSubstitute` | `c.Substitute` | C-6 |
 | `isMale` | `IsMale` | C-30 |
 | `IntroOffer.Id` / `.Name` / `.Price` | `IntroOffer` is a string | C-25 |
+
+**Status (2026-10-20):** the client-domain rows are now fixed. `getClients`
+reads `c.Liability` (C-14), `getClientVisits` no longer reads `Location.Name`/
+`Staff.Name` (C-15), `getClientMemberships` maps `Program` to `programName`/
+`programId` (C-16), `getClientAccountBalances` reads the single `ClientCreditCard`
+(C-17), and `getClientContracts` drops `Description`/`SoldDate`/`Balance`/
+`ContractType` (C-18). `IconCode` was also retyped `string` (C-31). The remaining
+rows — `ImageUrl` (C-7), `IsSubstitute` (C-6), `isMale` (C-30), `IntroOffer`
+(C-25) — are in the class/staff/sales domains and still open.
 
 **Why it is recorded rather than fixed.** The same shapes are consumed
 downstream: `nextjs-app/src/lib/sync/index.ts` and the Prisma schema depend on
