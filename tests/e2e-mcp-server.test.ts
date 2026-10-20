@@ -39,6 +39,7 @@ import { z } from 'zod';
 import {
   CANCELLATION_FIXTURES,
   ENROLLMENT_FIXTURES,
+  LATE_CANCEL_FIXTURES,
   MindbodyStub,
   STUB_CLASSES,
   STUB_FIXTURES,
@@ -2237,6 +2238,58 @@ describe('domain — enrollments', () => {
     expect(payload.message).toContain('MINDBODY_LATE_CANCEL_WINDOW_HOURS');
     expect(stub.countTo('/public/v6/class/removeclientfromclass')).toBe(0);
     expect(stub.requestsTo('/public/v6/class/classes', 'GET')).toHaveLength(0);
+  });
+
+  itE2E('removeClientFromClass bounds lateCancel to a configured 24-hour window', async () => {
+    // A second server, because the shared one deliberately has no window. This is
+    // the inside-window success path that unit tests alone covered before: the
+    // class lookup, the window comparison and the write all run for real.
+    const scoped = await startScopedServer(
+      buildStubEnv({ apiUrl: stub.apiUrl, scratchDir, lateCancelWindowHours: 24 }),
+      scratchDir
+    );
+    try {
+      stub.resetLog();
+      const inside = await scoped.client.callTool({
+        name: 'removeClientFromClass',
+        arguments: {
+          clientId: STUB_FIXTURES.clientId,
+          classId: LATE_CANCEL_FIXTURES.insideWindowClassId,
+          lateCancel: true,
+        },
+      });
+      expect(inside.isError).toBeFalsy();
+      expect(resultJson(inside)).toEqual({ success: true, message: 'Successfully cancelled class booking' });
+
+      const [lookup] = stub.requestsTo(CLASSES_PATH, 'GET');
+      expect(lookup.queryAll['ClassIds[]'].map(Number)).toEqual([LATE_CANCEL_FIXTURES.insideWindowClassId]);
+      expect(stub.requestsTo('/public/v6/class/removeclientfromclass', 'POST').map((write) => write.body)).toEqual([
+        {
+          ClientId: STUB_FIXTURES.clientId,
+          ClassId: LATE_CANCEL_FIXTURES.insideWindowClassId,
+          LateCancel: true,
+        },
+      ]);
+
+      // The same server refuses the class two days out, after its lookup, with no write.
+      stub.resetLog();
+      const outside = await scoped.client.callTool({
+        name: 'removeClientFromClass',
+        arguments: {
+          clientId: STUB_FIXTURES.clientId,
+          classId: LATE_CANCEL_FIXTURES.outsideWindowClassId,
+          lateCancel: true,
+        },
+      });
+      expect(outside.isError).toBeFalsy();
+      const refusal = resultJson(outside);
+      expect(refusal.success).toBe(false);
+      expect(refusal.message).toContain("outside the site's late-cancel window");
+      expect(stub.countTo(CLASSES_PATH)).toBe(1);
+      expect(stub.requestsTo('/public/v6/class/removeclientfromclass', 'POST')).toEqual([]);
+    } finally {
+      await scoped.stop();
+    }
   });
 
   itE2E('cancelEnrollmentVisits is all-or-nothing: one bad visit and nothing is written', async () => {

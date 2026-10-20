@@ -8,12 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Expanded the server from one teacher-schedule tool to 41 tools covering classes, clients, sales, staff, site, appointments and enrollments.
-- Added `getClassSchedules` to list recurring class schedules and `substituteClassTeacher` to replace an instructor on a class.
-- Added `getClassVisits` to list attendance for a single class.
-- Added appointment tools: `addAppointment`, `updateAppointment` (reschedule, staff, notes and status actions), `cancelAppointments`, `getBookableItems`, `getActiveSessionTimes` and `getStaffAppointments`.
-- Added enrollment tools: `getEnrollments`, `addClientToEnrollment`, `getClientEnrollments` and `cancelEnrollmentVisits`.
-- Added `checkoutShoppingCart` and `purchaseContract` for sales, and `getSites` for site details.
+- Brought the tool set from 38 to 41 with `getClassVisits` (attendance for a single class), `cancelAppointments` and `cancelEnrollmentVisits`.
 - Added dependency injection for the API client and cache in every tool, so tests run without the global client.
 - Added an OpenAPI-validated stub client for tool tests, so test requests are checked against the Mindbody v6 spec.
 - Added cached lookups that resolve location and session type IDs to names.
@@ -26,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - List reads now page through every result: each Mindbody list GET is fetched 200 rows at a time until the server's total is reached, instead of returning only the first page.
 - All dates and times use the studio's own timezone, read from the site record. `MINDBODY_SITE_TIMEZONE` is used only when the site record has no usable zone, and write operations refuse it when it disagrees with the record.
 - The `SiteId` header is no longer sent when `MINDBODY_SITE_ID` is unset.
-- Late cancellations are refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then apply only to appointments and enrollments starting within that many hours.
+- Late cancellations are refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then apply only to appointments, enrollment sessions and class bookings starting within that many hours. The example configuration sets 24 hours.
 - `getContracts` requires `locationId`, because the API rejects requests without it.
 - `purchaseContract` sends `useAccountCredit` and reads the flat response the sandbox returns, matching observed sandbox behaviour (ADR 0001).
 - `getBookableItems` returns availability windows rather than bookable slots; book only at a start time from `getActiveSessionTimes`.
@@ -44,6 +39,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.
 - `checkoutShoppingCart` verifies that every `appointmentIds` entry belongs to the client, and refuses the whole checkout if any does not.
 - Arrived appointments cannot be cancelled.
+
+## [2.0.2] - 2025-09-10
+
+### Fixed
+- Class, appointment, enrollment and teacher-schedule reads use optional chaining on `ClassDescription`, `Staff` and `Location`, and fall back to `FirstName LastName` when a staff name is absent, so a payload without the nested object renders empty instead of throwing.
+- Removed the `Staff.DisplayName` fallback added in 2.0.1; the property is not in the v6 spec.
+
+## [2.0.1] - 2025-09-09
+
+### Added
+- SSE transport alongside STDIO, with `--transport`, `--port`, `--host`, `--ssl-cert` and `--ssl-key` flags and their `MCP_*` environment fallbacks. The HTTP server exposes `/sse`, `/health` and `/info`, supports HTTPS when a certificate and key are supplied, and handles CORS preflight requests.
+- Docker Compose, Kubernetes, systemd and nginx deployment assets, plus `docs/SSE_DEPLOYMENT.md`.
+- `SECURITY.md` and Dependabot configuration.
+
+### Fixed
+- `getStaffAppointments` no longer throws when the API returns flat `StaffId`, `SessionTypeId`, `LocationId` or `ClientId` instead of nested objects.
+
+## [2.0.0] - 2025-08-13
+
+### Added
+- 37 new MCP tools, 38 in total with `getTeacherSchedule`:
+  - classes: `getClasses`, `getClassDescriptions`, `getClassSchedules`, `addClientToClass`, `removeClientFromClass`, `getWaitlistEntries`, `substituteClassTeacher`
+  - clients: `getClients`, `addClient`, `updateClient`, `getClientVisits`, `getClientMemberships`, `addClientArrival`, `getClientAccountBalances`, `getClientContracts`
+  - sales: `getServices`, `getPackages`, `getProducts`, `getContracts`, `checkoutShoppingCart`, `purchaseContract`
+  - site: `getSites`, `getLocations`, `getPrograms`, `getResources`, `getSessionTypes`, `getActivationCode`
+  - appointments: `getStaffAppointments`, `addAppointment`, `updateAppointment`, `getBookableItems`, `getActiveSessionTimes`, `getScheduleItems`
+  - enrollments: `getEnrollments`, `addClientToEnrollment`, `getClientEnrollments`
+  - staff: `getStaff`
+- GitHub Actions CI and release workflows, a multi-stage `Dockerfile`, and npm, GitHub Packages, Bun executable and Docker distribution.
+- Rewritten `README.md`, `Claude.md` and the API, architecture, quick-start and setup guides.
+
+### Changed
+- Renamed the npm package to `@vespo92/mindbody-mcp`; the command name stays `mindbody-mcp`.
+- The API client merges auth headers in place in its request and 401-retry interceptors instead of replacing `config.headers`.
 
 ## [1.0.0] - 2024-12-19
 
@@ -69,5 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Efficient caching to respect API rate limits
 - Optimized API client with connection pooling
 
-[Unreleased]: https://github.com/yourusername/mindbody-mcp/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/yourusername/mindbody-mcp/releases/tag/v1.0.0
+[Unreleased]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/vespo92/MindbodyMCP/compare/2b75b9e...v2.0.0
+[1.0.0]: https://github.com/vespo92/MindbodyMCP/commit/2b75b9e

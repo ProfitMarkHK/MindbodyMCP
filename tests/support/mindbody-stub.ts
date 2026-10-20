@@ -72,7 +72,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { siteDateStringPlusDays } from '../../src/utils/siteTime.js';
+import { epochMsToSiteLocal, siteDateStringPlusDays } from '../../src/utils/siteTime.js';
 
 /** Path prefix the server appends to whatever MINDBODY_API_URL points at. */
 export const API_PREFIX = '/public/v6';
@@ -659,6 +659,40 @@ export const STUB_CLASSES: ReadonlyArray<Record<string, any>> = Array.from({ len
 });
 
 /**
+ * Two drop-in classes that make the late-cancel window testable end to end: one
+ * starts two hours after the fixtures load, one two days out. Their times are
+ * computed at load in the stub site's zone (site-local, no offset, like every
+ * other fixture), so the inside/outside boundary never rots. They are served by
+ * `ClassIds[]` lookup only and are deliberately absent from the paginated
+ * catalogue, so `getClasses` and `getTeacherSchedule` counts are unaffected.
+ */
+function lateCancelClassAt(id: number, hoursFromNow: number): Record<string, any> {
+  const startMs = Date.now() + hoursFromNow * 3_600_000;
+  const staff = STUB_FIXTURES.staff[1];
+  return {
+    Id: id,
+    ClassDescription: { Id: 10, Name: 'Vinyasa Flow', Description: 'A dynamic class' },
+    Staff: { Id: staff.Id, Name: staff.Name, FirstName: staff.FirstName, LastName: staff.LastName },
+    Location: { Id: 1, Name: 'E2E Main Studio' },
+    StartDateTime: epochMsToSiteLocal(startMs, STUB_FIXTURES.siteTimeZone),
+    EndDateTime: epochMsToSiteLocal(startMs + 3_600_000, STUB_FIXTURES.siteTimeZone),
+    MaxCapacity: 20,
+    TotalBooked: 5,
+    IsWaitlistAvailable: true,
+    IsCanceled: false,
+    Substitute: false,
+  };
+}
+
+export const LATE_CANCEL_FIXTURES = {
+  /** Starts two hours from now: inside a 24-hour window. */
+  insideWindowClassId: 1101,
+  /** Starts two days from now: outside a 24-hour window. */
+  outsideWindowClassId: 1102,
+  classes: [lateCancelClassAt(1101, 2), lateCancelClassAt(1102, 48)],
+} as const;
+
+/**
  * An appointment `days` site-calendar days from today (negative = past), 10:00
  * to 11:00 site-local wall time, with no offset — the shape Mindbody returns.
  * The date comes from the same siteTime.ts conversion the server uses, in the
@@ -1154,7 +1188,7 @@ export class MindbodyStub {
       // ignoring the date window so an old drop-in class still resolves.
       const classIds = (request.queryAll['ClassIds[]'] ?? []).map(Number);
       if (classIds.length > 0) {
-        const byId = [...STUB_CLASSES, ...ENROLLMENT_FIXTURES.sessions].filter((cls) => classIds.includes(cls.Id));
+        const byId = [...STUB_CLASSES, ...ENROLLMENT_FIXTURES.sessions, ...LATE_CANCEL_FIXTURES.classes].filter((cls) => classIds.includes(cls.Id));
         return listResponse('Classes', byId, request.query, STUB_PAGE_CAPS.classes);
       }
       // Honour the filters the tools send: StaffIds[] and the StartDateTime ..
@@ -1221,7 +1255,7 @@ export class MindbodyStub {
       if (body.ClassId === undefined) {
         return { status: 400, body: { Error: { Code: 'MissingRequiredFields', Message: 'ClassId is a required parameter.' } } };
       }
-      const known = [...STUB_CLASSES, ...ENROLLMENT_FIXTURES.sessions].find((cls) => cls.Id === Number(body.ClassId));
+      const known = [...STUB_CLASSES, ...ENROLLMENT_FIXTURES.sessions, ...LATE_CANCEL_FIXTURES.classes].find((cls) => cls.Id === Number(body.ClassId));
       if (!known) {
         return { status: 404, body: { Error: { Code: 'NotFound', Message: `Class ${body.ClassId} not found` } } };
       }
@@ -1527,6 +1561,12 @@ export interface StubEnvOptions {
    * `auth.ts` must short-circuit but `src/index.ts`'s startup gate still applies.
    */
   omit?: string[];
+  /**
+   * The site's late-cancel window, in hours. Left unset the server refuses
+   * `lateCancel: true` (the fail-closed default); set it to exercise the
+   * inside-window and outside-window paths end to end.
+   */
+  lateCancelWindowHours?: number;
 }
 
 /**
@@ -1560,6 +1600,10 @@ export function buildStubEnv(options: StubEnvOptions): Record<string, string> {
 
   if (options.omitRequired) {
     delete env[options.omitRequired];
+  }
+
+  if (options.lateCancelWindowHours !== undefined) {
+    env.MINDBODY_LATE_CANCEL_WINDOW_HOURS = String(options.lateCancelWindowHours);
   }
 
   for (const key of options.omit ?? []) {
