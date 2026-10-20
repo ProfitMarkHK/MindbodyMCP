@@ -61,9 +61,9 @@ async function main(): Promise<void> {
         report.firstClientId = response?.Clients?.[0]?.Id ?? null;
       }
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     report.apiOk = false;
-    report.error = error?.message ?? String(error);
+    report.error = error instanceof Error ? error.message : String(error);
   }
 
   report.tokenAfter = await mindbodyAuth.getUserToken();

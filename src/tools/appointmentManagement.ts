@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 import { locationNames, sessionTypeNames } from './lookups.js';
 import {
   getSiteTimeZone,
@@ -201,10 +202,10 @@ export async function addAppointmentTool(
       },
       message: response.Message || 'Appointment booked successfully',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to book appointment',
+      message: errorMessage(error, 'Failed to book appointment'),
     };
   }
 }
@@ -282,11 +283,11 @@ export async function lookupAppointmentsForClient(
   let timeZone: string;
   try {
     timeZone = await getSiteTimeZone(client, cache);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       ok: false,
       kind: 'site timezone',
-      reason: `site timezone unavailable: ${error?.message ?? 'unknown error'}`,
+      reason: `site timezone unavailable: ${errorMessage(error, 'unknown error')}`,
     };
   }
 
@@ -305,11 +306,11 @@ export async function lookupAppointmentsForClient(
       'Appointments'
     );
     return { ok: true, timeZone, rows };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       ok: false,
       kind: 'lookup',
-      reason: `appointment lookup failed: ${error?.message ?? 'unknown error'}`,
+      reason: `appointment lookup failed: ${errorMessage(error, 'unknown error')}`,
     };
   }
 }
@@ -556,11 +557,11 @@ export async function updateAppointmentTool(
       rejected: [],
       message: 'Appointment updated successfully',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       rejected: [],
-      message: error.message || 'Failed to update appointment',
+      message: errorMessage(error, 'Failed to update appointment'),
     };
   }
 }
@@ -732,12 +733,12 @@ export async function cancelAppointmentsTool(
         status: response?.Appointment?.Status ?? (lateCancel ? 'LateCancelled' : 'Cancelled'),
         startDateTime: response?.Appointment?.StartDateTime ?? row.StartDateTime,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       const notAttempted = appointmentIds.slice(cancelled.length + 1);
       return {
         success: false,
         cancelled,
-        rejected: [{ id, reason: error?.message || 'cancellation failed' }],
+        rejected: [{ id, reason: errorMessage(error, 'cancellation failed') }],
         message:
           `Cancelled ${cancelled.length} of ${appointmentIds.length} before appointment ${id} failed; stopped.` +
           (notAttempted.length > 0 ? ` Not attempted: ${notAttempted.join(', ')}.` : ''),

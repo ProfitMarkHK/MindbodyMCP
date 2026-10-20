@@ -640,7 +640,7 @@ export const STUB_FIXTURES = {
  * /class/classes page cap of 3, getClasses needs three GETs (Offset 0, 3, 6)
  * and getTeacherSchedule for Ada needs two (6 rows: Offset 0, 3).
  */
-export const STUB_CLASSES: ReadonlyArray<Record<string, any>> = Array.from({ length: 7 }, (_, i) => {
+export const STUB_CLASSES: ReadonlyArray<Record<string, any>> = Array.from({ length: 7 }, (_, i) => { // Record<string, any>: fixture — value read untyped
   const day = `2026-03-${String(9 + i).padStart(2, '0')}`;
   const staff = i === 3 ? STUB_FIXTURES.staff[0] : STUB_FIXTURES.staff[1];
   return {
@@ -666,7 +666,7 @@ export const STUB_CLASSES: ReadonlyArray<Record<string, any>> = Array.from({ len
  * `ClassIds[]` lookup only and are deliberately absent from the paginated
  * catalogue, so `getClasses` and `getTeacherSchedule` counts are unaffected.
  */
-function lateCancelClassAt(id: number, hoursFromNow: number): Record<string, any> {
+function lateCancelClassAt(id: number, hoursFromNow: number): Record<string, any> { // Record<string, any>: fixture — value read untyped
   const startMs = Date.now() + hoursFromNow * 3_600_000;
   const staff = STUB_FIXTURES.staff[1];
   return {
@@ -775,7 +775,7 @@ function allStubAppointments(): ReadonlyArray<Record<string, unknown>> {
 const ENROLLMENT_PROGRAM = { Id: 10, Name: 'Boot Camp', ScheduleType: 'Enrollment', CancelOffset: 0, ContentFormats: ['InPerson'] };
 
 /** Site-local 18:00 to 19:30 `days` site-calendar days from today (negative = past). */
-function enrollmentSessionAt(classId: number, classScheduleId: number, days: number): Record<string, any> {
+function enrollmentSessionAt(classId: number, classScheduleId: number, days: number): Record<string, any> { // Record<string, any>: fixture — value read untyped
   const day = siteDateStringPlusDays(new Date(), STUB_FIXTURES.siteTimeZone, days);
   return {
     Id: classId,
@@ -799,10 +799,10 @@ function enrollmentSessionAt(classId: number, classScheduleId: number, days: num
 /** A VisitWithWaitlistInfo row on the client's schedule for one session. */
 function enrollmentVisit(
   visitId: number,
-  session: Record<string, any>,
+  session: Record<string, any>, // Record<string, any>: fixture — value read untyped
   clientId: string,
   overrides: Record<string, unknown> = {}
-): Record<string, any> {
+): Record<string, any> { // Record<string, any>: fixture — value read untyped
   return {
     Id: visitId,
     ClassId: session.Id,
@@ -853,7 +853,7 @@ export const ENROLLMENT_FIXTURES = {
   waitlistedVisit: 100005,
   lateCancelledVisit: 100006,
   dropInVisit: 100007,
-  sessions: ENROLLMENT_SESSIONS as ReadonlyArray<Record<string, any>>,
+  sessions: ENROLLMENT_SESSIONS as ReadonlyArray<Record<string, any>>, // Record<string, any>: fixture — value read untyped
   /** ClassSchedule as GET /enrollment/enrollments returns it (`Classes`/`Clients` null, like the sandbox). */
   schedule: {
     Id: 2256,
@@ -874,7 +874,7 @@ export const ENROLLMENT_FIXTURES = {
     Location: ENROLLMENT_SESSIONS[1].Location,
     FrequencyType: null,
     FrequencyInterval: null,
-  } as Record<string, any>,
+  } as Record<string, any>, // Record<string, any>: fixture — value read untyped
   visits: [
     enrollmentVisit(100001, ENROLLMENT_SESSIONS[0], STUB_FIXTURES.clientId, { SignedIn: true }),
     enrollmentVisit(100002, ENROLLMENT_SESSIONS[1], STUB_FIXTURES.clientId),
@@ -883,7 +883,7 @@ export const ENROLLMENT_FIXTURES = {
     enrollmentVisit(100005, ENROLLMENT_SESSIONS[4], STUB_FIXTURES.clientId, { WaitlistInfo: { WaitlistId: 5601, WaitlistOrderNumber: 2 } }),
     enrollmentVisit(100006, ENROLLMENT_SESSIONS[3], STUB_FIXTURES.clientId, { LateCancelled: true }),
     { ...enrollmentVisit(100007, ENROLLMENT_SESSIONS[2], STUB_FIXTURES.clientId), ClassId: 101, Name: 'Vinyasa Flow' },
-  ] as ReadonlyArray<Record<string, any>>,
+  ] as ReadonlyArray<Record<string, any>>, // Record<string, any>: fixture — value read untyped
 } as const;
 
 export class MindbodyStub {
@@ -1223,7 +1223,7 @@ export class MindbodyStub {
     });
 
     this.route('POST', '/enrollment/addclienttoenrollment', (request) => {
-      const body = (request.body ?? {}) as Record<string, any>;
+      const body = (request.body ?? {}) as Record<string, any>; // Record<string, any>: fixture — value read untyped
       // The sandbox refuses the plural `ClassScheduleIds` with exactly this error.
       if (!body.ClientId || body.ClassScheduleId === undefined) {
         return {
@@ -1251,7 +1251,7 @@ export class MindbodyStub {
     });
 
     this.route('POST', '/class/removeclientfromclass', (request) => {
-      const body = (request.body ?? {}) as Record<string, any>;
+      const body = (request.body ?? {}) as Record<string, any>; // Record<string, any>: fixture — value read untyped
       if (body.ClassId === undefined) {
         return { status: 400, body: { Error: { Code: 'MissingRequiredFields', Message: 'ClassId is a required parameter.' } } };
       }
@@ -1317,7 +1317,7 @@ export class MindbodyStub {
     );
 
     this.route('POST', '/sale/checkoutshoppingcart', (request) => {
-      const body = (request.body ?? {}) as { Items?: Array<Record<string, any>> };
+      const body = (request.body ?? {}) as { Items?: Array<Record<string, any>> }; // Record<string, any>: fixture — value read untyped
       const items = Array.isArray(body.Items) ? body.Items : [];
       const reconciling = items.some((item) => Array.isArray(item.AppointmentIds));
       // Without AppointmentIds the cart is the fixed fixture, unchanged.

@@ -23,6 +23,7 @@
  */
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 import {
   getSiteTimeZone,
@@ -232,12 +233,12 @@ export async function addClientToEnrollmentTool(
     let held: ClientEnrollmentSession[];
     try {
       held = await sessionsAlreadyHeld(client, cache, clientId, classScheduleId, enrollDateForward, enrollOpenDates);
-    } catch (error: any) {
+    } catch (error: unknown) {
       return {
         success: false,
         classScheduleId,
         sessions: [],
-        message: `Could not check the client's existing sessions; nothing was booked: ${error?.message ?? 'unknown error'}`,
+        message: `Could not check the client's existing sessions; nothing was booked: ${errorMessage(error, 'unknown error')}`,
       };
     }
     if (held.length > 0) {
@@ -277,12 +278,12 @@ export async function addClientToEnrollmentTool(
       sessions,
       message: `${test ? '[test] ' : ''}Client ${clientId} ${what} enrollment ${classScheduleId} (${sessions.length} session(s) on the schedule)`,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       classScheduleId,
       sessions: [],
-      message: error?.message || 'Failed to add client to enrollment',
+      message: errorMessage(error, 'Failed to add client to enrollment'),
     };
   }
 }
@@ -590,11 +591,11 @@ export async function cancelEnrollmentVisitsTool(
   let timeZone: string;
   try {
     timeZone = await getSiteTimeZone(client, cache);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       cancelled: [],
-      rejected: [{ visitId: -1, reason: `site timezone unavailable: ${error?.message ?? 'unknown error'}` }],
+      rejected: [{ visitId: -1, reason: `site timezone unavailable: ${errorMessage(error, 'unknown error')}` }],
       message: 'Could not determine the site timezone; no visits were cancelled.',
     };
   }
@@ -618,11 +619,11 @@ export async function cancelEnrollmentVisitsTool(
       `${start}T00:00:00`,
       `${end}T23:59:59`
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       cancelled: [],
-      rejected: [{ visitId: -1, reason: `visit lookup failed: ${error?.message ?? 'unknown error'}` }],
+      rejected: [{ visitId: -1, reason: `visit lookup failed: ${errorMessage(error, 'unknown error')}` }],
       message: 'Could not verify the visits; no visits were cancelled.',
     };
   }
@@ -662,13 +663,13 @@ export async function cancelEnrollmentVisitsTool(
         classScheduleId: Number(classes.get(Number(row.ClassId))?.ClassScheduleId),
         startDateTime: row.StartDateTime,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       const notAttempted = visitIds.slice(cancelled.length + 1);
       cache.clear();
       return {
         success: false,
         cancelled,
-        rejected: [{ visitId: id, reason: error?.message || 'cancellation failed' }],
+        rejected: [{ visitId: id, reason: errorMessage(error, 'cancellation failed') }],
         message:
           `Cancelled ${cancelled.length} of ${visitIds.length} before visit ${id} failed; stopped.` +
           (notAttempted.length > 0 ? ` Not attempted: ${notAttempted.join(', ')}.` : ''),

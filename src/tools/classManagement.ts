@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 import {
   epochMsToSiteLocal,
@@ -192,10 +193,10 @@ export async function addClientToClassTool(
       serviceId: response.Visit?.ServiceId ?? undefined,
       message: waitlist ? 'Successfully added to waitlist' : 'Successfully booked class',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to book class',
+      message: errorMessage(error, 'Failed to book class'),
     };
   }
 }
@@ -220,8 +221,8 @@ async function lateCancelRefusal(
   let timeZone: string;
   try {
     timeZone = await getSiteTimeZone(client, cache);
-  } catch (error: any) {
-    return `late cancel refused: site timezone unavailable: ${error?.message ?? 'unknown error'}`;
+  } catch (error: unknown) {
+    return `late cancel refused: site timezone unavailable: ${errorMessage(error, 'unknown error')}`;
   }
 
   const nowMs = Date.now();
@@ -237,8 +238,8 @@ async function lateCancelRefusal(
       },
       'Classes'
     ));
-  } catch (error: any) {
-    return `late cancel refused: class lookup failed: ${error?.message ?? 'unknown error'}`;
+  } catch (error: unknown) {
+    return `late cancel refused: class lookup failed: ${errorMessage(error, 'unknown error')}`;
   }
   if (rows.length === 0) return `late cancel refused: class ${classId} was not found as an upcoming class`;
   if (rows.length > 1) return `late cancel refused: class ${classId} returned more than once by lookup; refusing ambiguous data`;
@@ -279,10 +280,10 @@ export async function removeClientFromClassTool(
       success: true,
       message: 'Successfully cancelled class booking',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to cancel class',
+      message: errorMessage(error, 'Failed to cancel class'),
     };
   }
 }
@@ -444,10 +445,10 @@ export async function substituteClassTeacherTool(
           }
         : undefined,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to substitute teacher',
+      message: errorMessage(error, 'Failed to substitute teacher'),
     };
   }
 }

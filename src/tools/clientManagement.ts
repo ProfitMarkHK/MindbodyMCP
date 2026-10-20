@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 import { withDefaultDates } from '../utils/siteTime.js';
 import { locationNames, staffNames } from './lookups.js';
 
@@ -190,10 +191,10 @@ export async function addClientTool(
       },
       message: 'Client successfully created',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to create client',
+      message: errorMessage(error, 'Failed to create client'),
     };
   }
 }
@@ -264,10 +265,10 @@ export async function updateClientTool(
       },
       message: 'Client successfully updated',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to update client',
+      message: errorMessage(error, 'Failed to update client'),
     };
   }
 }
@@ -470,11 +471,11 @@ export async function addClientArrivalTool(
       arrivalAdded: response.ArrivalAdded,
       message: response.Message || 'Client checked in successfully',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       arrivalAdded: false,
-      message: error.message || 'Failed to check in client',
+      message: errorMessage(error, 'Failed to check in client'),
     };
   }
 }

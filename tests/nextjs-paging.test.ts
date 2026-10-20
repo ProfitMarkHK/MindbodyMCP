@@ -39,7 +39,7 @@ class PagingServer implements PagedGetClient {
     this.rows = Array.from({ length: options.rowsAvailable ?? options.total }, (_, i) => row(i + 1));
   }
 
-  async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> {
+  async get<T>(url: string, options?: { params?: Record<string, unknown> }): Promise<T> {
     const params = options?.params ?? {};
     this.calls.push({ url, params });
     const asked = Number(params.Limit ?? 100);
@@ -91,7 +91,7 @@ function scripted(pages: Array<Record<string, Array<{ Id: number }>>>, total: nu
   let call = 0;
   const offsets: unknown[] = [];
   const client: PagedGetClient = {
-    get: async <T,>(_url: string, options?: { params?: Record<string, any> }) => {
+    get: async <T,>(_url: string, options?: { params?: Record<string, unknown> }) => {
       offsets.push(options?.params?.Offset);
       return { ...pages[call++], PaginationResponse: { TotalResults: total } } as T;
     },

@@ -60,8 +60,8 @@ if (process.env.MINDBODY_API_KEY) {
     await getTeacherScheduleTool('Alexia Bauer');
     const apiTime = Number(process.hrtime.bigint() - apiStart) / 1_000_000;
     console.log(`  First API Call: ${apiTime.toFixed(2)}ms`);
-  } catch (error: any) {
-    console.log(`  API Error: ${error.message}`);
+  } catch (error: unknown) {
+    console.log(`  API Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

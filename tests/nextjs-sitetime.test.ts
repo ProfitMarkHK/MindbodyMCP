@@ -54,11 +54,11 @@ interface SiteRow {
  * throws for any other route unless a test overrides `get`.
  */
 class FakeApi {
-  readonly calls: Array<{ url: string; params: Record<string, any> }> = [];
+  readonly calls: Array<{ url: string; params: Record<string, unknown> }> = [];
 
   constructor(private readonly sites: SiteRow[] = [], private readonly failure?: Error) {}
 
-  async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> {
+  async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> { // Record<string, any>: fixture — value read untyped
     const params = options?.params ?? {};
     this.calls.push({ url, params });
     if (this.failure) throw this.failure;
@@ -77,7 +77,7 @@ class FakeApi {
   }
 
   /** The recorded GETs for one endpoint. */
-  to(url: string): Array<Record<string, any>> {
+  to(url: string): Array<Record<string, unknown>> {
     return this.calls.filter((c) => c.url === url).map((c) => c.params);
   }
 }
@@ -369,7 +369,8 @@ describe("selectSite — refuses ambiguity for a multi-site key", () => {
     try {
       selectSite(TWO);
       throw new Error("expected SiteSelectionError");
-    } catch (error: any) {
+    } catch (error: unknown) {
+      if (!(error instanceof SiteSelectionError)) throw error;
       expect(error.availableSites).toEqual([
         { id: -99, name: "Sandbox" },
         { id: 12345, name: "Second Studio" },
@@ -418,9 +419,9 @@ describe("nextjs-app service date defaults are site-local", () => {
    * per route the method under test reads. Any other route throws, so an
    * unexpected request shows up rather than returning empty data.
    */
-  function studio(site: SiteRow, routes: Record<string, (params: Record<string, any>) => any>): FakeApi {
+  function studio(site: SiteRow, routes: Record<string, (params: Record<string, unknown>) => any>): FakeApi {
     const api = new FakeApi([site]);
-    api.get = async (url: string, options?: { params?: Record<string, any> }) => {
+    api.get = async (url: string, options?: { params?: Record<string, any> }) => { // Record<string, any>: fixture — value read untyped
       const params = options?.params ?? {};
       api.calls.push({ url, params });
       if (url === "/site/sites") {
@@ -567,7 +568,7 @@ describe("nextjs-app reads survive an unresolvable site zone", () => {
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const api = new FakeApi([{ Id: 1, Name: "Unreachable", TimeZone: LA }]);
-      (api as any).get = async (url: string, options?: { params?: Record<string, any> }) => {
+      (api as any).get = async (url: string, options?: { params?: Record<string, unknown> }) => {
         api.calls.push({ url, params: options?.params ?? {} });
         if (url !== "/enrollment/enrollments") throw new Error("down");
         return { PaginationResponse: { TotalResults: 0 }, Enrollments: [] };

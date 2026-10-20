@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { errorMessage } from '../utils/errors.js';
 
 interface TokenResponse {
   TokenType: string;
@@ -78,9 +79,12 @@ class MindbodyAuth {
 
       this.tokenFailed = false;
       return this.userToken.token;
-    } catch (error: any) {
-      const status = error.response?.status;
-      const message = error.response?.data?.Error?.Message || error.message;
+    } catch (error: unknown) {
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const mindbodyMessage = axios.isAxiosError(error) ? error.response?.data?.Error?.Message : undefined;
+      const message = typeof mindbodyMessage === 'string' && mindbodyMessage.trim() !== ''
+        ? mindbodyMessage
+        : errorMessage(error);
       console.error(`User token acquisition failed (${status}): ${message}. Falling back to API-key-only auth.`);
       this.tokenFailed = true;
       return null;

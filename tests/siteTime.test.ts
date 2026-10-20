@@ -400,7 +400,8 @@ describe("selectSite — policy for multi-site API keys", () => {
     expect(() => selectSite(TWO_SITES)).toThrow(SiteSelectionError);
     try {
       selectSite(TWO_SITES);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      if (!(error instanceof SiteSelectionError)) throw error;
       expect(error.availableSites).toEqual([
         { id: -99, name: "Sandbox" },
         { id: 12345, name: "Second Studio" },

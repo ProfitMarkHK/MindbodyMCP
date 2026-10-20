@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, type SimpleCache } from '../cache/index.js';
+import { errorMessage } from '../utils/errors.js';
 import {
   lookupAppointmentsForClient,
   ownedAppointmentRow,
@@ -506,10 +507,10 @@ export async function checkoutShoppingCartTool(
       })),
       message: 'Checkout completed successfully',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to checkout',
+      message: errorMessage(error, 'Failed to checkout'),
     };
   }
 }
@@ -626,10 +627,10 @@ export async function purchaseContractTool(
       })),
       message: 'Contract purchased successfully',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message || 'Failed to purchase contract',
+      message: errorMessage(error, 'Failed to purchase contract'),
     };
   }
 }

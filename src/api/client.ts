@@ -1,10 +1,11 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import { mindbodyAuth } from './auth.js';
+import { errorMessage } from '../utils/errors.js';
 
 export interface IMindbodyClient {
   request<T>(config: AxiosRequestConfig, retries?: number): Promise<T>;
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T>;
-  post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>;
+  post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
 }
 
 /** Methods that are safe to replay: repeating one cannot change server state. */
@@ -12,6 +13,13 @@ const REPLAYABLE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const isReplayable = (config: AxiosRequestConfig | undefined): boolean =>
   REPLAYABLE_METHODS.has((config?.method ?? 'GET').toUpperCase());
+
+/** Narrow an Axios error body to Mindbody's `{ Error: { Message?, Code? } }` shape. */
+function isMindbodyErrorBody(value: unknown): value is { Error: { Message?: string; Code?: unknown } } {
+  if (typeof value !== 'object' || value === null) return false;
+  const err = (value as { Error?: unknown }).Error;
+  return typeof err === 'object' && err !== null;
+}
 
 export class MindbodyApiClient implements IMindbodyClient {
   private client: AxiosInstance;
@@ -55,7 +63,7 @@ export class MindbodyApiClient implements IMindbodyClient {
     try {
       const response = await this.client.request<T>(config);
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (retries < this.maxRetries && isReplayable(config) && this.isTransient(error)) {
         await this.delay(this.retryDelay * Math.pow(2, retries));
         return this.request<T>(config, retries + 1);
@@ -75,8 +83,9 @@ export class MindbodyApiClient implements IMindbodyClient {
   }
 
   /** A lost response or a 5xx: the outcome of the request is unknown, or the server is faulting. */
-  private isTransient(error: any): boolean {
+  private isTransient(error: unknown): boolean {
     // Not 401/403 auth errors, not 4xx: those are definitive answers.
+    if (!axios.isAxiosError(error)) return true;
     if (!error.response) return true;
     return error.response.status >= 500;
   }
@@ -85,26 +94,28 @@ export class MindbodyApiClient implements IMindbodyClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private formatError(error: any): Error {
-    if (error.response?.data?.Error) {
-      const mbError = error.response.data.Error;
-      return new Error(`Mindbody API Error: ${mbError.Message} (Code: ${mbError.Code})`);
-    }
-
-    if (error.response) {
-      const status = error.response.status;
-      const statusText = error.response.statusText;
-      if (status === 401 || status === 403) {
-        return new Error(
-          `Mindbody Auth Error (${status}): ${statusText}. ` +
-          `Check that your MINDBODY_API_KEY is valid and activated for site ${process.env.MINDBODY_SITE_ID}. ` +
-          `If using source credentials, verify MINDBODY_SOURCE_NAME and MINDBODY_SOURCE_PASSWORD are correct.`
-        );
+  private formatError(error: unknown): Error {
+    if (axios.isAxiosError(error)) {
+      const data = error.response?.data;
+      if (isMindbodyErrorBody(data)) {
+        return new Error(`Mindbody API Error: ${data.Error.Message ?? ''} (Code: ${String(data.Error.Code)})`);
       }
-      return new Error(`API Error: ${status} - ${statusText}`);
+
+      if (error.response) {
+        const status = error.response.status;
+        const statusText = error.response.statusText;
+        if (status === 401 || status === 403) {
+          return new Error(
+            `Mindbody Auth Error (${status}): ${statusText}. ` +
+            `Check that your MINDBODY_API_KEY is valid and activated for site ${process.env.MINDBODY_SITE_ID}. ` +
+            `If using source credentials, verify MINDBODY_SOURCE_NAME and MINDBODY_SOURCE_PASSWORD are correct.`
+          );
+        }
+        return new Error(`API Error: ${status} - ${statusText}`);
+      }
     }
 
-    return new Error(`Network Error: ${error.message}`);
+    return new Error(`Network Error: ${errorMessage(error)}`);
   }
 
   // Convenience methods
@@ -112,7 +123,7 @@ export class MindbodyApiClient implements IMindbodyClient {
     return this.request<T>({ ...config, method: 'GET', url });
   }
 
-  async post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+  async post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
     return this.request<T>({ ...config, method: 'POST', url, data });
   }
 }

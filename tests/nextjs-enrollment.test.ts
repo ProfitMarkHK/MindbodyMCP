@@ -31,7 +31,7 @@ import { ENROLLMENT_FIXTURES, STUB_FIXTURES } from "./support/mindbody-stub";
 interface Call {
   method: "GET" | "POST";
   url: string;
-  params: Record<string, any>;
+  params: Record<string, any>; // Record<string, any>: fixture — value read untyped
 }
 
 /**
@@ -45,7 +45,7 @@ class FakeApi {
   readonly calls: Call[] = [];
   constructor(private readonly pageCap = 2) {}
 
-  private page<T>(rows: T[], params: Record<string, any>, key: string) {
+  private page<T>(rows: T[], params: Record<string, unknown>, key: string) {
     const offset = Number(params.Offset ?? 0);
     const served = Math.min(Number(params.Limit ?? 100), this.pageCap);
     return {
@@ -54,7 +54,7 @@ class FakeApi {
     };
   }
 
-  async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> {
+  async get<T>(url: string, options?: { params?: Record<string, any> }): Promise<T> { // Record<string, any>: fixture — value read untyped
     const params = options?.params ?? {};
     this.calls.push({ method: "GET", url, params });
     // Resolving the site's timezone is a /site/sites read that the service now
@@ -112,7 +112,7 @@ class FakeApi {
 
   /** The first recorded GET to `url`. Index by URL: a default date range can
    *  prepend a /site/sites lookup for the site timezone. */
-  getTo(url: string): Record<string, any> {
+  getTo(url: string): Record<string, unknown> {
     const call = this.calls.find((c) => c.method === "GET" && c.url === url);
     if (!call) throw new Error(`FakeApi: no GET ${url} recorded; got ${this.urls("GET").join(", ")}`);
     return call.params;
@@ -202,7 +202,7 @@ describe("nextjs-app getEnrollments — GET /enrollment/enrollments rows are Cla
 
   it("IsAvailable absent is false, Day* flags absent give no days, and a missing ClassDescription gives an empty name", async () => {
     const api = new FakeApi();
-    (api as any).get = async (url: string, options?: { params?: Record<string, any> }) => {
+    (api as any).get = async (url: string, options?: { params?: Record<string, unknown> }) => {
       const params = options?.params ?? {};
       api.calls.push({ method: "GET", url, params });
       // Route-aware: a blanket answer would be read as an empty site record by
@@ -344,7 +344,7 @@ describe("nextjs-app getClientEnrollments — schedule visits resolved through /
 
   it("looks classes up in chunks of 50 and never calls /class/classes when the schedule has no class visits", async () => {
     const api = new FakeApi(500);
-    (api as any).get = async (url: string, options?: { params?: Record<string, any> }) => {
+    (api as any).get = async (url: string, options?: { params?: Record<string, unknown> }) => {
       const params = options?.params ?? {};
       api.calls.push({ method: "GET", url, params });
       if (url === "/client/clientschedule") {

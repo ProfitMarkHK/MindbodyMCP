@@ -4,7 +4,7 @@ interface CacheEntry<T> {
 }
 
 export class SimpleCache {
-  private cache: Map<string, CacheEntry<any>> = new Map();
+  private cache: Map<string, CacheEntry<unknown>> = new Map();
   private defaultTTL: number;
 
   constructor(defaultTTLMinutes: number = 5) {
@@ -33,7 +33,7 @@ export class SimpleCache {
       return null;
     }
 
-    return entry.data as T;
+    return entry.data as unknown as T;
   }
 
   has(key: string): boolean {
