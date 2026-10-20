@@ -619,9 +619,7 @@ model Contract {
   autopayFrequency    String?
   autopayDuration     Int?
   autopayPaymentAmount Float?
-  introOfferId        String?
-  introOfferName      String?
-  introOfferPrice     Float?
+  introOffer          String?
   locationId          Int?
 
   // Timestamps

@@ -310,7 +310,7 @@ export class MindbodyService {
       mobilePhone: s.MobilePhone,
       imageUrl: s.ImageUrl,
       bio: s.Bio,
-      isMale: s.isMale,
+      isMale: s.IsMale,
       appointmentTrn: s.AppointmentTrn,
       independentContractor: s.IndependentContractor,
     }));
@@ -628,7 +628,7 @@ export class MindbodyService {
         id: c.ClassDescription.Id,
         name: c.ClassDescription.Name,
         description: c.ClassDescription.Description,
-        imageUrl: c.ClassDescription.ImageUrl,
+        imageUrl: c.ClassDescription.ImageURL,
         active: true,
       },
       staff: {
@@ -644,7 +644,7 @@ export class MindbodyService {
       isCanceled: c.IsCanceled,
       isWaitlistAvailable: c.IsWaitlistAvailable,
       isAvailable: c.IsAvailable,
-      isSubstitute: c.IsSubstitute,
+      isSubstitute: c.Substitute,
       maxCapacity: c.MaxCapacity,
       totalBooked: c.TotalBooked,
       webCapacity: c.WebCapacity,
@@ -665,7 +665,7 @@ export class MindbodyService {
       id: cd.Id,
       name: cd.Name,
       description: cd.Description,
-      imageUrl: cd.ImageUrl,
+      imageUrl: cd.ImageURL,
       category: cd.Category,
       subcategory: cd.Subcategory,
       active: cd.Active ?? true,
@@ -1390,11 +1390,7 @@ export class MindbodyService {
         duration: c.AutopaySchedule.FrequencyValue,
         paymentAmount: c.AutopaySchedule.PaymentAmount,
       } : undefined,
-      introOffer: c.IntroOffer ? {
-        id: c.IntroOffer.Id,
-        name: c.IntroOffer.Name,
-        price: c.IntroOffer.Price,
-      } : undefined,
+      introOffer: c.IntroOffer,
       locationId: c.LocationId,
     }));
 

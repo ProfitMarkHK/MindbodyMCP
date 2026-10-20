@@ -215,7 +215,7 @@ export default function SalesPage() {
                         </td>
                         <td className="p-4">
                           {contract.introOffer
-                            ? `${contract.introOffer.name} ($${contract.introOffer.price.toFixed(2)})`
+                            ? contract.introOffer
                             : '-'}
                         </td>
                       </tr>

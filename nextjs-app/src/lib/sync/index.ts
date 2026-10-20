@@ -639,9 +639,7 @@ export class MindbodySyncService {
           autopayFrequency: contract.autopaySchedule?.frequency,
           autopayDuration: contract.autopaySchedule?.duration,
           autopayPaymentAmount: contract.autopaySchedule?.paymentAmount,
-          introOfferId: contract.introOffer?.id,
-          introOfferName: contract.introOffer?.name,
-          introOfferPrice: contract.introOffer?.price,
+          introOffer: contract.introOffer,
           locationId: contract.locationId,
           syncedAt: new Date(),
         };
