@@ -471,14 +471,17 @@ scope, and it still reads fields section C established do not exist:
 | `isMale` | `IsMale` | C-30 |
 | `IntroOffer.Id` / `.Name` / `.Price` | `IntroOffer` is a string | C-25 |
 
-**Status (2026-10-20):** the client-domain rows are now fixed. `getClients`
-reads `c.Liability` (C-14), `getClientVisits` no longer reads `Location.Name`/
-`Staff.Name` (C-15), `getClientMemberships` maps `Program` to `programName`/
-`programId` (C-16), `getClientAccountBalances` reads the single `ClientCreditCard`
-(C-17), and `getClientContracts` drops `Description`/`SoldDate`/`Balance`/
-`ContractType` (C-18). `IconCode` was also retyped `string` (C-31). The remaining
-rows — `ImageUrl` (C-7), `IsSubstitute` (C-6), `isMale` (C-30), `IntroOffer`
-(C-25) — are in the class/staff/sales domains and still open.
+**Resolved 2026-10-20, in two passes.** The client-domain rows (C-14 through
+C-18) were fixed first: `getClients` reads `c.Liability`, `getClientVisits`
+drops `Location.Name`/`Staff.Name`, `getClientMemberships` maps `Program` to
+`programName`/`programId`, `getClientAccountBalances` reads the single
+`ClientCreditCard`, and `getClientContracts` drops `Description`/`SoldDate`/
+`Balance`/`ContractType`. `IconCode` was also retyped `string` (C-31). The
+class/staff/sales rows were fixed in a second pass: `ClassDescription` reads
+`ImageURL` (C-7; note `Staff.ImageUrl` is already correct — only
+`ClassDescription` has the capital-L `ImageURL`), `Class` reads `Substitute`
+(C-6), `Staff` reads `IsMale` (C-30), and `Contract.IntroOffer` is read as a
+string (C-25). All six rows are now fixed; no nextjs phantom-field reads remain.
 
 **Why it is recorded rather than fixed.** The same shapes are consumed
 downstream: `nextjs-app/src/lib/sync/index.ts` and the Prisma schema depend on
@@ -486,9 +489,9 @@ them, and Gates 14 and 15 type-check and build that app. Changing them is a
 migration with its own test surface, not a mechanical field rename, and it
 deserves its own change rather than landing silently inside a fix to `src/`.
 
-**Consequence if unfixed.** The Next.js app renders the same always-empty
-fields this audit removed from the MCP server. Both code bases are wrong in the
-same way, so a fix applied to one should be applied to the other.
+**Outcome.** The Next.js app no longer reads any of these fields; the fix
+landed in two passes (the client domain, then class/staff/sales), mirroring the
+server. The "always-empty" rendering described above is gone.
 
 ## E. Unverified items
 

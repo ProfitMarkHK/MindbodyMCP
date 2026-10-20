@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Next.js app renders every timestamp in the studio's timezone and syncs classes over the site's calendar day rather than the host's.
 - `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, including the Next.js Prisma schema (`Int?` → `String?`), after a live sandbox probe.
 - The Next.js client reads no longer use phantom fields that the server had already dropped: `LiabilityRelease` read as an object, `Location.Name`/`Staff.Name` on `Visit`, `Program` mapped to a string, `ClientCreditCards[]` with `Balance`, and `Description`/`SoldDate`/`Balance`/`ContractType` on `ClientContract`.
+- The Next.js class/staff/sales reads now use the spec field names: `ClassDescription.ImageURL` (not `ImageUrl`), `Class.Substitute` (not `IsSubstitute`), `Staff.IsMale` (not `isMale`), and `Contract.IntroOffer` as a string (not an object).
 
 ### Security
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.

@@ -605,11 +605,7 @@ export interface Contract {
     duration?: number;
     paymentAmount: number;
   };
-  introOffer?: {
-    id: string;
-    name: string;
-    price: number;
-  };
+  introOffer?: string;
   locationId?: number;
 }
 
