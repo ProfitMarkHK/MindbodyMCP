@@ -149,7 +149,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (49 tools)
+## Available Tools (50 tools)
 
 ### 📅 Class Management
 
@@ -294,6 +294,14 @@ Read a client's formula notes (`GET /client/clientformulanotes`, every page fetc
 - `appointmentId` (optional): Only notes tied to this appointment
 
 **Returns:** `{ formulaNotes: [{ id, clientId, appointmentId, entryDate, note, siteId, siteName, staffName }], totalFormulaNotes }`. Notes are cross-regional, so a note's `clientId` is the client's ID at the site the note came from and can differ from the requested one. `staffName` is set only for notes tied to an appointment.
+
+#### `getClientCompleteInfo`
+A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.
+
+**Parameters:**
+- `clientId` (required): Client ID
+
+**Returns:** `{ client: { id, firstName, lastName, accountBalance }, services, contracts, memberships, arrivals }`. `arrivals[].locations` carries `{ id, name }`, where `name` is `undefined` if the location catalogue does not hold the id. See [`docs/API.md`](docs/API.md#getclientcompleteinfo) for the fields and the parameters the tool deliberately does not send.
 
 ### 💰 Sales & Commerce
 

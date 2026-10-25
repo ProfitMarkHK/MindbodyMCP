@@ -9,6 +9,40 @@ import { Client, ClientContract, ClientMembership } from '../types/mindbody.js';
  * the ~200-line guideline. `clientManagement.ts` remains the public barrel.
  */
 
+/** One membership row, shared by `getClientMembershipsTool` and `getClientCompleteInfoTool`. */
+export function toMembership(membership: ClientMembership) {
+  return {
+    id: membership.Id,
+    name: membership.Name,
+    remainingClasses: membership.Remaining,
+    activeDate: membership.ActiveDate,
+    expirationDate: membership.ExpirationDate,
+    paymentDate: membership.PaymentDate,
+    programName: membership.Program?.Name,
+    programId: membership.Program?.Id,
+    siteId: membership.SiteId,
+    iconCode: membership.IconCode,
+    action: membership.Action,
+  };
+}
+
+/** One contract row, shared by `getClientContractsTool` and `getClientCompleteInfoTool`. */
+export function toContract(contract: ClientContract) {
+  return {
+    id: contract.Id,
+    contractId: contract.ContractID,
+    name: contract.ContractName,
+    soldDate: contract.AgreementDate,
+    startDate: contract.StartDate,
+    endDate: contract.EndDate,
+    autopayStatus: contract.AutopayStatus,
+    autoRenewing: contract.AutoRenewing,
+    isMonthToMonth: contract.IsMonthToMonth,
+    terminationDate: contract.TerminationDate,
+    siteId: contract.SiteId,
+  };
+}
+
 /**
  * A client's active memberships (`GET /client/activeclientmemberships`).
  *
@@ -48,19 +82,7 @@ export async function getClientMembershipsTool(
     'ClientMemberships'
   );
 
-  const memberships = membershipRows.map((membership: ClientMembership) => ({
-    id: membership.Id,
-    name: membership.Name,
-    remainingClasses: membership.Remaining,
-    activeDate: membership.ActiveDate,
-    expirationDate: membership.ExpirationDate,
-    paymentDate: membership.PaymentDate,
-    programName: membership.Program?.Name,
-    programId: membership.Program?.Id,
-    siteId: membership.SiteId,
-    iconCode: membership.IconCode,
-    action: membership.Action,
-  }));
+  const memberships = membershipRows.map(toMembership);
 
   return {
     memberships,
@@ -143,19 +165,7 @@ export async function getClientContractsTool(
     'Contracts'
   );
 
-  const contracts = contractsRaw.map((contract: ClientContract) => ({
-    id: contract.Id,
-    contractId: contract.ContractID,
-    name: contract.ContractName,
-    soldDate: contract.AgreementDate,
-    startDate: contract.StartDate,
-    endDate: contract.EndDate,
-    autopayStatus: contract.AutopayStatus,
-    autoRenewing: contract.AutoRenewing,
-    isMonthToMonth: contract.IsMonthToMonth,
-    terminationDate: contract.TerminationDate,
-    siteId: contract.SiteId,
-  }));
+  const contracts = contractsRaw.map(toContract);
 
   return {
     contracts,

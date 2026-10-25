@@ -9,7 +9,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 
 ## ✨ Features
 
-- **44 Tools** covering every aspect of studio operations
+- **50 Tools** covering every aspect of studio operations
 - **Complete Class Management** - View schedules, book clients, manage waitlists, substitute teachers
 - **Client Management** - Add/update clients, track visits, memberships, and balances
 - **Sales & Commerce** - Process payments, sell packages, memberships, and retail products
@@ -145,7 +145,7 @@ Or use the GitHub repository directly:
 
 ## 🛠️ Available Tools
 
-The server provides 49 tools across 6 categories:
+The server provides 50 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -167,6 +167,7 @@ The server provides 49 tools across 6 categories:
 - `getClientAccountBalances` - View account balances
 - `getClientContracts` - View contracts
 - `getClientFormulaNotes` - Read a client's formula notes, by client and/or appointment (read-only)
+- `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals
 
 ### 💰 Sales & Commerce
 - `getServices` - View available services. `priority` is the string "High"/"Medium"/"Low" and `taxIncludedAmount` is a money amount, because that is what the API defines
