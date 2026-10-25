@@ -30,7 +30,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -94,6 +94,7 @@ const EXPECTED_TOOL_NAMES = [
   'addClientArrival',
   'getClientAccountBalances',
   'getClientContracts',
+  'getClientCompleteInfo',
   'getServices',
   'getPackages',
   'getProducts',
@@ -2022,6 +2023,28 @@ describe('pagination — multi-page walks through the real server', () => {
     expect(request.query.Offset).toBe('0');
   });
 
+  itE2E('getClientCompleteInfo reads the whole wallet from one /client/clientcompleteinfo request', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'getClientCompleteInfo',
+      arguments: { clientId: STUB_FIXTURES.clientId },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = resultJson(result);
+    expect(payload.client).toMatchObject({ id: STUB_FIXTURES.clientId, accountBalance: -42.5 });
+    expect(payload.services[0]).toMatchObject({ name: '10 Class Pack', remaining: 6, programName: 'Yoga' });
+    expect(payload.memberships[0]).toMatchObject({ id: 6601, remainingClasses: 8 });
+    expect(payload.contracts).toEqual([]);
+    expect(payload.arrivals[0].locations[0]).toEqual({ id: 1, name: 'E2E Main Studio' });
+
+    const requests = stub.requestsTo('/public/v6/client/clientcompleteinfo', 'GET');
+    expect(requests).toHaveLength(1);
+    // Only the client is sent: requiredClientData and the date filters are not.
+    expect(Object.keys(requests[0].query)).toEqual(['ClientId']);
+    expect(requests[0].query.ClientId).toBe(STUB_FIXTURES.clientId);
+  });
+
   itE2E('getClientEnrollments resolves schedule visits to classes and keeps only Enrollment-program sessions', async () => {
     stub.resetLog();
 
@@ -2550,11 +2573,21 @@ describe('process health', () => {
     expect(resultJson(result).totalClients).toBe(1);
   });
 
-  itE2E('sent Limit=200 and an Offset on every GET in the session (every stubbed GET is paginated)', () => {
-    // Runtime counterpart of Gate 13: every GET route the stub serves is
-    // paginated in docs/openapi.json, so every GET the server made must have
-    // gone through fetchAllPages. A single-GET regression drops Offset.
-    const gets = stub.sessionRequests.filter((request) => request.method === 'GET');
+  itE2E('sent Limit=200 and an Offset on every paginated GET in the session', () => {
+    // Runtime counterpart of Gate 13. As the gate does, the spec decides what is
+    // paginated: an endpoint that declares both Limit and Offset. Every GET to
+    // one of those must have gone through fetchAllPages, so a single-GET
+    // regression drops Offset. Single-object reads such as
+    // /client/clientcompleteinfo declare neither and are not checked here.
+    const spec = JSON.parse(readFileSync(resolve(__dirname, '../docs/openapi.json'), 'utf-8'));
+    const isPaginated = (path: string) => {
+      const specKey = Object.keys(spec.paths).find((key) => key.replace('/v{version}', '/v6') === path);
+      const names: string[] = (spec.paths[specKey ?? '']?.get?.parameters ?? []).map(
+        (p: { name: string }) => p.name.replace(/^request\./, '').toLowerCase()
+      );
+      return names.includes('limit') && names.includes('offset');
+    };
+    const gets = stub.sessionRequests.filter((request) => request.method === 'GET' && isPaginated(request.path));
     expect(gets.length).toBeGreaterThan(20);
     const unpaged = gets
       .filter((request) => request.query.Limit !== '200' || !/^\d+$/.test(request.query.Offset ?? ''))

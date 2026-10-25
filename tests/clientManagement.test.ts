@@ -28,6 +28,7 @@ import { SpecValidatingClient, SpecValidationError } from "./spec-validating-cli
 import {
   addClientTool,
   getClientAccountBalancesTool,
+  getClientCompleteInfoTool,
   getClientContractsTool,
   getClientMembershipsTool,
   getClientVisitsTool,
@@ -668,5 +669,216 @@ describe("updateClientTool", () => {
     // UpdateClientRequest requires the fields nested under `Client`.
     expect(post.body.Client).toEqual({ Id: "c-9", FirstName: "Grace B" });
     expect(Object.keys(post.body).sort()).toEqual(["Client", "CrossRegionalUpdate"]);
+  });
+});
+// ── getClientCompleteInfoTool ────────────────────────────────────────────────
+
+/**
+ * Serves each GET from the fixture for its path and records every call, so a
+ * test can assert both what was requested and how many requests were made.
+ */
+class RoutedClient implements IMindbodyClient {
+  readonly gets: Array<{ url: string; params?: Record<string, unknown> }> = [];
+
+  constructor(private readonly routes: Record<string, unknown>) {}
+
+  async request<T>(): Promise<T> {
+    throw new Error("RoutedClient: request() is not used by these tools");
+  }
+
+  async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    this.gets.push({ url, params: config?.params });
+    const path = Object.keys(this.routes).find((p) => url.endsWith(p));
+    if (path === undefined) throw new Error(`RoutedClient: no route for ${url}`);
+    return makeClient(this.routes[path]).get<T>(url, config);
+  }
+
+  async post<T>(): Promise<T> {
+    throw new Error("RoutedClient: post() is not used by these tools");
+  }
+}
+
+const completeInfoFixture = {
+  Client: {
+    Id: "c-1",
+    FirstName: "Grace",
+    LastName: "Hopper",
+    AccountBalance: -42.5,
+    // Not part of the wallet the tool reports.
+    Email: "grace@example.com",
+  },
+  ClientServices: [
+    {
+      Id: 7001,
+      ProductId: 55,
+      Name: "10 Class Pack",
+      Count: 10,
+      Remaining: 6,
+      Current: true,
+      ActiveDate: "2026-02-01T00:00:00",
+      ExpirationDate: "2026-08-01T00:00:00",
+      PaymentDate: "2026-02-01T00:00:00",
+      Program: { Id: 3, Name: "Yoga", ScheduleType: "Class" },
+      SiteId: 1,
+      ActivationType: "OnFirstVisit",
+      CannotPayForClassesBeforeActivation: false,
+      Action: "Sold",
+    },
+  ],
+  ClientContracts: [
+    {
+      Id: 9001,
+      ContractID: 12,
+      ContractName: "Unlimited Monthly",
+      AgreementDate: "2026-02-01T00:00:00",
+      StartDate: "2026-02-01T00:00:00",
+      AutopayStatus: "Active",
+      AutoRenewing: true,
+      IsMonthToMonth: true,
+      SiteId: 1,
+    },
+  ],
+  ClientMemberships: [
+    {
+      Id: 3001,
+      Name: "Unlimited Month",
+      Remaining: 8,
+      ActiveDate: "2026-02-01",
+      ExpirationDate: "2026-03-01",
+      Program: { Id: 3, Name: "Yoga", ScheduleType: "Class" },
+      SiteId: 1,
+      IconCode: "4",
+    },
+  ],
+  ClientArrivals: [
+    {
+      ArrivalProgramID: 21,
+      ArrivalProgramName: "Front Desk",
+      CanAccess: true,
+      LocationsIDs: [1, 99],
+    },
+  ],
+};
+
+const locationsFixture = { Locations: [{ Id: 1, Name: "Main Studio" }] };
+
+describe("getClientCompleteInfoTool", () => {
+  it("maps all five collections from a single request", async () => {
+    const client = new RoutedClient({
+      "/client/clientcompleteinfo": completeInfoFixture,
+      "/site/locations": locationsFixture,
+    });
+    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+
+    expect(result.client).toEqual({
+      id: "c-1",
+      firstName: "Grace",
+      lastName: "Hopper",
+      accountBalance: -42.5,
+    });
+    expect(result.services).toEqual([
+      {
+        id: 7001,
+        productId: 55,
+        name: "10 Class Pack",
+        count: 10,
+        remaining: 6,
+        current: true,
+        activeDate: "2026-02-01T00:00:00",
+        expirationDate: "2026-08-01T00:00:00",
+        paymentDate: "2026-02-01T00:00:00",
+        programName: "Yoga",
+        programId: 3,
+        siteId: 1,
+        activationType: "OnFirstVisit",
+        cannotPayForClassesBeforeActivation: false,
+      },
+    ]);
+    expect(result.contracts).toEqual([
+      {
+        id: 9001,
+        contractId: 12,
+        name: "Unlimited Monthly",
+        soldDate: "2026-02-01T00:00:00",
+        startDate: "2026-02-01T00:00:00",
+        endDate: undefined,
+        autopayStatus: "Active",
+        autoRenewing: true,
+        isMonthToMonth: true,
+        terminationDate: undefined,
+        siteId: 1,
+      },
+    ]);
+    expect(result.memberships).toEqual([
+      {
+        id: 3001,
+        name: "Unlimited Month",
+        remainingClasses: 8,
+        activeDate: "2026-02-01",
+        expirationDate: "2026-03-01",
+        paymentDate: undefined,
+        programName: "Yoga",
+        programId: 3,
+        siteId: 1,
+        iconCode: "4",
+        action: undefined,
+      },
+    ]);
+    expect(result.arrivals).toEqual([
+      {
+        arrivalProgramId: 21,
+        arrivalProgramName: "Front Desk",
+        canAccess: true,
+        locations: [{ id: 1, name: "Main Studio" }, { id: 99, name: undefined }],
+      },
+    ]);
+
+    // The wallet is one request. The only other call is the location catalogue.
+    expect(client.gets.filter((g) => g.url.endsWith("/client/clientcompleteinfo"))).toHaveLength(1);
+  });
+
+  it("sends only ClientId, so requiredClientData and the date filters are left to the API", async () => {
+    const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
+    await getClientCompleteInfoTool("c-1", client, emptyCache());
+
+    expect(client.gets).toHaveLength(1);
+    expect(client.gets[0].params).toEqual({ ClientId: "c-1" });
+  });
+
+  it("leaves accountBalance undefined rather than coercing a missing value to 0", async () => {
+    const client = new RoutedClient({
+      "/client/clientcompleteinfo": { Client: { Id: "c-1", FirstName: "Grace", LastName: "Hopper" } },
+    });
+    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+
+    expect(result.client?.accountBalance).toBeUndefined();
+    expect("accountBalance" in (result.client ?? {})).toBe(true);
+  });
+
+  it("returns empty collections, and no catalogue read, when the client holds nothing", async () => {
+    const client = new RoutedClient({
+      "/client/clientcompleteinfo": {
+        Client: { Id: "c-2", FirstName: "Ada", LastName: "Lovelace", AccountBalance: 0 },
+        ClientServices: [],
+        ClientContracts: [],
+        ClientMemberships: [],
+        ClientArrivals: [],
+      },
+    });
+    const result = await getClientCompleteInfoTool("c-2", client, emptyCache());
+
+    expect(result.services).toEqual([]);
+    expect(result.contracts).toEqual([]);
+    expect(result.memberships).toEqual([]);
+    expect(result.arrivals).toEqual([]);
+    expect(result.client?.accountBalance).toBe(0);
+    expect(client.gets).toHaveLength(1);
+  });
+
+  it("returns no client when the response carries none, and empty collections when the keys are absent", async () => {
+    const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
+    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+
+    expect(result).toEqual({ client: undefined, services: [], contracts: [], memberships: [], arrivals: [] });
   });
 });
