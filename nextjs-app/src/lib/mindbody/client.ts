@@ -7,7 +7,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 interface TokenResponse {
   AccessToken: string;
   TokenType: string;
-  ExpiresIn: number;
+  Expires: string; // ISO date string, per the v6 spec
 }
 
 interface MindbodyConfig {
@@ -21,6 +21,8 @@ interface MindbodyConfig {
 class MindbodyAuth {
   private token: string | null = null;
   private tokenExpiry: Date | null = null;
+  // Shared by concurrent callers so one expiry issues one token, not one per caller.
+  private pendingFetch: Promise<string> | null = null;
   private config: MindbodyConfig;
 
   constructor(config: MindbodyConfig) {
@@ -33,7 +35,14 @@ class MindbodyAuth {
       return this.token;
     }
 
-    // Fetch new token
+    // A failed fetch clears pendingFetch too, so the next call tries again.
+    this.pendingFetch ??= this.fetchToken().finally(() => {
+      this.pendingFetch = null;
+    });
+    return this.pendingFetch;
+  }
+
+  private async fetchToken(): Promise<string> {
     const response = await axios.post<TokenResponse>(
       `${this.config.apiUrl || 'https://api.mindbodyonline.com/public/v6'}/usertoken/issue`,
       {
@@ -50,7 +59,9 @@ class MindbodyAuth {
     );
 
     this.token = response.data.AccessToken;
-    this.tokenExpiry = new Date(Date.now() + response.data.ExpiresIn * 1000);
+    this.tokenExpiry = response.data.Expires
+      ? new Date(response.data.Expires)
+      : new Date(Date.now() + 23 * 60 * 60 * 1000); // fallback: 23 hours
 
     return this.token;
   }
