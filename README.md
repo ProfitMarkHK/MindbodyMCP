@@ -61,6 +61,7 @@ bun run start # or npm start
 
 - Node.js 18+ or Bun 1.0+
 - Mindbody API credentials (API Key, Site ID, Source credentials)
+- 1Password CLI (`op`) to run this repo's server scripts; see [1Password setup](#1password-setup)
 - Claude Desktop or any MCP-compatible client
 
 ## ⚙️ Configuration
@@ -239,6 +240,24 @@ bun test  # or npm test
 bun run build  # or npm run build
 ```
 
+### 1Password setup
+
+The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+
+1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
+2. Create `~/.config/mindbody/prod.env` holding references to your item's fields, not the values:
+
+```bash
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
+```
+
+3. Run the script as usual, for example `bun run dev`. `op run` resolves each reference and passes it to the server as an environment variable.
+
+For sandbox runs, use `bun run dev:sandbox` (or `bun run dev:sandbox:sse`). It reads the `MINDBODY_TEST_*` values from `.env`, never touches 1Password, and refuses any site other than the sandbox.
+
 ### Project Structure
 
 ```
@@ -260,6 +279,8 @@ MindbodyMCP/
 The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
 
 ### Quick Start with SSE
+
+The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
 
 ```bash
 # Start with SSE transport

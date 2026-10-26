@@ -12,6 +12,8 @@ The Mindbody MCP Server supports two transport mechanisms:
 
 ### Local Development with SSE
 
+The `start:sse` scripts read production credentials through 1Password, so set that up first ([1Password setup](../README.md#1password-setup)). The environment-variable form below goes through the same `op`-wrapped script.
+
 ```bash
 # Using Bun (recommended)
 bun run start:sse
@@ -27,6 +29,8 @@ MCP_TRANSPORT=sse MCP_PORT=3000 bun run start
 ```
 
 ### Docker Deployment
+
+The container runs `bun run dist/index.js` directly, so the `op`-wrapped scripts and 1Password setup do not apply here. Pass the `MINDBODY_*` values as shown below.
 
 ```bash
 # Build the image
