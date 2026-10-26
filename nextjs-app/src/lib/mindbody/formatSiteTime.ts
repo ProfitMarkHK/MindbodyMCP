@@ -178,6 +178,24 @@ function zoneNameFor(instantMs: number, timeZone: string, style: 'short' | 'shor
 }
 
 /**
+ * ICU zone display names that differ between the CLDR data versions shipped in
+ * the fleet's runtimes, normalised to the one this app has always shown. A
+ * label that changes with the runtime's CLDR data is the same defect as the
+ * date-time combination glue (see `formatWallClock`): bun's Linux build
+ * reports the short generic name of Asia/Hong_Kong as "Hong Kong SAR China
+ * Time", while its macOS build reports "Hong Kong Time", so the raw name is
+ * not used unchecked. Only known variants are mapped; everything else passes
+ * through untouched.
+ */
+const ZONE_NAME_VARIANTS: Record<string, string> = {
+  'Hong Kong SAR China Time': 'Hong Kong Time',
+};
+
+function canonicalZoneName(name: string): string {
+  return ZONE_NAME_VARIANTS[name] ?? name;
+}
+
+/**
  * Short zone label for the studio at this value's wall clock ("PDT"), or '' when
  * no usable zone is known. Resolving the abbreviation needs an instant, so a
  * naive value is read through the site's own DST rules — which is also what
@@ -202,10 +220,10 @@ function siteZoneLabel(parsed: ParsedSiteValue, timeZone: string | null | undefi
     instantMs = wallAsUtcMs(parsed.wall);
   }
 
-  const short = zoneNameFor(instantMs, timeZone, 'short');
+  const short = canonicalZoneName(zoneNameFor(instantMs, timeZone, 'short'));
   if (short && !/^(?:GMT|UTC)(?:[+-]|$)/i.test(short)) return short;
 
-  const generic = zoneNameFor(instantMs, timeZone, 'shortGeneric');
+  const generic = canonicalZoneName(zoneNameFor(instantMs, timeZone, 'shortGeneric'));
   if (generic) return generic;
 
   // No name available at all; the zone id is better than an empty label.
