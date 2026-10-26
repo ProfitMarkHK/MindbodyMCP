@@ -361,6 +361,43 @@ export interface ClientContract {
   SiteId: number;
 }
 
+/** `ClientServiceWithActivationType` — a purchased pricing option (`ClientServices`). No price field exists on the spec model. */
+export interface ClientServiceWithActivationType {
+  Id: number;
+  ProductId?: number;
+  Name: string;
+  Count?: number;
+  Remaining?: number;
+  Current?: boolean;
+  ActiveDate?: string;
+  ExpirationDate?: string;
+  PaymentDate?: string;
+  Program?: Program;
+  SiteId: number;
+  ActivationType?: string;
+  CannotPayForClassesBeforeActivation?: boolean;
+}
+
+/** `ClientArrival` — an arrival program a client can use (`ClientArrivals`). */
+export interface ClientArrival {
+  ArrivalProgramID: number;
+  ArrivalProgramName?: string;
+  CanAccess: boolean;
+  LocationsIDs?: number[];
+}
+
+/**
+ * `GetClientCompleteInfoResponse` — `GET /client/clientcompleteinfo`. One object
+ * with the four collections; there is no `PaginationResponse` envelope.
+ */
+export interface GetClientCompleteInfoResponse {
+  Client?: ClientWithSuspensionInfo;
+  ClientServices?: ClientServiceWithActivationType[];
+  ClientContracts?: ClientContract[];
+  ClientMemberships?: ClientMembership[];
+  ClientArrivals?: ClientArrival[];
+}
+
 /** `AddClientResponse`. */
 export interface AddClientResponse {
   Client: Client;

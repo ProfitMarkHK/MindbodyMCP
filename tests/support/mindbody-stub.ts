@@ -16,6 +16,7 @@
  *                        GET  /client/clientvisits         clientManagement.getClientVisitsTool
  *                        GET  /client/clientaccountbalances clientManagement.getClientAccountBalancesTool
  *                        GET  /client/activeclientmemberships clientManagement.getClientMembershipsTool
+ *                        GET  /client/clientcompleteinfo    clientManagement.getClientCompleteInfoTool
  *                        GET  /client/clientschedule        enrollmentManagement.getClientEnrollmentsTool,
  *                                                             enrollmentManagement.cancelEnrollmentVisitsTool (lookup)
  *   Enrollments          GET  /enrollment/enrollments       enrollmentManagement.getEnrollmentsTool
@@ -296,6 +297,31 @@ export const STUB_FIXTURES = {
         ClientCreditCard: { CardId: 'cc-1', CardType: 'Visa', LastFour: '4242' },
       },
     ],
+  },
+
+  // GET /client/clientcompleteinfo: the whole wallet in one object, with no
+  // pagination envelope. ClientMemberships is filled in by the route.
+  clientCompleteInfo: {
+    Client: { Id: 'c-1001', FirstName: 'E2E', LastName: 'Client', AccountBalance: -42.5 },
+    ClientServices: [
+      {
+        Id: 7101,
+        ProductId: 55,
+        Name: '10 Class Pack',
+        Count: 10,
+        Remaining: 6,
+        Current: true,
+        ActiveDate: '2026-02-01T00:00:00',
+        ExpirationDate: '2026-08-01T00:00:00',
+        PaymentDate: '2026-02-01T00:00:00',
+        Program: { Id: 3, Name: 'Yoga', ScheduleType: 'Class' },
+        SiteId: -99,
+        ActivationType: 'OnFirstVisit',
+        CannotPayForClassesBeforeActivation: false,
+      },
+    ],
+    ClientContracts: [],
+    ClientArrivals: [{ ArrivalProgramID: 21, ArrivalProgramName: 'Front Desk', CanAccess: true, LocationsIDs: [1] }],
   },
 
   // ── Service definitions (the catalogue the writes depend on) ───────────────
@@ -1138,6 +1164,19 @@ export class MindbodyStub {
       }
       const memberships = request.query.ClientId === STUB_FIXTURES.clientId ? [STUB_FIXTURES.clientMembership] : [];
       return listResponse('ClientMemberships', memberships, request.query);
+    });
+
+    this.route('GET', '/client/clientcompleteinfo', (request) => {
+      if (!request.query.ClientId) {
+        return {
+          status: 400,
+          body: { Error: { Code: 'InvalidParameter', Message: 'ClientId is required' } },
+        };
+      }
+      return {
+        status: 200,
+        body: { ...STUB_FIXTURES.clientCompleteInfo, ClientMemberships: [STUB_FIXTURES.clientMembership] },
+      };
     });
 
     this.route('GET', '/client/clientschedule', (request) => {

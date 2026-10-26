@@ -145,7 +145,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (41 tools)
+## Available Tools (42 tools)
 
 ### 📅 Class Management
 
@@ -281,6 +281,14 @@ View client's contracts and auto-renewing memberships.
 
 **Parameters:**
 - `clientId` (required): Client ID
+
+#### `getClientCompleteInfo`
+A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.
+
+**Parameters:**
+- `clientId` (required): Client ID
+
+**Returns:** `{ client: { id, firstName, lastName, accountBalance }, services, contracts, memberships, arrivals }`. `arrivals[].locations` carries `{ id, name }`, where `name` is `undefined` if the location catalogue does not hold the id. See [`docs/API.md`](docs/API.md#getclientcompleteinfo) for the fields and the parameters the tool deliberately does not send.
 
 ### 💰 Sales & Commerce
 

@@ -537,6 +537,57 @@ interface CancelEnrollmentVisitsResponse {
 { "clientId": "12345", "visitIds": [100002, 100003] }
 ```
 
+### getClientCompleteInfo
+
+Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination, so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to read | - |
+
+No other parameter is exposed. See [What the tool does not send](#what-the-tool-does-not-send).
+
+#### Response
+
+```json
+{
+  "client": { "id": "12345", "firstName": "Sarah", "lastName": "Johnson", "accountBalance": -42.5 },
+  "services": [
+    { "id": 7001, "productId": 55, "name": "10 Class Pack", "count": 10, "remaining": 6, "current": true,
+      "activeDate": "2026-02-01T00:00:00", "expirationDate": "2026-08-01T00:00:00", "paymentDate": "2026-02-01T00:00:00",
+      "programName": "Yoga", "programId": 3, "siteId": -99,
+      "activationType": "OnFirstVisit", "cannotPayForClassesBeforeActivation": false }
+  ],
+  "contracts": [
+    { "id": 9001, "contractId": 12, "name": "Unlimited Monthly", "soldDate": "2026-02-01T00:00:00",
+      "startDate": "2026-02-01T00:00:00", "autopayStatus": "Active", "autoRenewing": true,
+      "isMonthToMonth": true, "siteId": -99 }
+  ],
+  "memberships": [
+    { "id": 3001, "name": "Unlimited Month", "remainingClasses": 8, "activeDate": "2026-02-01",
+      "expirationDate": "2026-03-01", "programName": "Yoga", "programId": 3, "siteId": -99, "iconCode": "4" }
+  ],
+  "arrivals": [
+    { "arrivalProgramId": 21, "arrivalProgramName": "Front Desk", "canAccess": true,
+      "locations": [{ "id": 1, "name": "Main Studio" }] }
+  ]
+}
+```
+
+- `client` is omitted when the response carries no `Client`.
+- `accountBalance` is omitted when the response carries no value. It is never coerced to `0`.
+- `services[].remaining` maps `ClientService.Remaining`. `ClientService` has **no price field**, so the tool reports none.
+- `contracts` and `memberships` use the same row shape as `getClientContracts` and `getClientMemberships`.
+- `arrivals[].locations[].name` is resolved from the cached location catalogue. It is omitted when the catalogue does not hold the id.
+
+#### What the tool does not send
+
+- **`requiredClientData` is omitted on purpose.** The spec documents the parameter with no enum, and its prose names values (`Services`, `Contracts`, `Memberships`, `ArrivalPrograms`) that do not match the response keys (`ClientServices`, `ClientContracts`, `ClientMemberships`, `ClientArrivals`). The v6 API ignores an unknown query value silently, so a wrong value would return a different subset with no error. Without the parameter the endpoint returns all four collections, which is what a snapshot needs. Add it only once the enum is confirmed against the sandbox.
+- **`startDate`, `endDate`, `showActiveOnly`, `useActivateDate`, `crossRegionalLookup`, `clientAssociatedSitesOffset`, `excludeInactiveSites` are not sent.** The API's defaults apply.
+- **Known gap, not verified.** The spec states the default for `StartDate` and `EndDate` as "today's date". Read literally, that would drop services and memberships purchased before today. No sandbox probe has checked this, so the tool is marked `SPEC-ALIGNED BUT UNVERIFIED` at the call site. If a probe shows the window is narrower than the full history, send explicit `startDate`/`endDate` values and record the deviation in the table above.
+
 ## Planned Tools
 
 ### getClassSchedule (Coming Soon)
