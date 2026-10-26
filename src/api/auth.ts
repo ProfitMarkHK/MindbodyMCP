@@ -13,6 +13,20 @@ interface UserToken {
 }
 
 /**
+ * Thrown when no user token can be had. Requests are never sent without one: a
+ * call that falls back to the API key alone is answered with a different data set,
+ * so it must fail instead. Marked so the client never retries it (see client.ts).
+ */
+export class MindbodyAuthError extends Error {
+  readonly isAuthError = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'MindbodyAuthError';
+  }
+}
+
+/**
  * `SiteId` header from MINDBODY_SITE_ID, omitted when unset/blank. Never send the
  * string "undefined": with no site configured the API key's default applies, and
  * `selectSite` (siteTime.ts) refuses to pick one when the key reaches several.
@@ -24,7 +38,8 @@ function siteIdHeader(): Record<string, string> {
 
 class MindbodyAuth {
   private userToken: UserToken | null = null;
-  private tokenFailed: boolean = false;
+  // Shared by concurrent callers so one expiry issues one token, not one per caller.
+  private pendingIssue: Promise<string> | null = null;
   private readonly apiUrl: string;
 
   constructor() {
@@ -35,24 +50,28 @@ class MindbodyAuth {
     return !!(process.env.MINDBODY_SOURCE_NAME && process.env.MINDBODY_SOURCE_PASSWORD);
   }
 
-  async getUserToken(): Promise<string | null> {
-    // If we don't have source credentials, skip token auth
+  /** Returns a valid user token, issuing one if needed. Throws MindbodyAuthError when none can be had. */
+  async getUserToken(): Promise<string> {
     if (!this.hasSourceCredentials()) {
-      return null;
+      throw new MindbodyAuthError(
+        'MINDBODY_SOURCE_NAME and MINDBODY_SOURCE_PASSWORD must be set; refusing to call Mindbody without a user token'
+      );
     }
 
-    // If token acquisition previously failed, don't keep retrying — restart the server to reset
-    if (this.tokenFailed) {
-      return null;
-    }
-
-    // Check if we have a valid token
     if (this.userToken && this.userToken.expiresAt > new Date()) {
       return this.userToken.token;
     }
 
+    // A failed issue clears pendingIssue too, so the next call tries again rather than
+    // reusing the failure.
+    this.pendingIssue ??= this.issueToken().finally(() => {
+      this.pendingIssue = null;
+    });
+    return this.pendingIssue;
+  }
+
+  private async issueToken(): Promise<string> {
     try {
-      // Get new token
       const response = await axios.post<TokenResponse>(
         `${this.apiUrl}/usertoken/issue`,
         {
@@ -77,7 +96,6 @@ class MindbodyAuth {
         expiresAt,
       };
 
-      this.tokenFailed = false;
       return this.userToken.token;
     } catch (error: unknown) {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
@@ -85,18 +103,15 @@ class MindbodyAuth {
       const message = typeof mindbodyMessage === 'string' && mindbodyMessage.trim() !== ''
         ? mindbodyMessage
         : errorMessage(error);
-      console.error(`User token acquisition failed (${status}): ${message}. Falling back to API-key-only auth.`);
-      this.tokenFailed = true;
-      return null;
+      throw new MindbodyAuthError(`Mindbody user token request failed (${status ?? 'no status'}): ${message}`);
     }
   }
 
   /**
-   * Reset the token failure state so next request retries token acquisition.
-   * Useful after credentials are updated or for periodic retry.
+   * Drop the cached token so the next call issues a new one. Called after a 401,
+   * in case the token was revoked or expired early.
    */
   resetTokenState(): void {
-    this.tokenFailed = false;
     this.userToken = null;
   }
 
@@ -112,10 +127,7 @@ class MindbodyAuth {
 
   async getAuthHeaders(): Promise<Record<string, string>> {
     const headers = this.getHeaders();
-    const token = await this.getUserToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    headers['Authorization'] = `Bearer ${await this.getUserToken()}`;
     return headers;
   }
 }

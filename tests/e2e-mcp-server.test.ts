@@ -231,7 +231,7 @@ async function shutdownConnection(closingClient: Client, closingTransport: Stdio
  * Spawn an extra, isolated MCP server for one case.
  *
  * The OAuth cases each need their own server *and* their own stub: `MindbodyAuth`
- * is a module-level singleton holding `tokenFailed`, the cached token and its
+ * is a module-level singleton holding the cached token and its
  * expiry, so nothing about one scenario may be observable from the next. Each
  * server gets a clean-room env pointing at a fresh loopback stub.
  */
@@ -556,27 +556,26 @@ describe('OAuth user token — expiry skew (60s)', () => {
     // One issue per API call — the cached token is never reused. (With an expiry
     // beyond the skew, the sibling test below sees 1 issue for the same calls.)
     //
-    // Six issues, matching the six API requests below: `getClientVisits` also
-    // reads the `/site/locations` and `/staff/staff` catalogues to resolve the
-    // ids a Visit carries, and a token this close to expiry is re-issued for every
-    // one of them. The claim under test — never reuse a token inside the skew —
-    // holds for all six.
-    expect(skewStub.tokenRequests.length - before).toBe(6);
+    // Five issues for six API requests: `getClientVisits` also reads the
+    // `/site/locations` and `/staff/staff` catalogues in parallel, and those two
+    // share one in-flight issue (see `pendingIssue` in src/api/auth.ts). Each request
+    // still gets a freshly issued token, never one from inside the skew.
+    expect(skewStub.tokenRequests.length - before).toBe(5);
 
     // Six requests for three tool calls: the two catalogue reads `getClientVisits`
     // needs to turn `LocationId`/`StaffId` into names, plus the staff catalogue's
     // second page (the stub caps that route at one row per page).
     const apiRequests = apiRequestsOf(skewStub);
     expect(apiRequests).toHaveLength(6);
-    // Every API call carries a token, and no token is ever used twice: the
-    // six requests take the six freshly issued tokens in order.
+    // Every API call carries a freshly issued token. The two parallel catalogue
+    // reads share the token issued for them, so token -2 appears twice.
     expect(apiRequests.map((request) => request.headers.authorization)).toEqual([
       `Bearer ${STUB_FIXTURES.accessToken}-1`,
+      `Bearer ${STUB_FIXTURES.accessToken}-2`,
       `Bearer ${STUB_FIXTURES.accessToken}-2`,
       `Bearer ${STUB_FIXTURES.accessToken}-3`,
       `Bearer ${STUB_FIXTURES.accessToken}-4`,
       `Bearer ${STUB_FIXTURES.accessToken}-5`,
-      `Bearer ${STUB_FIXTURES.accessToken}-6`,
     ]);
 
     // Every re-issue still authenticates with the API key and the same body.
@@ -671,7 +670,7 @@ describe('OAuth user token — failure fallback', () => {
     }
   });
 
-  itE2E('falls back to API-key-only auth and never retries the issue', async () => {
+  itE2E('fails closed when the token is refused, and sends no API request', async () => {
     const before = failedStub.tokenRequests.length;
     failedStub.resetLog();
 
@@ -680,33 +679,21 @@ describe('OAuth user token — failure fallback', () => {
         name: 'getClientVisits',
         arguments: { clientId, startDate: '2026-03-01', endDate: '2026-03-04' },
       });
-      // (a) The tool still succeeds: no Authorization header is needed against
-      //     the stub, so the degradation is invisible to the caller.
-      expect(result.isError).toBeFalsy();
-      expect(resultJson(result).totalVisits).toBe(2);
+      // (a) The tool reports an error and returns no data.
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain('user token request failed (403)');
     }
 
-    // (b) `tokenFailed` latches: exactly one issue attempt, ever.
-    expect(failedStub.tokenRequests.length - before).toBe(1);
+    // (b) Each call tries again: no latch, one issue attempt per call.
+    expect(failedStub.tokenRequests.length - before).toBe(5);
 
-    const apiRequests = apiRequestsOf(failedStub);
-    expect(apiRequests).toHaveLength(8);
-    for (const request of apiRequests) {
-      expect(request.headers['api-key']).toBe(STUB_FIXTURES.apiKey);
-      expect(request.headers.siteid).toBe(STUB_FIXTURES.siteId);
-      expect(request.headers.authorization).toBeUndefined();
-    }
-
-    // The degradation is also logged, with the upstream message, to stderr.
-    const stderr = failedServer.stderrText();
-    expect(stderr).toContain('User token acquisition failed (403)');
-    expect(stderr).toContain('Stub refused to issue a token');
-    expect(stderr).toContain('Falling back to API-key-only auth.');
+    // (c) Nothing reached the API without a user token.
+    expect(apiRequestsOf(failedStub)).toHaveLength(0);
   }, 20_000);
 });
 
 describe('OAuth user token — no source credentials', () => {
-  itE2E('getUserToken short-circuits to null and never touches /usertoken/issue', async () => {
+  itE2E('refuses to call Mindbody without a user token, and never touches /usertoken/issue', async () => {
     // src/index.ts refuses to start without these two variables, so this branch of
     // auth.ts is only reachable through the real modules, driven in their own
     // process against the real stub. See the next test for the startup gate.
@@ -739,23 +726,13 @@ describe('OAuth user token — no source credentials', () => {
       expect(line).toBeDefined();
       const report = JSON.parse(line!.slice('AUTH_HARNESS_RESULT'.length).trim());
 
-      expect(report.tokenBefore).toBeNull();
-      expect(report.tokenAfter).toBeNull();
-      expect(report.apiCalls).toBe(3);
-      expect(report.apiOk).toBe(true);
-      expect(report.firstClientId).toBe(STUB_FIXTURES.client.Id);
+      expect(report.apiCalls).toBe(0);
+      expect(report.apiOk).toBe(false);
+      expect(report.error).toContain('refusing to call Mindbody without a user token');
 
-      // Zero issue requests, ever: the check is the first thing getUserToken does.
+      // Zero token requests and zero API requests: the guard throws before anything is sent.
       expect(bareStub.tokenRequests).toHaveLength(0);
-
-      // And the API calls still went out, authenticated by API key alone.
-      const apiRequests = apiRequestsOf(bareStub);
-      expect(apiRequests).toHaveLength(3);
-      for (const request of apiRequests) {
-        expect(request.headers['api-key']).toBe(STUB_FIXTURES.apiKey);
-        expect(request.headers.siteid).toBe(STUB_FIXTURES.siteId);
-        expect(request.headers.authorization).toBeUndefined();
-      }
+      expect(apiRequestsOf(bareStub)).toHaveLength(0);
     } finally {
       await bareStub.close();
     }

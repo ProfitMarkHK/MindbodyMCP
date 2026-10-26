@@ -203,7 +203,7 @@ and not needed" from "forgotten":
   | Schema conformance: every `inputSchema` parses as JSON Schema, is `type: "object"`, every `required` entry exists in `properties`, every property has a `type` | `tools/list` |
   | Real dispatch across four domains: clients (`getClients`, `addClient`, `updateClient`, `getClientVisits`, `getClientAccountBalances`, `addClientArrival`), orders (`getPackages`, `getProducts`, `getContracts`, `checkoutShoppingCart`, `purchaseContract`), appointments (`getStaffAppointments`, `getBookableItems`, `getActiveSessionTimes`, `addAppointment`, `updateAppointment`, `cancelAppointments`), and the site and service-definition reads (`getSites`, `getServices`, `getSessionTypes`) | `domain — clients`, `domain — orders`, `domain — appointments`, `domain — site`, `domain — service definitions` |
   | Pagination end to end: `getClasses` reads all 7 classes over three capped pages (`Offset` 0, 3, 6, each `Limit=200`); `getTeacherSchedule` finds a teacher who is only on staff page two and reads both pages of her classes; `getClassDescriptions`, `getWaitlistEntries`, `getClassSchedules`, `getLocations`, `getPrograms`, `getClientMemberships` and `getClientEnrollments` (via `/client/clientschedule`) each go through the pager; every GET in the session carried `Limit=200` and an `Offset` | `pagination — multi-page walks through the real server`, `process health` |
-| OAuth user token: issue and attach, 60s expiry skew, 23-hour fallback when `Expires` is absent, API-key-only fallback on failure, no source credentials | `OAuth user token — …` |
+| OAuth user token: issue and attach, 60s expiry skew, 23-hour fallback when `Expires` is absent, fail closed on refusal or missing source credentials (no API-key-only requests), concurrent callers share one issue | `OAuth user token — …`, `tests/auth-fail-closed.test.ts` |
   | Error paths: unknown tool name → `isError` result, missing required argument → Mindbody error message + code, upstream 4xx → error result then recovery | `tools/call — error handling` |
   | Process health: still alive and answering after every call above, and every outbound request landed on the loopback stub | `process health` |
   | Startup rejection: exits 1 with `Missing required environment variable: …` for each of the four required vars | `startup rejection` |
@@ -265,8 +265,8 @@ and not needed" from "forgotten":
     key. The E2E upstream-fault test still uses a 4xx to keep the hook fast.
   - **Refresh on 401** (`src/api/client.ts` response interceptor) is covered only
     for the replay-once step (`tests/api-client-retry.test.ts`, no source
-    credentials); the token re-issue itself is untested, because the E2E
-    token-failure path falls back to API-key-only auth instead.
+    credentials); the token re-issue itself is covered by
+    `tests/auth-fail-closed.test.ts`.
   - **Per-property `description` coverage** in `inputSchema` is not asserted:
     `updateClient.updates` and its 13 nested properties carry no `description`, so
     a universal check would fail on the current source. Tool-level descriptions
