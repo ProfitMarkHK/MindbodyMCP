@@ -31,6 +31,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -803,11 +804,18 @@ describe('egress trap', () => {
     expect(childEnv.NO_PROXY).toBe('127.0.0.1,localhost');
 
     // The trap port really is closed; if it were not, the assertion after it
-    // would be vacuous.
-    const trapRefused = await fetch(`http://${childEnv.HTTPS_PROXY}/canary`).then(
-      () => false,
-      () => true
-    );
+    // would be vacuous. A raw TCP connect, not fetch: fetch honours the ambient
+    // HTTP(S)_PROXY of this process (npm sets a live one), so it could be answered
+    // by that proxy and prove nothing about the trap.
+    const trapRefused = await new Promise<boolean>((done) => {
+      const { hostname, port } = new URL(childEnv.HTTPS_PROXY);
+      const probe = connect({ host: hostname, port: Number(port) });
+      probe.once('connect', () => {
+        probe.destroy();
+        done(false);
+      });
+      probe.once('error', () => done(true));
+    });
     expect(trapRefused).toBe(true);
 
     const startedAt = Date.now();
