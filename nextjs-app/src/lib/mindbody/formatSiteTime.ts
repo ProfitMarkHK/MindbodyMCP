@@ -178,6 +178,24 @@ function zoneNameFor(instantMs: number, timeZone: string, style: 'short' | 'shor
 }
 
 /**
+ * ICU zone display names that differ between the CLDR data versions shipped in
+ * the fleet's runtimes, normalised to the one this app has always shown. A
+ * label that changes with the runtime's CLDR data is the same defect as the
+ * date-time combination glue (see `formatWallClock`): bun's Linux build
+ * reports the short generic name of Asia/Hong_Kong as "Hong Kong SAR China
+ * Time", while its macOS build reports "Hong Kong Time", so the raw name is
+ * not used unchecked. Only known variants are mapped; everything else passes
+ * through untouched.
+ */
+const ZONE_NAME_VARIANTS: Record<string, string> = {
+  'Hong Kong SAR China Time': 'Hong Kong Time',
+};
+
+function canonicalZoneName(name: string): string {
+  return ZONE_NAME_VARIANTS[name] ?? name;
+}
+
+/**
  * Short zone label for the studio at this value's wall clock ("PDT"), or '' when
  * no usable zone is known. Resolving the abbreviation needs an instant, so a
  * naive value is read through the site's own DST rules — which is also what
@@ -202,10 +220,10 @@ function siteZoneLabel(parsed: ParsedSiteValue, timeZone: string | null | undefi
     instantMs = wallAsUtcMs(parsed.wall);
   }
 
-  const short = zoneNameFor(instantMs, timeZone, 'short');
+  const short = canonicalZoneName(zoneNameFor(instantMs, timeZone, 'short'));
   if (short && !/^(?:GMT|UTC)(?:[+-]|$)/i.test(short)) return short;
 
-  const generic = zoneNameFor(instantMs, timeZone, 'shortGeneric');
+  const generic = canonicalZoneName(zoneNameFor(instantMs, timeZone, 'shortGeneric'));
   if (generic) return generic;
 
   // No name available at all; the zone id is better than an empty label.
@@ -231,15 +249,69 @@ export interface SiteFormatOptions {
 
 type DateTimeParts = Intl.DateTimeFormatOptions;
 
+/**
+ * Whether the parts name a calendar date (as opposed to a time of day), for a
+ * render that shows one, the other, or both.
+ */
+function hasDateFields(parts: DateTimeParts): boolean {
+  return (
+    parts.weekday !== undefined ||
+    parts.year !== undefined ||
+    parts.month !== undefined ||
+    parts.day !== undefined
+  );
+}
+
+function hasClockFields(parts: DateTimeParts): boolean {
+  return (
+    parts.hour !== undefined ||
+    parts.minute !== undefined ||
+    parts.second !== undefined ||
+    parts.hour12 !== undefined
+  );
+}
+
 function formatWallClock(
   wall: SiteWallClock,
   timeZone: string | null | undefined,
   parts: DateTimeParts,
-  locale: string
+  locale: string,
+  dateClockSeparator?: string
 ): string {
   // Formatting the wall clock with timeZone 'UTC' prints exactly these digits
   // while still going through Intl for locale data. The viewer's zone is never
   // consulted, so the output cannot shift with it.
+  //
+  // A render that shows BOTH a date and a clock is split into two
+  // Intl.DateTimeFormats joined by `dateClockSeparator`. A single combined
+  // pattern would let ICU insert the CLDR date-time combination glue between
+  // the halves — glue that changed for en-US in CLDR 42 ("{date}, {time}" →
+  // "{date} 'at' {time}"), so the same code printed "Sun, Oct 18 at 8:00 AM"
+  // on a new ICU and "Sun, Oct 18, 8:00 AM" on an older one (the GitHub
+  // runner). Neither formatter below combines date and clock fields, so
+  // neither consults the glue and the output is identical on every CLDR.
+  if (hasDateFields(parts) && hasClockFields(parts)) {
+    const ms = wallAsUtcMs(wall);
+    const dateOptions: Intl.DateTimeFormatOptions = { timeZone: 'UTC' };
+    if (parts.weekday !== undefined) dateOptions.weekday = parts.weekday;
+    if (parts.year !== undefined) dateOptions.year = parts.year;
+    if (parts.month !== undefined) dateOptions.month = parts.month;
+    if (parts.day !== undefined) dateOptions.day = parts.day;
+
+    const clockOptions: Intl.DateTimeFormatOptions = { timeZone: 'UTC' };
+    if (parts.hour !== undefined) clockOptions.hour = parts.hour;
+    if (parts.minute !== undefined) clockOptions.minute = parts.minute;
+    if (parts.second !== undefined) clockOptions.second = parts.second;
+    if (parts.hour12 !== undefined) clockOptions.hour12 = parts.hour12;
+    if (clockOptions.hour !== undefined || clockOptions.hour12 !== undefined) {
+      clockOptions.hourCycle = 'h12';
+    }
+
+    const dateText = new Intl.DateTimeFormat(locale, dateOptions).format(ms);
+    const clockText = new Intl.DateTimeFormat(locale, clockOptions).format(ms);
+    return `${dateText}${dateClockSeparator ?? ' '}${clockText}`;
+  }
+
   const options: Intl.DateTimeFormatOptions = { ...parts, timeZone: 'UTC' };
   if (parts.hour !== undefined || parts.hour12 !== undefined) options.hourCycle = 'h12';
   return new Intl.DateTimeFormat(locale, options).format(wallAsUtcMs(wall));
@@ -249,7 +321,8 @@ function render(
   value: string | null | undefined,
   timeZone: string | null | undefined,
   parts: DateTimeParts,
-  options: SiteFormatOptions = {}
+  options: SiteFormatOptions = {},
+  dateClockSeparator?: string
 ): string {
   const { locale = 'en-US', withZone = false, fallback = '' } = options;
 
@@ -269,15 +342,18 @@ function render(
       ? { ...parts, hour: undefined, minute: undefined, second: undefined, hour12: undefined }
       : parts;
 
-  const text = formatWallClock(wall, timeZone, effective, locale);
+  const text = formatWallClock(wall, timeZone, effective, locale, dateClockSeparator);
   return label ? `${text} ${label}` : text;
 }
 
 /**
  * A site date-TIME, e.g. `formatSiteDateTime('2026-10-18T08:00:00', 'America/Los_Angeles')`
- * → "Sun, Oct 18, 8:00 AM PDT".
+ * → "Sun, Oct 18 at 8:00 AM PDT".
  *
- * The studio's wall clock, never the viewer's.
+ * The studio's wall clock, never the viewer's. The " at " between date and
+ * clock is this module's own literal, not ICU's CLDR date-time combination
+ * glue, so the output is the same on every CLDR/ICU version (see
+ * `formatWallClock`).
  */
 export function formatSiteDateTime(
   value: string | null | undefined,
@@ -294,13 +370,18 @@ export function formatSiteDateTime(
       hour: 'numeric',
       minute: '2-digit',
     },
-    options
+    options,
+    ' at '
   );
 }
 
 /**
  * A site DATE-TIME with the weekday spelled out, for the cards that lead with
  * the day ("Sunday, Oct 18, 8:00 AM PDT").
+ *
+ * The ", " between date and clock is this module's own literal, not ICU's
+ * CLDR date-time combination glue, so the output is the same on every
+ * CLDR/ICU version (see `formatWallClock`).
  */
 export function formatSiteDateTimeLong(
   value: string | null | undefined,
@@ -317,7 +398,8 @@ export function formatSiteDateTimeLong(
       hour: 'numeric',
       minute: '2-digit',
     },
-    options
+    options,
+    ', '
   );
 }
 

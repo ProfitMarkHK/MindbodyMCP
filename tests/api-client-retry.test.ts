@@ -10,21 +10,21 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
 import { MindbodyApiClient } from "../src/api/client.js";
+import { mindbodyAuth } from "../src/api/auth.js";
 
 const SAVED_ENV = {
   MINDBODY_API_KEY: process.env.MINDBODY_API_KEY,
-  MINDBODY_SOURCE_NAME: process.env.MINDBODY_SOURCE_NAME,
-  MINDBODY_SOURCE_PASSWORD: process.env.MINDBODY_SOURCE_PASSWORD,
 };
+const savedGetAuthHeaders = mindbodyAuth.getAuthHeaders;
 
 beforeAll(() => {
-  // No source credentials: auth is API-key-only, so no /usertoken/issue call is ever made.
+  // Auth is stubbed out: these cases test retries, not token issuing, and no token request is made.
   process.env.MINDBODY_API_KEY = "stub";
-  delete process.env.MINDBODY_SOURCE_NAME;
-  delete process.env.MINDBODY_SOURCE_PASSWORD;
+  mindbodyAuth.getAuthHeaders = async () => ({ "Api-Key": "stub" });
 });
 
 afterAll(() => {
+  mindbodyAuth.getAuthHeaders = savedGetAuthHeaders;
   for (const [key, value] of Object.entries(SAVED_ENV)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;

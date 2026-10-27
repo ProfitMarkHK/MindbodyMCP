@@ -830,7 +830,7 @@ describe('live tier — user token flow', () => {
     expect([200, 400, 401, 403]).toContain(response.status);
   });
 
-  itLive('the server uses a user token when one is issued, and falls back cleanly when not', async () => {
+  itLive('the server uses a user token when one is issued, and fails closed when not', async () => {
     // Any real API call forces `mindbodyAuth.getAuthHeaders()` to run, which is
     // where the token is acquired and attached (or where the fallback is logged).
     // `getClientVisits` is not cached, so this always produces an HTTP request,
@@ -864,31 +864,12 @@ describe('live tier — user token flow', () => {
       expect(Array.isArray(resultJson(probe).visits)).toBe(true);
     }
 
-    // `src/api/auth.ts` logs exactly one line when token acquisition fails:
-    //   "User token acquisition failed (<status>): <msg>. Falling back to API-key-only auth."
-    // and nothing when it succeeds.
-    const stderr = await waitForStderr((text) =>
-      text.includes('Falling back to API-key-only auth') || text.includes('User token acquisition failed')
-    );
-    const usedFallback = stderr.includes('Falling back to API-key-only auth');
+    // `src/api/auth.ts` fails closed: a refused token is a tool error ("user token
+    // request failed"), which the ClientNotFound check above rejects. Reaching this
+    // point means the probe was authenticated with a user token.
+    console.log(` LIVE auth path: user token attached (getClientVisits probe: ${probe.isError ? 'ClientNotFound' : 'well-formed empty answer'})\n`);
 
-    console.log(
-      ` LIVE auth path: ${usedFallback ? 'API-key-only fallback' : 'user token attached'}` +
-        ` (getClientVisits probe: ${probe.isError ? 'ClientNotFound, authenticated' : 'well-formed empty answer'})\n`
-    );
-
-    // The intent of this test: when the environment issues a token, the server
-    // must USE it, not fall back. The raw probe above used the same credentials
-    // and endpoint as `src/api/auth.ts`, so its outcome is the expectation.
-    if (userTokenIssuedByProbe === true) {
-      expect(usedFallback, 'the raw probe was issued a user token, but the server fell back to API-key-only auth').toBe(
-        false
-      );
-    } else if (userTokenIssuedByProbe === false) {
-      expect(usedFallback, 'the raw probe was refused a user token, but the server logged no fallback').toBe(true);
-    }
-
-    // Whichever path was taken, the server must still be serving requests.
+    // The server must still be serving requests.
     const afterAuth = await callTool('getLocations', {});
     expect(Array.isArray(afterAuth.locations)).toBe(true);
   });

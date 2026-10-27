@@ -12,7 +12,7 @@ here, never there.
 # Install dependencies
 bun install
 
-# Run in development mode (STDIO transport)
+# Run in development mode (STDIO transport). Uses production credentials via 1Password; see Environment Variables.
 bun run dev
 
 # Run tests
@@ -25,8 +25,8 @@ bun run typecheck
 ## Build, Test, and Lint Commands
 
 ### Development
-- `bun run dev` - Run in STDIO mode (for local Claude Desktop testing)
-- `bun run dev:sse` - Run in SSE mode (web-based, production-like)
+- `bun run dev` - Run in STDIO mode against **production** via 1Password (for local Claude Desktop testing; see Environment Variables)
+- `bun run dev:sse` - Run in SSE mode against **production** via 1Password (web-based, production-like)
 
 ### Testing
 - `bun test` - Run all tests (discovery is scoped to `tests/` by `bunfig.toml`;
@@ -162,7 +162,8 @@ export async function getClassesTool(
 ### Environment Variables
 **Sandbox-first policy:**
 - The repo-local `.env` file is a sandbox-only environment. Do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME`, or `MINDBODY_SOURCE_PASSWORD` values there.
-- Production credentials live in `.env.production`, and the sandbox values live in `.env` as `MINDBODY_TEST_*` names.
+- Production credentials live in 1Password, not in the repo. `~/.config/mindbody/prod.env` (outside the repo) holds `op://` references to them, and the `dev`, `start` and `node:*` scripts load them through `op run`. Do not create `.env.production`; the copy left in the main checkout is legacy and should be deleted once the `op` setup is verified.
+- The sandbox values live in `.env` as `MINDBODY_TEST_*` names.
 - Before any local run or API call, map the test values into the names the Mindbody client expects on the fly:
   ```bash
   export MINDBODY_API_KEY="$MINDBODY_TEST_API_KEY"
@@ -171,7 +172,8 @@ export async function getClassesTool(
   export MINDBODY_SOURCE_PASSWORD="$MINDBODY_TEST_SOURCE_PASSWORD"
   export MINDBODY_API_URL="${MINDBODY_TEST_API_URL:-https://api.mindbodyonline.com/public/v6}"
   ```
-- This rule exists so a stray test or script cannot silently hit a production site. If the task truly needs a live site, it must be stated and selected explicitly from `.env.production` or the shell.
+- For sandbox runs, use `bun run dev:sandbox` (or `bun run dev:sandbox:sse`). It maps the `MINDBODY_TEST_*` values from `.env` and refuses any site other than the sandbox. Do not use the `op`-wrapped scripts for sandbox work.
+- This rule exists so a stray test or script cannot silently hit a production site. Only the `op`-wrapped scripts select production, and only when run on purpose. If a task truly needs a live site, state that explicitly before running one.
 
 **Required (sandbox/local):**
 - `MINDBODY_TEST_API_KEY` - Sandbox API key, kept in `.env`
@@ -286,7 +288,7 @@ describe('classManagement', () => {
 
 ### Integration Testing
 Test with Claude Desktop:
-1. Run `bun run dev` or `bun run dev:sse`
+1. Run `bun run dev` or `bun run dev:sse` (these use production credentials; see Environment Variables)
 2. Update Claude Desktop config to point to local server
 3. Test natural language queries
 

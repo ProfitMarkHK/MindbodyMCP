@@ -148,7 +148,7 @@ indistinguishable in a CI log.
 | Area | Tests | Writes |
 |---|---|---|
 | Configuration | sandbox SiteId, no credential inheritance, STDIO + MCP handshake, host reachability | — |
-| User token | `POST /usertoken/issue` outcome, token-attached vs API-key-only fallback | — |
+| User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
 | Clients | `getClients` | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts` | — |

@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import { mindbodyAuth } from './auth.js';
+import { mindbodyAuth, MindbodyAuthError } from './auth.js';
 import { errorMessage } from '../utils/errors.js';
 
 export interface IMindbodyClient {
@@ -84,6 +84,8 @@ export class MindbodyApiClient implements IMindbodyClient {
 
   /** A lost response or a 5xx: the outcome of the request is unknown, or the server is faulting. */
   private isTransient(error: unknown): boolean {
+    // No request was sent, so there is nothing to retry or reconcile.
+    if (error instanceof MindbodyAuthError) return false;
     // Not 401/403 auth errors, not 4xx: those are definitive answers.
     if (!axios.isAxiosError(error)) return true;
     if (!error.response) return true;
@@ -95,6 +97,7 @@ export class MindbodyApiClient implements IMindbodyClient {
   }
 
   private formatError(error: unknown): Error {
+    if (error instanceof MindbodyAuthError) return error;
     if (axios.isAxiosError(error)) {
       const data = error.response?.data;
       if (isMindbodyErrorBody(data)) {
