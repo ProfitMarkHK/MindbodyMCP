@@ -2,6 +2,12 @@
 
 Date: 2026-10-17. Sandbox site: `-99`. Read-only audit; no source files were changed.
 
+> **Layout note, 2026-10-27.** The client tools were split out of
+> `src/tools/clientManagement.ts` into `clientProfile.ts`, `clientAccount.ts` and
+> `clientActivity.ts`; `clientManagement.ts` is now a named-export barrel. Line
+> anchors below point at the pre-split file and are kept as the audit's evidence
+> trail — map the tool name, not the line number.
+
 ## Summary
 
 | Verdict | Call sites |

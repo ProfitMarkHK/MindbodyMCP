@@ -71,7 +71,7 @@ Mindbody API
 
 **Tools Layer (`src/tools/` - 7 domains)**
 - `classManagement.ts` - Class scheduling, bookings, waitlists, substitutions
-- `clientManagement.ts` - Client registration, visits, memberships, balances
+- `clientManagement.ts` - Client registration, visits, memberships, balances (barrel; split by aspect into `clientProfile.ts`, `clientAccount.ts`, `clientActivity.ts`)
 - `appointmentManagement.ts` - Appointments, availability, scheduling
 - `enrollmentManagement.ts` - Course/workshop enrollments
 - `salesManagement.ts` - Services, packages, products, purchases
@@ -137,8 +137,8 @@ This enables unit testing without mocking the global client.
 ## Conventions
 
 ### Tool File Organization
-- **One file per domain** - Each domain (class, client, sales, etc.) has one module
-- **~200 line limit** - Keep files focused and readable
+- **One import surface per domain** - Each domain (class, client, sales, etc.) has one module, or a named-export barrel
+- **Split by aspect past ~200 lines** - Keep files focused and readable. When a domain outgrows the guide, split it into aspect modules and keep the barrel as the public surface (see `clientManagement.ts` → `clientProfile.ts`, `clientAccount.ts`, `clientActivity.ts`)
 - **Named exports** - Each tool function is named `<domain>Tool` (e.g., `getClassesTool`)
 - **Consistent return types** - Tools return structured objects with data + summary fields
 

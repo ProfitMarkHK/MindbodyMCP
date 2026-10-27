@@ -61,7 +61,10 @@ src/
 │   └── auth.ts          # OAuth 2.0 token management
 ├── tools/               # Tool implementations (one per domain)
 │   ├── classManagement.ts
-│   ├── clientManagement.ts
+│   ├── clientManagement.ts   # client barrel (profile / account / activity)
+│   ├── clientProfile.ts      # getClients, addClient, updateClient
+│   ├── clientAccount.ts      # memberships, contracts, balances
+│   ├── clientActivity.ts     # visits, arrival
 │   ├── appointmentManagement.ts
 │   ├── enrollmentManagement.ts
 │   ├── siteManagement.ts

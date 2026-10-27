@@ -26,6 +26,7 @@ import { resolve } from "path";
 import type { AxiosRequestConfig } from "axios";
 import { SpecValidatingClient, SpecValidationError } from "./spec-validating-client.js";
 import {
+  addClientArrivalTool,
   addClientTool,
   getClientAccountBalancesTool,
   getClientContractsTool,
@@ -668,5 +669,27 @@ describe("updateClientTool", () => {
     // UpdateClientRequest requires the fields nested under `Client`.
     expect(post.body.Client).toEqual({ Id: "c-9", FirstName: "Grace B" });
     expect(Object.keys(post.body).sort()).toEqual(["Client", "CrossRegionalUpdate"]);
+  });
+});
+
+// ── addClientArrivalTool (C-24) ──────────────────────────────────────────────
+
+describe("addClientArrivalTool", () => {
+  it("posts the client and location, and reports ArrivalAdded", async () => {
+    const recorder = new RecordingClient({ ArrivalAdded: true });
+
+    const result = await addClientArrivalTool("c-9", 1, recorder);
+
+    // `AddArrivalResponse` has no `Message`; the success text is fixed.
+    expect(result).toEqual({
+      success: true,
+      arrivalAdded: true,
+      message: "Client checked in successfully",
+    });
+
+    expect(recorder.posts).toHaveLength(1);
+    const [post] = recorder.posts;
+    expect(post.url).toBe("/client/addarrival");
+    expect(post.body).toEqual({ ClientId: "c-9", LocationId: 1 });
   });
 });

@@ -420,7 +420,7 @@ the suite; none is hardcoded as an id.
   Sent at the top level it answers `Client (Code: MissingRequiredFields)`; with
   `Client` nested but cross-regional updates left at the default, the sandbox
   answers "The current site does not belong to a region".
-  `src/tools/clientManagement.ts` now sends both, and the client-cleanup rename
+  `src/tools/clientProfile.ts` now sends both, and the client-cleanup rename
   test passes.
 
 ## Status
