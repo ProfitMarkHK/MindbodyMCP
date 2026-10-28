@@ -158,6 +158,8 @@ const discovered = {
   appointmentServiceId: null as number | null,
   /** That service's price, when the read exposes one; the Comp payment amount. */
   appointmentServicePrice: null as number | null,
+  /** The first custom payment method, from `getCustomPaymentMethods`; the Custom checkout pays with it. */
+  customPaymentMethodId: null as number | null,
   contractId: null as number | null,
   /** The location `contractId` was found at; `purchaseContract` sends it. */
   contractLocationId: null as number | null,
@@ -1064,6 +1066,22 @@ describe('live tier — orders, read-only', () => {
     }
     console.log(`\n LIVE contracts: ${counts.join(', ')}.\n`);
   });
+
+  itLive('getCustomPaymentMethods returns each method with a numeric id', async () => {
+    // A Custom checkout payment needs one of these ids. An empty list is a fact
+    // about the site, not a failure.
+    const result = await callTool('getCustomPaymentMethods', {});
+    expect(Array.isArray(result.paymentMethods)).toBe(true);
+    expect(result.totalPaymentMethods).toBe(result.paymentMethods.length);
+    for (const method of result.paymentMethods) {
+      expect(Number.isInteger(method.id)).toBe(true);
+      expect(typeof method.name).toBe('string');
+    }
+    discovered.customPaymentMethodId = result.paymentMethods[0]?.id ?? null;
+    console.log(
+      `\n LIVE custom payment methods: ${result.paymentMethods.map((m: any) => `${m.id} "${m.name}"`).join(', ') || 'none'}.\n`
+    );
+  });
 });
 
 // ── 6. Appointments: read, write, verify, clean up ────────────────────────────
@@ -1597,6 +1615,43 @@ describe('live tier — comp-paid checkout', () => {
       return;
     }
     expect(reconciled).toContain(createdAppointmentId);
+  });
+
+  // A Custom payment is a tender type the site configured (paypal, vouchers): a
+  // method id and an amount, no card or bank details, so it runs by default like
+  // Comp. Standalone sale, no appointment: the appointment belongs to the comp test.
+  const CUSTOM_CHECKOUT_TEST = 'checkoutShoppingCart commits a sale paid with a custom payment method';
+
+  itLive(CUSTOM_CHECKOUT_TEST, async () => {
+    const name = CUSTOM_CHECKOUT_TEST;
+    if (!requireDiscovered(name, ['locationId', 'appointmentServiceId', 'customPaymentMethodId'])) return;
+    if (discovered.appointmentServicePrice === null) {
+      announceLoudSkip(name, [
+        `reason: getServices exposed no price for service ${discovered.appointmentServiceId},`,
+        'so there is no amount for the Custom payment to cover.',
+      ]);
+      return;
+    }
+    if (!createdClientId) {
+      throw new Error('No client was created this run, so there is no one to sell to. See the earlier failure.');
+    }
+
+    const result = await callTool('checkoutShoppingCart', {
+      clientId: createdClientId,
+      items: [{ item: { type: 'Service', metadata: { id: discovered.appointmentServiceId } }, quantity: 1 }],
+      payments: [
+        { type: 'Custom', metadata: { amount: discovered.appointmentServicePrice, id: discovered.customPaymentMethodId } },
+      ],
+      inStore: true,
+      sendEmail: false,
+      locationId: discovered.locationId,
+    });
+    expect(result.success, `checkoutShoppingCart failed: ${result.message}`).toBe(true);
+    expect(result.shoppingCart?.grandTotal).toBe(discovered.appointmentServicePrice);
+    console.log(
+      `\n LIVE financial write: sale ${result.shoppingCart?.id ?? 'unknown'} paid with custom method ` +
+        `${discovered.customPaymentMethodId} committed. NOT reversible.\n`
+    );
   });
 
   // ── purchaseContract: runs, funded by account credit ───────────────────────

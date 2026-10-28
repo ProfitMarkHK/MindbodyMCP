@@ -1,4 +1,4 @@
-import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { DEFAULT_PAGE_SIZE, fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, type SimpleCache } from '../cache/index.js';
 import { errorMessage } from '../utils/errors.js';
 import {
@@ -303,6 +303,7 @@ export async function checkoutShoppingCartTool(
     type: 'Cash' | 'Check' | 'CreditCard' | 'Comp' | 'Custom' | 'StoredCard';
     metadata: {
       amount: number;
+      id?: number; // Custom only: the id from getCustomPaymentMethods
       notes?: string;
       lastFour?: string; // For stored cards
       cardholderName?: string;
@@ -347,6 +348,18 @@ export async function checkoutShoppingCartTool(
   }>;
   message: string;
 }> {
+  // Mindbody identifies a custom payment method by id only; without one the
+  // payment cannot be attributed, so refuse before any lookup or charge.
+  const badCustom = payments.filter(
+    (payment) => payment.type === 'Custom' && !(Number.isInteger(payment.metadata?.id) && payment.metadata.id! > 0)
+  );
+  if (badCustom.length > 0) {
+    return {
+      success: false,
+      message: 'A Custom payment needs metadata.id, a positive integer from getCustomPaymentMethods; nothing was charged.',
+    };
+  }
+
   // A cart item's appointmentIds are paid for by THIS client's payments, so each
   // must be this client's own. All-or-nothing, before anything is sent; fails
   // closed when the site zone or the lookup is unavailable.
@@ -437,6 +450,10 @@ export async function checkoutShoppingCartTool(
 
       if (payment.metadata.notes) {
         basePayment.Metadata.Notes = payment.metadata.notes;
+      }
+
+      if (payment.type === 'Custom') {
+        basePayment.Metadata.Id = payment.metadata.id;
       }
 
       if (payment.type === 'StoredCard' && payment.metadata.lastFour) {
@@ -714,5 +731,33 @@ export async function getContractsTool(
   return {
     contracts,
     totalContracts: totalResults || contracts.length,
+  };
+}
+/**
+ * Lists the site's custom payment methods (GET /sale/custompaymentmethods).
+ * A `Custom` checkout payment needs one of these ids as `metadata.id`; the
+ * back office shows only names.
+ */
+export async function getCustomPaymentMethodsTool(
+  client: IMindbodyClient = mindbodyClient
+): Promise<{
+  paymentMethods: Array<{ id: number; name: string }>;
+  totalPaymentMethods: number;
+}> {
+  const { items, totalResults } = await fetchAllPages<any>(
+    client,
+    '/sale/custompaymentmethods',
+    {},
+    'PaymentMethods',
+    DEFAULT_PAGE_SIZE,
+    // The -99 sandbox reports TotalResults=0 alongside its rows (verified 2026-10-28).
+    { ignoreTotalResults: true }
+  );
+
+  const paymentMethods = items.map((method: any) => ({ id: method.Id, name: method.Name }));
+
+  return {
+    paymentMethods,
+    totalPaymentMethods: totalResults,
   };
 }

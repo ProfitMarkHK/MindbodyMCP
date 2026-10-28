@@ -10,6 +10,7 @@ import {
   checkoutShoppingCartTool,
   purchaseContractTool,
   getContractsTool,
+  getCustomPaymentMethodsTool,
 } from "../src/tools/salesManagement.js";
 import type { IMindbodyClient } from "../src/api/client.js";
 import { SimpleCache } from "../src/cache/index.js";
@@ -744,5 +745,80 @@ describe("getContractsTool (C-25)", () => {
     expect(Object.keys(schedule)).not.toContain("paymentAmount");
     expect(Object.keys(schedule)).not.toContain("frequency");
     expect(Object.keys(schedule)).not.toContain("duration");
+  });
+});
+describe("getCustomPaymentMethodsTool", () => {
+  const methods = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({ Id: i + 1, Name: `Method ${i + 1}` }));
+  const fixture = (rows: unknown[]) => ({
+    PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: rows.length, TotalResults: rows.length },
+    PaymentMethods: rows,
+  });
+
+  it("returns each method's id and name from a spec-valid request", async () => {
+    const result = await getCustomPaymentMethodsTool(
+      makeClient(fixture([{ Id: 13, Name: "AMEX (AirWallex)" }, { Id: 14, Name: "Octopus" }]))
+    );
+    expect(result).toEqual({
+      paymentMethods: [
+        { id: 13, name: "AMEX (AirWallex)" },
+        { id: 14, name: "Octopus" },
+      ],
+      totalPaymentMethods: 2,
+    });
+  });
+
+  it("returns every method when the site has more than one page", async () => {
+    const result = await getCustomPaymentMethodsTool(makeClient(fixture(methods(250))));
+    expect(result.paymentMethods).toHaveLength(250);
+    expect(result.paymentMethods[249]).toEqual({ id: 250, name: "Method 250" });
+    expect(result.totalPaymentMethods).toBe(250);
+  });
+
+  it("returns an empty list for a site with no custom methods", async () => {
+    const result = await getCustomPaymentMethodsTool(makeClient(fixture([])));
+    expect(result).toEqual({ paymentMethods: [], totalPaymentMethods: 0 });
+  });
+
+  it("returns every method when the API reports TotalResults=0 alongside them", async () => {
+    // Observed on the -99 sandbox: two rows, PageSize 2, TotalResults 0.
+    const result = await getCustomPaymentMethodsTool(
+      makeClient({ ...fixture(methods(250)), PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: 200, TotalResults: 0 } })
+    );
+    expect(result.paymentMethods).toHaveLength(250);
+    expect(result.totalPaymentMethods).toBe(250);
+  });
+});
+
+describe("checkoutShoppingCartTool — Custom payments", () => {
+  const items = [{ item: { type: "Service" as const, metadata: { id: 16286 } }, quantity: 1 }];
+
+  it("sends the custom method's Id with the amount", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await checkoutShoppingCartTool(
+      "c1", items, [{ type: "Custom", metadata: { amount: 1020, id: 13 } }], true, undefined, false, 1, client
+    );
+    expect(result.success).toBe(true);
+    expect(client.bodies[0].data.Payments).toEqual([{ Type: "Custom", Metadata: { Amount: 1020, Id: 13 } }]);
+  });
+
+  for (const [label, id] of [["missing", undefined], ["zero", 0], ["fractional", 1.5]] as const) {
+    it(`refuses a Custom payment with a ${label} id and sends nothing`, async () => {
+      const client = new RecordingClient(checkoutResponse);
+      const result = await checkoutShoppingCartTool(
+        "c1", items, [{ type: "Custom", metadata: { amount: 1020, id } }], true, undefined, false, 1, client
+      );
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("getCustomPaymentMethods");
+      expect(client.bodies).toHaveLength(0);
+    });
+  }
+
+  it("does not send an Id for other payment types", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await checkoutShoppingCartTool(
+      "c1", items, [{ type: "Cash", metadata: { amount: 1020, id: 13 } }], true, undefined, false, 1, client
+    );
+    expect(client.bodies[0].data.Payments).toEqual([{ Type: "Cash", Metadata: { Amount: 1020 } }]);
   });
 });

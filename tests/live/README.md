@@ -151,10 +151,11 @@ indistinguishable in a CI log.
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
 | Clients | `getClients` | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
-| Orders | `getPackages`, `getProducts`, `getContracts` | — |
+| Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods` | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
+| Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
 | Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
 
 `addClientArrival` (`POST /client/addarrival`) is deliberately **not** in the
@@ -284,7 +285,7 @@ The MCP server exposes neither. So through this server every checkout commits:
 
 The `-99` sandbox is shared and its data is not private. Every default run leaves
 records that this server cannot delete or reverse (one client, one `Completed`
-appointment, one comp-paid sale; see Cleanup), so putting this tier on a schedule
+appointment, one comp-paid and one custom-paid sale; see Cleanup), so putting this tier on a schedule
 means accepting that growth.
 
 ## No-op policy
@@ -312,7 +313,7 @@ instrument or just a flag:
 
 - **An instrument** — card number, stored card, bank/direct-debit mandate — is a
   no-op. It will never be supplied to a test environment.
-- **A flag** — `Comp`, `UseAccountCredit` — is not a payment detail. A test that
+- **A flag** — `Comp`, `UseAccountCredit`, or a `Custom` method id (a tender type the site configured, such as paypal or a voucher) — is not a payment detail. A test that
   uses one is a real test and runs by default.
 
 Rules for future tests:
@@ -425,22 +426,23 @@ the suite; none is hardcoded as an id.
 
 ## Status
 
-**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, and buys a contract with account credit. Last default result on 2026-10-20:
+**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-10-28:
 
 ```
- 27 pass
+ 29 pass
  0 skip
  0 fail
-Ran 27 tests across 1 file.
+Ran 29 tests across 1 file.
 ```
 
-With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 27 skip, 0 fail`.
+With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 29 skip, 0 fail`.
 
 - **No skips and no loud skips.** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
 - **The contract purchase passed.** It walked the 11 contracts at location 1, was refused `356` ("Contract 356 cannot be purchased at location 1"), accepted `347` (Corporate Monthly Membership) and returned `ClientContractId` 16045. `getClientContracts` read it back as `Id` 16045 with `AutopayStatus: "Active"`.
+- **The custom-payment checkout passed (2026-10-28).** `getCustomPaymentMethods` returned `23` "paypal" and `24` "Groupon Voucher" (the response reports `TotalResults: 0` beside them, which the tool ignores). The checkout sold service `1395` paid `{ Type: 'Custom', Metadata: { Amount, Id: 23 } }` and Mindbody committed the sale.
 - **The comp-paid checkout passed.** It sold the appointment's pricing option (service `1395`, price 30) against the booked appointment with `Payments: [{ Type: 'Comp' }]`. Mindbody committed the sale, and the appointment read back as `Completed`. The response's reconciled-appointment arrays were empty, so the `LIVE NOTE (loud)` about the unverified link prints on every run.
 - **Every appointment-lifecycle step ran:** client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
-- `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
+- `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, one custom-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
 - **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the

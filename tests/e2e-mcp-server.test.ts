@@ -99,6 +99,7 @@ const EXPECTED_TOOL_NAMES = [
   'getPackages',
   'getProducts',
   'getContracts',
+  'getCustomPaymentMethods',
   'checkoutShoppingCart',
   'purchaseContract',
   'getSites',
@@ -1394,6 +1395,61 @@ describe('domain — orders (read and write)', () => {
       InStore: false,
       SendEmail: true,
     });
+  });
+});
+
+describe('domain — checkout with a custom payment method', () => {
+  itE2E('getCustomPaymentMethods lists every method with its id', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({ name: 'getCustomPaymentMethods', arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(resultJson(result)).toEqual({
+      paymentMethods: [
+        { id: 13, name: 'AMEX (AirWallex)' },
+        { id: 14, name: 'Octopus' },
+      ],
+      totalPaymentMethods: 2,
+    });
+
+    const [request] = stub.requestsTo('/public/v6/sale/custompaymentmethods', 'GET');
+    expect(request.query.Limit).toBe('200');
+  });
+
+  itE2E('checkoutShoppingCart pays with the looked-up custom method id', async () => {
+    stub.resetLog();
+
+    const methods = resultJson(await client.callTool({ name: 'getCustomPaymentMethods', arguments: {} }));
+    const amex = methods.paymentMethods.find((m: { name: string }) => m.name === 'AMEX (AirWallex)');
+
+    const result = await client.callTool({
+      name: 'checkoutShoppingCart',
+      arguments: {
+        clientId: STUB_FIXTURES.clientId,
+        items: [{ item: { type: 'Service', metadata: { id: 501 } }, quantity: 1 }],
+        payments: [{ type: 'Custom', metadata: { amount: 220, id: amex.id } }],
+        sendEmail: false,
+      },
+    });
+    expect(resultJson(result).success).toBe(true);
+
+    const [post] = stub.requestsTo('/public/v6/sale/checkoutshoppingcart', 'POST');
+    expect(post.body.Payments).toEqual([{ Type: 'Custom', Metadata: { Amount: 220, Id: 13 } }]);
+  });
+
+  itE2E('checkoutShoppingCart refuses a Custom payment without an id and posts nothing', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'checkoutShoppingCart',
+      arguments: {
+        clientId: STUB_FIXTURES.clientId,
+        items: [{ item: { type: 'Service', metadata: { id: 501 } }, quantity: 1 }],
+        payments: [{ type: 'Custom', metadata: { amount: 220 } }],
+      },
+    });
+    expect(resultJson(result).success).toBe(false);
+    expect(stub.countTo('/public/v6/sale/checkoutshoppingcart', 'POST')).toBe(0);
   });
 });
 

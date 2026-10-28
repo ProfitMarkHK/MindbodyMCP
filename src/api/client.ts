@@ -150,6 +150,12 @@ export interface FetchAllPagesOptions {
    * across pages instead of being read from page one only.
    */
   onPage?: (page: any) => void;
+  /**
+   * Treat the endpoint as reporting no TotalResults, so the walk ends on a short
+   * page. Only for endpoints observed to report a wrong total while honouring
+   * Offset (e.g. /sale/custompaymentmethods answers TotalResults=0 with rows).
+   */
+  ignoreTotalResults?: boolean;
 }
 
 /** A non-negative integer from a PaginationResponse field, or undefined. */
@@ -233,7 +239,7 @@ export async function fetchAllPages<T>(
 
     const pageItems: T[] = keys.flatMap((key) => (Array.isArray(response?.[key]) ? response[key] : []));
     const pagination = response?.PaginationResponse;
-    const reportedTotal = paginationCount(pagination?.TotalResults);
+    const reportedTotal = options.ignoreTotalResults ? undefined : paginationCount(pagination?.TotalResults);
     if (reportedTotal !== undefined) {
       totalResults = reportedTotal;
     }

@@ -49,6 +49,7 @@ import {
   checkoutShoppingCartTool,
   purchaseContractTool,
   getContractsTool,
+  getCustomPaymentMethodsTool,
 } from './tools/salesManagement.js';
 import {
   getSitesTool,
@@ -439,6 +440,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         },
       },
       {
+        name: 'getCustomPaymentMethods',
+        description: 'List the site\'s custom payment methods with their ids. A Custom checkout payment needs one of these ids as metadata.id.',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
         name: 'checkoutShoppingCart',
         description: 'Process a shopping cart checkout',
         inputSchema: {
@@ -474,7 +480,17 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                 type: 'object',
                 properties: {
                   type: { type: 'string', enum: ['Cash', 'Check', 'CreditCard', 'Comp', 'Custom', 'StoredCard'] },
-                  metadata: { type: 'object' },
+                  metadata: {
+                    type: 'object',
+                    description: 'Always { amount }. Cash/Check: optional notes. StoredCard: lastFour. Custom: id (required), from getCustomPaymentMethods.',
+                    properties: {
+                      amount: { type: 'number' },
+                      id: { type: 'number', description: 'Custom payment method ID (Custom only)' },
+                      notes: { type: 'string' },
+                      lastFour: { type: 'string' },
+                    },
+                    required: ['amount'],
+                  },
                 },
               },
             },
@@ -975,6 +991,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(getContractsResult, null, 2) }] };
       
+      case 'getCustomPaymentMethods':
+        const customPaymentMethodsResult = await getCustomPaymentMethodsTool();
+        return { content: [{ type: 'text', text: JSON.stringify(customPaymentMethodsResult, null, 2) }] };
+
       case 'checkoutShoppingCart':
         const checkoutResult = await checkoutShoppingCartTool(
           args.clientId as string,

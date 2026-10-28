@@ -32,6 +32,7 @@
  *   Orders               GET  /sale/packages                salesManagement.getPackagesTool
  *                        GET  /sale/products                salesManagement.getProductsTool
  *                        GET  /sale/contracts               salesManagement.getContractsTool
+ *                        GET  /sale/custompaymentmethods    salesManagement.getCustomPaymentMethodsTool
  *                        POST /sale/checkoutshoppingcart    salesManagement.checkoutShoppingCartTool
  *                        POST /sale/purchasecontract        salesManagement.purchaseContractTool
  *   Appointments         GET  /appointment/staffappointments  appointmentManagement.getStaffAppointmentsTool
@@ -390,6 +391,12 @@ export const STUB_FIXTURES = {
     TotalContractAmountTotal: 1788,
     IntroOffer: 'NewAndReturningConsumer',
   },
+
+  // Spec-shaped `CustomPaymentMethod`: just {Id, Name}.
+  customPaymentMethods: [
+    { Id: 13, Name: 'AMEX (AirWallex)' },
+    { Id: 14, Name: 'Octopus' },
+  ],
 
   shoppingCart: {
     ShoppingCart: {
@@ -1314,6 +1321,10 @@ export class MindbodyStub {
 
     this.route('GET', '/sale/contracts', (request) =>
       listResponse('Contracts', [STUB_FIXTURES.contract], request.query)
+    );
+
+    this.route('GET', '/sale/custompaymentmethods', (request) =>
+      listResponse('PaymentMethods', STUB_FIXTURES.customPaymentMethods, request.query)
     );
 
     this.route('POST', '/sale/checkoutshoppingcart', (request) => {
