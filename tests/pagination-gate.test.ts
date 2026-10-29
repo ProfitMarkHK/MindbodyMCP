@@ -54,10 +54,12 @@
  */
 import { afterAll, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "fs";
-import { dirname, join, relative, resolve } from "path";
+import { dirname, join, relative, resolve, sep } from "path";
 import ts from "typescript";
 
 const ROOT = resolve(__dirname, "..");
+/** `relative` with forward slashes on every platform, so gate paths compare the same on Windows. */
+const relPosix = (from: string, to: string) => relative(from, to).split(sep).join("/");
 /**
  * Every directory the scan covers, with the tsconfig its imports resolve under
  * and `minSites`, the number of API GET call sites it holds today. Add a root
@@ -187,7 +189,7 @@ function networkOffenders(files: string[]): string[] {
       .split("\n")
       .forEach((text, i) => {
         if (/^\s*(?:#|\/\/|\/?\*)/.test(text) || !NETWORK_CLIENT.test(text)) return;
-        out.push(`${relative(ROOT, file)}:${i + 1} → ${text.trim()}`);
+        out.push(`${relPosix(ROOT, file)}:${i + 1} → ${text.trim()}`);
       });
   }
   return out;
@@ -259,7 +261,7 @@ function scanFile(
   const checker = program.getTypeChecker();
   const sf = program.getSourceFile(file);
   if (!sf) throw new Error(`Gate 13: ${file} is not part of the TypeScript program`);
-  const rel = relative(ROOT, file);
+  const rel = relPosix(ROOT, file);
   const exempt = exemptRanges(sf);
   const isExempt = (node: ts.Node) => exempt.some((r) => node.pos >= r.pos && node.end <= r.end);
   const lineOf = (node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
@@ -381,7 +383,7 @@ const unparsedOffenders = networkOffenders(listUnparsedCode(ROOT));
 
 const { singleGetOnPaginated, unknownPaths, pagingNonPaginated } = classify(specGets, sites, unresolved);
 const rootCounts = SCAN_ROOTS.map((root) => {
-  const prefix = `${relative(ROOT, root.dir)}/`;
+  const prefix = `${relPosix(ROOT, root.dir)}/`;
   return { prefix, floor: root.minSites, found: sites.filter((site) => site.file.startsWith(prefix)).length };
 });
 const rootsBelowFloor = rootCounts.filter((r) => r.found < r.floor);
@@ -460,7 +462,7 @@ describe("Gate 13 — code outside the scan roots", () => {
   it("rule 6: shell scripts, the Prisma schema and the Next.js app's config files carry no network client", () => {
     const files = listUnparsedCode(ROOT);
     // Not vacuous: the runner and the live-tier launcher are in the list.
-    expect(files.map((f) => relative(ROOT, f))).toEqual(
+    expect(files.map((f) => relPosix(ROOT, f))).toEqual(
       expect.arrayContaining(["scripts/check-gates.sh", "scripts/live-e2e.sh", "nextjs-app/prisma/schema.prisma"])
     );
     expect(report("Network client outside the scan roots", unparsedOffenders)).toBe("");
