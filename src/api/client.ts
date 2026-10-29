@@ -173,8 +173,11 @@ function paginationCount(value: unknown): number | undefined {
  * tests/pagination-gate.test.ts, Gate 13).
  *
  * Termination, in order of precedence:
- *   1. An empty page ends the walk, unless the server reported a `TotalResults`
- *      larger than the rows collected so far: that is a truncated read and throws.
+ *   1. An empty page ends the walk, unless the total promised by the pages that
+ *      returned rows (or, if no such page reported a total, by this page) is larger
+ *      than the rows collected so far: that is a truncated read and throws. An empty page's own
+ *      `TotalResults` does not replace that promise, so a `0` there cannot hide a
+ *      truncation.
  *   2. When the server reports `PaginationResponse.TotalResults`, keep going
  *      until that many rows have been collected. The page length is NOT used as
  *      a stop signal here, so a server that silently caps `Limit` below what we
@@ -190,7 +193,8 @@ function paginationCount(value: unknown): number | undefined {
  *
  * Fails loudly instead of truncating or looping:
  *   - more than `MAX_PAGES` pages throws, naming the path and the row count;
- *   - an empty page before `TotalResults` rows were collected throws;
+ *   - an empty page before the promised `TotalResults` rows were collected throws
+ *     (the error gives both the rows collected and the promised total);
  *   - more rows received than `TotalResults` claims throws: the claim is
  *     checked against the rows, never trusted on its own (a `TotalResults: 0`
  *     beside a non-empty first page would otherwise end the walk after page one);
@@ -241,19 +245,24 @@ export async function fetchAllPages<T>(
     const pageItems: T[] = keys.flatMap((key) => (Array.isArray(response?.[key]) ? response[key] : []));
     const pagination = response?.PaginationResponse;
     const reportedTotal = options.ignoreTotalResults ? undefined : paginationCount(pagination?.TotalResults);
-    if (reportedTotal !== undefined) {
-      totalResults = reportedTotal;
-    }
 
     if (pageItems.length === 0) {
-      // An empty page ends the walk only when nothing more was promised.
-      if (totalResults !== undefined && items.length < totalResults) {
+      // An empty page ends the walk only when nothing more was promised. The promise is the
+      // total from the pages that returned rows; this page's own total is used only when no
+      // earlier page reported one. An empty page can say TotalResults=0 beside a larger
+      // promise (seen on /sale/sales), and that must not cancel the promise.
+      const promised = totalResults ?? reportedTotal;
+      if (promised !== undefined && items.length < promised) {
         throw new Error(
           `fetchAllPages: GET ${url} returned an empty page at Offset=${offset} ` +
-            `(${items.length} items fetched of TotalResults=${totalResults}); refusing to return a truncated result`
+            `(${items.length} items fetched of TotalResults=${promised}); refusing to return a truncated result`
         );
       }
       break;
+    }
+
+    if (reportedTotal !== undefined) {
+      totalResults = reportedTotal;
     }
 
     // Offset-ignored detection. A page made only of rows already received is a replay:
