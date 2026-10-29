@@ -1,24 +1,23 @@
 /**
  * Sandbox launcher mapping (scripts/dev-sandbox.ts).
  *
- * The launcher must reach only the sandbox: it maps MINDBODY_TEST_* values, ignores
- * any MINDBODY_* key, and refuses to start for a non-sandbox site or missing credentials.
+ * The launcher gets its credentials from 1Password (via `op run`), never from a file. It must
+ * reach only the sandbox: it always uses site -99, whatever MINDBODY_SITE_ID the environment
+ * carries, and refuses to start without credentials.
  */
 import { describe, expect, it } from "bun:test";
 import { sandboxEnv } from "../scripts/dev-sandbox.js";
 import { STUB_FIXTURES } from "./support/mindbody-stub.js";
 
-const TEST_VALUES = {
-  MINDBODY_TEST_API_KEY: STUB_FIXTURES.apiKey,
-  MINDBODY_TEST_SOURCE_NAME: STUB_FIXTURES.sourceName,
-  MINDBODY_TEST_SOURCE_PASSWORD: STUB_FIXTURES.sourcePassword,
+const CREDENTIALS = {
+  MINDBODY_API_KEY: STUB_FIXTURES.apiKey,
+  MINDBODY_SOURCE_NAME: STUB_FIXTURES.sourceName,
+  MINDBODY_SOURCE_PASSWORD: STUB_FIXTURES.sourcePassword,
 };
 
 describe("sandboxEnv", () => {
-  it("maps MINDBODY_TEST_* and ignores a naked MINDBODY_* key", () => {
-    const env = sandboxEnv({ ...TEST_VALUES, MINDBODY_API_KEY: "unused", MINDBODY_SITE_ID: "123456" });
-
-    expect(env).toEqual({
+  it("maps the credentials and pins the site to the sandbox", () => {
+    expect(sandboxEnv(CREDENTIALS)).toEqual({
       MINDBODY_API_KEY: STUB_FIXTURES.apiKey,
       MINDBODY_SITE_ID: "-99",
       MINDBODY_SOURCE_NAME: STUB_FIXTURES.sourceName,
@@ -27,11 +26,11 @@ describe("sandboxEnv", () => {
     });
   });
 
-  it("refuses a non-sandbox site", () => {
-    expect(() => sandboxEnv({ ...TEST_VALUES, MINDBODY_TEST_SITE_ID: "123456" })).toThrow(/refusing to start/);
+  it("ignores a live site ID in the environment and still uses the sandbox", () => {
+    expect(sandboxEnv({ ...CREDENTIALS, MINDBODY_SITE_ID: "123456" }).MINDBODY_SITE_ID).toBe("-99");
   });
 
   it("refuses to start without sandbox credentials", () => {
-    expect(() => sandboxEnv({ MINDBODY_TEST_API_KEY: STUB_FIXTURES.apiKey })).toThrow(/MINDBODY_TEST_SOURCE_NAME/);
+    expect(() => sandboxEnv({ MINDBODY_API_KEY: STUB_FIXTURES.apiKey })).toThrow(/MINDBODY_SOURCE_NAME/);
   });
 });

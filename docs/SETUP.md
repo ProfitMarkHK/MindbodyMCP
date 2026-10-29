@@ -194,6 +194,43 @@ After saving the configuration:
 2. Start Claude Desktop again
 3. Look for "mindbody" in the MCP servers list
 
+## Step 5b: Configure Claude Code
+
+Claude Code registers the server with `claude mcp add`. Register two instances: one for the sandbox and one for production. Both use user scope, so they are available in every project.
+
+Requirements: `claude` on your PATH and Bun installed (Step 1). `bun run --cwd` runs each command from the repo folder, so it works from any directory.
+
+### Sandbox instance (`mindbody-sandbox`)
+
+The sandbox instance pulls its API key and Source credentials from a 1Password item of its own, separate from production. Its item's `MINDBODY_SITE_ID` is `-99`. Mindbody does not issue per-environment keys, so the sandbox item may hold the same key as production. `scripts/dev-sandbox.ts` always uses site `-99` and ignores any other `MINDBODY_SITE_ID`, so this instance cannot reach a live site. No `.env` file is read.
+
+```bash
+claude mcp add mindbody-sandbox --scope user -e MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field> -e MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field> -e MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field> -- op run -- bun run --cwd E:/MindbodyMCP scripts/dev-sandbox.ts
+```
+
+Replace `E:/MindbodyMCP` with your clone's path. Point the references at your sandbox item, not the production one.
+
+### Production instance (`mindbody-prod`)
+
+The production instance pulls its four required values from 1Password at launch, the same way `bun run dev` does. No production secret is stored in the repo, in an env file, or in the Claude config. The Claude config holds only `op://` references, which name a 1Password item and field but not its value. No `.env` file is needed.
+
+1. Install the 1Password CLI (`op`) and turn on its desktop app integration (see [1Password setup](../README.md#1password-setup)).
+2. Register the instance, replacing `<vault>`, `<item>` and the field names with your item's references (`op item get <item> --format json` lists its field IDs and labels):
+
+   ```bash
+   claude mcp add mindbody-prod --scope user -e MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field> -e MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field> -e MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field> -e MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field> -- op run -- bun run --cwd E:/MindbodyMCP src/index.ts
+   ```
+
+Each launch of the production instance triggers a 1Password approval through the desktop app. The instance uses live credentials, so it can book, cancel and charge for real.
+
+### Check both instances
+
+```bash
+claude mcp list
+```
+
+Both should show `✔ Connected`. If `mindbody-prod` shows `✘ Failed to connect`, a reference is probably wrong or 1Password has not approved the launch. Run `op read "op://<vault>/<item>/<field>"` for each reference to check it resolves.
+
 ## Step 6: Verify Integration
 
 ### Test in Claude

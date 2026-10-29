@@ -160,29 +160,22 @@ export async function getClassesTool(
 - Tool output: Use interface for structured return (no generic types)
 
 ### Environment Variables
-**Sandbox-first policy:**
-- The repo-local `.env` file is a sandbox-only environment. Do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME`, or `MINDBODY_SOURCE_PASSWORD` values there.
-- Production credentials live in 1Password, not in the repo. `~/.config/mindbody/prod.env` (outside the repo) holds `op://` references to them, and the `dev`, `start` and `node:*` scripts load them through `op run`. Do not create `.env.production`; the copy left in the main checkout is legacy and should be deleted once the `op` setup is verified.
-- The sandbox values live in `.env` as `MINDBODY_TEST_*` names.
-- Before any local run or API call, map the test values into the names the Mindbody client expects on the fly:
-  ```bash
-  export MINDBODY_API_KEY="$MINDBODY_TEST_API_KEY"
-  export MINDBODY_SITE_ID="${MINDBODY_TEST_SITE_ID:-"-99"}"
-  export MINDBODY_SOURCE_NAME="$MINDBODY_TEST_SOURCE_NAME"
-  export MINDBODY_SOURCE_PASSWORD="$MINDBODY_TEST_SOURCE_PASSWORD"
-  export MINDBODY_API_URL="${MINDBODY_TEST_API_URL:-https://api.mindbodyonline.com/public/v6}"
-  ```
-- For sandbox runs, use `bun run dev:sandbox` (or `bun run dev:sandbox:sse`). It maps the `MINDBODY_TEST_*` values from `.env` and refuses any site other than the sandbox. Do not use the `op`-wrapped scripts for sandbox work.
-- This rule exists so a stray test or script cannot silently hit a production site. Only the `op`-wrapped scripts select production, and only when run on purpose. If a task truly needs a live site, state that explicitly before running one.
+**1Password-first policy:**
+- Mindbody credentials come from 1Password at launch through `op run`. No env file is required: do not create `.env.production`, `.env.development` or `prod.env`, and do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` values in any file.
+- The four variables below must be set in the shell environment as `op://` references to the item the operator chooses. The references are not secrets, but they name the vault layout, so they are never committed.
+- Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items: the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
+- `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and ignores any `MINDBODY_SITE_ID` in the environment. Use it for all local work and tests against the sandbox.
+- `bun run dev`, `start`, `start:sse`, `start:prod` and `node:*` select production through the same references. Run them only on purpose. If a task truly needs a live site, state that explicitly before running one.
+- The live E2E tier (`scripts/live-e2e.sh`, `tests/live/`) still reads `MINDBODY_TEST_*` names. The npm dev scripts do not.
 
-**Required (sandbox/local):**
-- `MINDBODY_TEST_API_KEY` - Sandbox API key, kept in `.env`
-- `MINDBODY_TEST_SITE_ID` - Sandbox site ID (`-99` by default)
-- `MINDBODY_TEST_SOURCE_NAME` - Sandbox OAuth source name
-- `MINDBODY_TEST_SOURCE_PASSWORD` - Sandbox OAuth source password
+**Required environment variables (as `op://` references in the shell):**
+- `MINDBODY_API_KEY` - API key
+- `MINDBODY_SITE_ID` - Production site ID. Read by the production scripts; the sandbox ignores it.
+- `MINDBODY_SOURCE_NAME` - OAuth source name
+- `MINDBODY_SOURCE_PASSWORD` - OAuth source password
 
 **Optional:**
-- `MINDBODY_TEST_API_URL` - Sandbox API base URL (default: `https://api.mindbodyonline.com/public/v6`)
+- `MINDBODY_API_URL` - API base URL (default: `https://api.mindbodyonline.com/public/v6`)
 - `CACHE_TTL_MINUTES` - Cache TTL override
 
 ## Spec Conformance: the rules that matter most

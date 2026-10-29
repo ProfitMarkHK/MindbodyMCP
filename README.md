@@ -243,10 +243,10 @@ bun run build  # or npm run build
 
 ### 1Password setup
 
-The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
-2. Create `~/.config/mindbody/prod.env` holding references to your item's fields, not the values:
+2. Set four environment variables in your shell to references to your item's fields, not the values. Use your own vault and item:
 
 ```bash
 MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
@@ -257,7 +257,7 @@ MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 
 3. Run the script as usual, for example `bun run dev`. `op run` resolves each reference and passes it to the server as an environment variable.
 
-For sandbox runs, use `bun run dev:sandbox` (or `bun run dev:sandbox:sse`). It reads the `MINDBODY_TEST_*` values from `.env`, never touches 1Password, and refuses any site other than the sandbox.
+`bun run dev:sandbox` (and `dev:sandbox:sse`) uses the same four variables, so point them at your sandbox item for that run. The script always pins the site to the sandbox (`-99`) and ignores `MINDBODY_SITE_ID`. Production and sandbox use separate 1Password items, so don't leave the production references in the shell when you run the sandbox scripts. See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances.
 
 ### Project Structure
 
