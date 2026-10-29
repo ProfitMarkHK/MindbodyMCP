@@ -23,6 +23,7 @@
  * Runs under the root `bun test` (Gate 1); nextjs-app has no runner of its own.
  */
 import { describe, expect, it } from 'bun:test';
+import { fileURLToPath } from 'url';
 import {
   formatSiteDate,
   formatSiteDateTime,
@@ -41,10 +42,8 @@ const HK = 'Asia/Hong_Kong';
  * difference, since `TZ` is read once per process.
  */
 function renderInHostZone(timeZone: string): string[] {
-  const modulePath = new URL(
-    '../nextjs-app/src/lib/mindbody/formatSiteTime.ts',
-    import.meta.url
-  ).pathname;
+  // `.pathname` would give "/E:/..." on Windows, which Bun cannot import.
+  const modulePath = fileURLToPath(new URL('../nextjs-app/src/lib/mindbody/formatSiteTime.ts', import.meta.url));
   const source = `
     import { formatSiteDate, formatSiteDateTime, formatSiteDateTimeLong,
              formatSiteDateWithWeekday, formatSiteDateWithWeekdayLong,
@@ -63,13 +62,39 @@ function renderInHostZone(timeZone: string): string[] {
     ]));
   `;
   const proc = Bun.spawnSync({
-    cmd: ['bun', '-e', source],
+    cmd: [process.execPath, '-e', source],
     env: { ...process.env, TZ: timeZone },
   });
   if (proc.exitCode !== 0) {
     throw new Error(`formatter failed under TZ=${timeZone}: ${proc.stderr.toString()}`);
   }
   return JSON.parse(proc.stdout.toString().trim());
+}
+
+/**
+ * The values renderInHostZone returns, pinned. They are the same under every host zone
+ * (the formatter takes the studio zone explicitly), so a change in any one of them is a
+ * behaviour change, not a host-zone effect.
+ */
+const PINNED = [
+  'Sun, Oct 18 at 8:00 AM PDT',
+  'Sun, Oct 18 at 8:00 AM PDT',
+  'Thu, May 3 PDT',
+  'May 3, 1990 PDT',
+  'Sunday, Oct 18, 8:00 AM PDT',
+  'Sun, Oct 18',
+  'Sunday, Oct 18',
+  '8:00 AM PDT',
+  '8:00 AM Hong Kong Time',
+];
+
+/** The pre-fix expression, `new Date(value).toLocaleString()`, rendered in a child under `timeZone`. */
+function renderHostZoneDate(timeZone: string): string {
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, '-e', `console.log(new Date('2026-10-18T15:00:00Z').toLocaleString('en-US'))`],
+    env: { ...process.env, TZ: timeZone },
+  });
+  return proc.stdout.toString().trim();
 }
 
 describe('formatSiteTime: output does not depend on the viewer zone', () => {
@@ -82,15 +107,15 @@ describe('formatSiteTime: output does not depend on the viewer zone', () => {
     }
   });
 
-  it('would have differed before the fix (gives the test above teeth)', () => {
-    // The old expression round-tripped through the host zone. This host is not
-    // UTC, so the LA 08:00 class came out shifted, which is precisely what the
-    // independence test now rules out.
-    expect(process.env.TZ).toBeUndefined();
-    expect(new Date('2026-10-18T15:00:00Z').toLocaleString('en-US', { timeZone: LA })).not.toContain(
-      '8:00 AM'
-    );
-    expect(formatSiteDateTime('2026-10-18T15:00:00Z', LA, { withZone: true })).toContain('8:00 AM PDT');
+  it('matches the pinned values, so a shared wrong output still fails', () => {
+    expect(renderInHostZone('UTC')).toEqual(PINNED);
+  });
+
+  it('shows the pre-fix expression depends on the host zone (gives the test above teeth)', () => {
+    // 15:00Z is 8:00 AM in LA but 11:00 PM in Hong Kong. The old expression shows the
+    // host's clock, so it looks right only where the host happens to be LA.
+    expect(renderHostZoneDate('America/Los_Angeles')).toContain('8:00:00 AM');
+    expect(renderHostZoneDate('Asia/Hong_Kong')).not.toContain('8:00:00 AM');
   });
 });
 
