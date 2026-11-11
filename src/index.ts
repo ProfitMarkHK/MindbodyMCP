@@ -41,6 +41,7 @@ import {
   addClientArrivalTool,
   getClientAccountBalancesTool,
   getClientContractsTool,
+  getClientFormulaNotesTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -382,6 +383,17 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID' },
           },
           required: ['clientId'],
+        },
+      },
+      {
+        name: 'getClientFormulaNotes',
+        description: 'Get a client\'s formula notes (read-only). Give clientId, appointmentId, or both',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            appointmentId: { type: 'number', description: 'Only notes tied to this appointment' },
+          },
         },
       },
       
@@ -953,6 +965,13 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       case 'getClientContracts':
         const contractsResult = await getClientContractsTool(args.clientId as string);
         return { content: [{ type: 'text', text: JSON.stringify(contractsResult, null, 2) }] };
+
+      case 'getClientFormulaNotes':
+        const formulaNotesResult = await getClientFormulaNotesTool(
+          args.clientId as string | undefined,
+          args.appointmentId as number | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
       // Sales & Commerce Tools
       case 'getServices':

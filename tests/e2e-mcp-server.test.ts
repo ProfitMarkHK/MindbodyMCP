@@ -95,6 +95,7 @@ const EXPECTED_TOOL_NAMES = [
   'addClientArrival',
   'getClientAccountBalances',
   'getClientContracts',
+  'getClientFormulaNotes',
   'getServices',
   'getPackages',
   'getProducts',

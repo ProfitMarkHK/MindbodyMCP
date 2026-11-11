@@ -361,6 +361,21 @@ export interface ClientContract {
   SiteId: number;
 }
 
+/** `FormulaNoteResponse` — one client formula note. */
+export interface ClientFormulaNote {
+  Id: number;
+  /** The client's ID at the site where the note originated, not the requested ID. */
+  ClientId?: string;
+  AppointmentId?: number;
+  EntryDate?: string;
+  Note?: string;
+  SiteId?: number;
+  SiteName?: string;
+  StaffFirstName?: string;
+  StaffLastName?: string;
+  StaffDisplayName?: string;
+}
+
 /** `AddClientResponse`. */
 export interface AddClientResponse {
   Client: Client;
