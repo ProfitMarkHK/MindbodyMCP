@@ -1,4 +1,5 @@
-import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { fetchClientsByIds } from '../utils/clientBatch.js';
 import { errorMessage } from '../utils/errors.js';
 import {
   AddClientResponse,
@@ -57,16 +58,15 @@ export async function getClientsTool(
   }>;
   totalClients: number;
 }> {
-  const { items: clientRows, totalResults } = await fetchAllPages<ClientWithSuspensionInfo>(
+  // Any number of clientIds: batched under the API's 20-id cap (see clientBatch.ts).
+  const { items: clientRows, totalResults } = await fetchClientsByIds<ClientWithSuspensionInfo>(
     client,
-    '/client/clients',
     {
       SearchText: searchText,
-      ClientIds: clientIds,
       LastModifiedDate: lastModifiedDate,
       IsProspect: isProspect,
     },
-    'Clients'
+    clientIds
   );
 
   const clients = clientRows.map((client: ClientWithSuspensionInfo) => ({

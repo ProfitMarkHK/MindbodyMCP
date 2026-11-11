@@ -267,7 +267,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           type: 'object',
           properties: {
             searchText: { type: 'string', description: 'Search text for client name/email/phone' },
-            clientIds: { type: 'array', items: { type: 'string' }, description: 'Specific client IDs' },
+            clientIds: { type: 'array', items: { type: 'string' }, description: 'Specific client IDs, any number (batched 20 per API request)' },
             lastModifiedDate: { type: 'string', description: 'Get clients modified after this date' },
             isProspect: { type: 'boolean', description: 'Filter for prospects only' },
           },

@@ -1,5 +1,6 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, teacherCache, SimpleCache } from '../cache/index.js';
+import { fetchClientsByIds } from './clientBatch.js';
 
 /**
  * Resolve Mindbody ids to display names through the small, cached reference
@@ -72,12 +73,7 @@ async function buildClientMap(
 
   let cached = cache.get<Array<[string, string]>>(cacheKey);
   if (!cached) {
-    const { items } = await fetchAllPages<any>(
-      client,
-      '/client/clients',
-      { ClientIds: clientIds },
-      'Clients'
-    );
+    const { items } = await fetchClientsByIds<any>(client, {}, clientIds);
     cached = [];
     for (const row of items) {
       const id = row?.Id === undefined || row?.Id === null ? '' : String(row.Id);
