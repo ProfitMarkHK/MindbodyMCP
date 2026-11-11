@@ -69,6 +69,7 @@ src/
 │   ├── enrollmentManagement.ts
 │   ├── siteManagement.ts
 │   ├── salesManagement.ts
+│   ├── salesHistory.ts       # getSales (read-only sales history)
 │   └── teacherSchedule.ts
 ├── cache/               # In-memory caching system
 ├── types/               # TypeScript type definitions
@@ -148,7 +149,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (43 tools)
+## Available Tools (44 tools)
 
 ### 📅 Class Management
 
@@ -349,6 +350,17 @@ Process a complete purchase transaction.
 List the site's custom payment methods (`GET /sale/custompaymentmethods`). Takes no parameters; every page is fetched.
 
 **Returns:** `{ paymentMethods: [{ id, name }], totalPaymentMethods }`. The back office shows only names; a `Custom` checkout payment needs the `id`. The `-99` sandbox reports `TotalResults: 0` alongside its rows, so this tool ignores the reported total and counts the rows.
+
+#### `getSales`
+Read-only sales history (`GET /sale/sales`, every page fetched, list key `Sales`). Answers "which staff sold retail products": `SalesRepId` is the rep Mindbody credits at checkout.
+
+**Parameters** (all optional):
+- `startDate`, `endDate`: YYYY-MM-DD, site-local. Default: the 1st of the current month through today in the site's zone. Sent as `StartSaleDateTime` `T00:00:00` and `EndSaleDateTime` `T23:59:59`.
+- `productsOnly`: keep only retail items (`IsService: false`) and drop sales left with no items
+- `salesRepIds`, `clientIds`: filters applied client-side (the endpoint has none)
+- `matchAppointments` (default false): also read `GET /appointment/staffappointments` for the same range and credit each product sale to the staff on every appointment the same client had on the same site-local day
+
+**Returns:** `{ startDate, endDate, sales: [{ id, saleDateTime, salesRepId, clientId, locationId, items: [{ id, description, isService, categoryId, unitPrice, quantity, totalAmount, returned }], payments: [{ id, amount, method, type }] }], totalSales, bySalesRep: [{ salesRepId, staffName, saleCount, productItemCount, productTotal }] }`. With `matchAppointments`, also `byAppointmentStaff` (same shape, keyed `staffId`), `unmatchedProductSales` and `appointmentMatchNote`. Summaries count product lines only and skip returned lines; `saleCount` counts every sale for the rep. Staff names come from one cached `GET /staff/staff`. The appointment match is a correlation, not a record: a client seen by two staff that day credits both.
 
 #### `purchaseContract`
 Purchase a membership/contract.

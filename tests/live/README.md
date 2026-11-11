@@ -151,7 +151,7 @@ indistinguishable in a CI log.
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
 | Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
-| Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods` | — |
+| Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |

@@ -75,6 +75,7 @@ Mindbody API
 - `appointmentManagement.ts` - Appointments, availability, scheduling
 - `enrollmentManagement.ts` - Course/workshop enrollments
 - `salesManagement.ts` - Services, packages, products, purchases
+- `salesHistory.ts` - Read-only sales history (`getSales`) with per-rep and same-day appointment-staff summaries
 - `siteManagement.ts` - Locations, programs, staff, resources, session types
 - `teacherSchedule.ts` - Teacher schedule lookups (specialized tool)
 

@@ -1141,6 +1141,39 @@ describe('live tier — orders, read-only', () => {
       `\n LIVE custom payment methods: ${result.paymentMethods.map((m: any) => `${m.id} "${m.name}"`).join(', ') || 'none'}.\n`
     );
   });
+
+  itLive('getSales reads month-to-date sales with rep and same-day appointment summaries, read-only', async () => {
+    const name = 'getSales reads month-to-date sales with rep and same-day appointment summaries, read-only';
+    // Default range: the 1st of the site's current month through today.
+    const result = await callTool('getSales', { matchAppointments: true });
+    expect(result.startDate).toMatch(/^\d{4}-\d{2}-01$/);
+    expect(result.endDate.slice(0, 7)).toBe(result.startDate.slice(0, 7));
+    expect(result.totalSales).toBe(result.sales.length);
+    expect(Array.isArray(result.bySalesRep)).toBe(true);
+    expect(Array.isArray(result.byAppointmentStaff)).toBe(true);
+    expect(typeof result.unmatchedProductSales).toBe('number');
+    expect(typeof result.appointmentMatchNote).toBe('string');
+    if (result.totalSales === 0) {
+      announceLoudSkip(name, ['reason: the site has no sales this month, so the field mapping is untested this run.']);
+      return;
+    }
+    for (const sale of result.sales) {
+      expect(Number.isInteger(sale.id)).toBe(true);
+      expect(typeof sale.saleDateTime).toBe('string');
+      expect(Array.isArray(sale.items)).toBe(true);
+      for (const item of sale.items) expect(typeof item.isService).toBe('boolean');
+    }
+    const products = await callTool('getSales', { startDate: result.startDate, endDate: result.endDate, productsOnly: true });
+    for (const sale of products.sales) {
+      expect(sale.items.length).toBeGreaterThan(0);
+      for (const item of sale.items) expect(item.isService).toBe(false);
+    }
+    console.log(
+      `\n LIVE sales ${result.startDate}..${result.endDate}: ${result.totalSales} sales, ` +
+        `${products.totalSales} with products, ${result.bySalesRep.length} reps, ` +
+        `${result.byAppointmentStaff.length} appointment-matched staff.\n`
+    );
+  }, 4 * CALL_TIMEOUT_MS);
 });
 
 // ── 6. Appointments: read, write, verify, clean up ────────────────────────────

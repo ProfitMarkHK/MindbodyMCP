@@ -101,6 +101,7 @@ const EXPECTED_TOOL_NAMES = [
   'getProducts',
   'getContracts',
   'getCustomPaymentMethods',
+  'getSales',
   'checkoutShoppingCart',
   'purchaseContract',
   'getSites',
