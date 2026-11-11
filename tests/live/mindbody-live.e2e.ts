@@ -1159,7 +1159,9 @@ describe('live tier — orders, read-only', () => {
     }
     for (const sale of result.sales) {
       expect(Number.isInteger(sale.id)).toBe(true);
-      expect(typeof sale.saleDateTime).toBe('string');
+      // Site-local, no offset: the API's spurious `Z` is stripped (D-11).
+      expect(sale.saleDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(sale.saleDateTime.slice(0, 10) >= result.startDate && sale.saleDateTime.slice(0, 10) <= result.endDate).toBe(true);
       expect(Array.isArray(sale.items)).toBe(true);
       for (const item of sale.items) expect(typeof item.isService).toBe('boolean');
     }

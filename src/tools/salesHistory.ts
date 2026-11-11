@@ -50,7 +50,8 @@ function productLines(sale: ReturnType<typeof mapSale>) {
 function mapSale(s: Sale) {
   return {
     id: s.Id,
-    saleDateTime: s.SaleDateTime,
+    // SANDBOX-OBSERVED: SaleDateTime is site-local but carries a spurious `Z` (D-11); drop it so nobody converts it as UTC.
+    saleDateTime: s.SaleDateTime?.replace(/Z$/, ''),
     salesRepId: s.SalesRepId,
     clientId: s.ClientId,
     locationId: s.LocationId,

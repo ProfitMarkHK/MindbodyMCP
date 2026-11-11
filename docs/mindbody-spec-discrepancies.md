@@ -18,7 +18,7 @@ Date: 2026-10-17. Sandbox site: `-99`. Read-only audit; no source files were cha
 | UNVERIFIED | 0 |
 | **Total call sites** | **46** |
 
-Distinct findings: **30 code bugs** (section C), **10 spec issues to raise with Mindbody** (section D), **4 unverified items** (section E). No call site is wholly unverified, but four individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
+Distinct findings: **30 code bugs** (section C), **11 spec issues to raise with Mindbody** (section D), **4 unverified items** (section E). No call site is wholly unverified, but four individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
 
 One finding has since been fixed and verified live, and is kept here for provenance rather than deleted: **C-23** (`purchaseContract` reading a `ClientContract` object the response does not contain). Doing so also closed **E-3**, which existed only because the runtime shape could not be probed.
 
@@ -498,6 +498,13 @@ deserves its own change rather than landing silently inside a fix to `src/`.
 **Outcome.** The Next.js app no longer reads any of these fields; the fix
 landed in two passes (the client domain, then class/staff/sales), mirroring the
 server. The "always-empty" rendering described above is gone.
+
+### D-11. `GET /sale/sales`: `SaleDateTime` is site-local but carries a `Z`; the date filter ignores the time
+
+- **Spec:** `Sale.SaleDateTime` is `date-time`; `request.startSaleDateTime`/`request.endSaleDateTime` are date-times. Mindbody date-times are documented as site-local with no offset.
+- **Sandbox (2026-11-11, `-99`, America/Los_Angeles, 127 sales):** every `SaleDateTime` ends in `Z` (`2026-11-01T08:52:07Z`), and `SaleDate` is the date at midnight with `Z` (`2026-11-01T00:00:00Z`). The date part of `SaleDateTime` equals `SaleDate` on every row, including rows at 03–07 `Z`; a true UTC value would put LA evening sales on the next day. So the value is site-local and the `Z` is spurious. The date filter compares against `SaleDate` (midnight): a window `T00:00:00`–`T00:59:59` returns the whole day, and `T12:00:00`–`T23:59:59` returns nothing.
+- **Impact:** `getSales` strips the `Z` from `saleDateTime` and sends `T00:00:00`–`T23:59:59` so each requested day is matched in full. Time-of-day filtering is not possible.
+- **Write-up:** "GET /public/v6/sale/sales returns SaleDate and SaleDateTime with a trailing `Z` although both are site-local times, and StartSaleDateTime/EndSaleDateTime filter on the sale date only, ignoring the time component. Please drop the `Z` or document the zone, and document the date-only filter."
 
 ## E. Unverified items
 
