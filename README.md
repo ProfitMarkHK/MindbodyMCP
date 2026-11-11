@@ -9,7 +9,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 
 ## ✨ Features
 
-- **43 Tools** covering every aspect of studio operations
+- **44 Tools** covering every aspect of studio operations
 - **Complete Class Management** - View schedules, book clients, manage waitlists, substitute teachers
 - **Client Management** - Add/update clients, track visits, memberships, and balances
 - **Sales & Commerce** - Process payments, sell packages, memberships, and retail products
@@ -144,7 +144,7 @@ Or use the GitHub repository directly:
 
 ## 🛠️ Available Tools
 
-The server provides 43 tools across 6 categories:
+The server provides 44 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -173,6 +173,7 @@ The server provides 43 tools across 6 categories:
 - `getProducts` - Browse retail products. Categories are exposed as ids; the API returns no category names
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
 - `getCustomPaymentMethods` - List the site's custom payment methods with their ids (needed for a `Custom` payment)
+- `getSales` - Read-only sales history (default: month to date, site-local) with a per-sales-rep summary of retail product sales; `productsOnly`, `salesRepIds`, `clientIds` filters; `matchAppointments` adds a best-effort same-day appointment-staff match
 - `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 

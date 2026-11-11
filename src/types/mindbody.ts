@@ -392,3 +392,33 @@ export interface AddArrivalResponse {
   ArrivalAdded: boolean;
   ClientService?: unknown;
 }
+
+/** `PurchasedItem` on a `Sale` (GET /sale/sales). `IsService: false` is a retail product. */
+export interface PurchasedItem {
+  Id: number;
+  IsService?: boolean;
+  Description?: string;
+  CategoryId?: number;
+  UnitPrice?: number;
+  Quantity?: number;
+  TotalAmount?: number;
+  Returned?: boolean;
+}
+
+export interface SalePayment {
+  Id: number;
+  Amount?: number;
+  Method?: number;
+  Type?: string;
+}
+
+/** `Sale` from GET /sale/sales. `SaleDateTime` is site-local; `SalesRepId` is the credited rep. */
+export interface Sale {
+  Id: number;
+  SaleDateTime?: string;
+  SalesRepId?: number;
+  ClientId?: string;
+  LocationId?: number;
+  PurchasedItems?: PurchasedItem[];
+  Payments?: SalePayment[];
+}

@@ -52,6 +52,7 @@ import {
   getContractsTool,
   getCustomPaymentMethodsTool,
 } from './tools/salesManagement.js';
+import { getSalesTool } from './tools/salesHistory.js';
 import {
   getSitesTool,
   getLocationsTool,
@@ -455,6 +456,21 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         name: 'getCustomPaymentMethods',
         description: 'List the site\'s custom payment methods with their ids. A Custom checkout payment needs one of these ids as metadata.id.',
         inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'getSales',
+        description: 'Read-only sales history (GET /sale/sales) with a per-sales-rep summary of retail product sales. Optionally matches product sales to staff on same-day appointments (best effort).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            startDate: { type: 'string', description: 'Start date (YYYY-MM-DD, site-local). Default: 1st of the current month' },
+            endDate: { type: 'string', description: 'End date (YYYY-MM-DD, site-local). Default: today' },
+            productsOnly: { type: 'boolean', description: 'Keep only retail product items (IsService false) and drop sales left empty' },
+            salesRepIds: { type: 'array', items: { type: 'number' }, description: 'Only sales credited to these sales rep (staff) IDs' },
+            clientIds: { type: 'array', items: { type: 'string' }, description: 'Only sales to these client IDs' },
+            matchAppointments: { type: 'boolean', description: 'Also attribute product sales to staff on any appointment the same client had that site-local day (default false)' },
+          },
+        },
       },
       {
         name: 'checkoutShoppingCart',
@@ -1013,6 +1029,17 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
       case 'getCustomPaymentMethods':
         const customPaymentMethodsResult = await getCustomPaymentMethodsTool();
         return { content: [{ type: 'text', text: JSON.stringify(customPaymentMethodsResult, null, 2) }] };
+
+      case 'getSales':
+        const salesResult = await getSalesTool({
+          startDate: args.startDate as string | undefined,
+          endDate: args.endDate as string | undefined,
+          productsOnly: args.productsOnly as boolean | undefined,
+          salesRepIds: args.salesRepIds as number[] | undefined,
+          clientIds: args.clientIds as string[] | undefined,
+          matchAppointments: args.matchAppointments as boolean | undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(salesResult, null, 2) }] };
 
       case 'checkoutShoppingCart':
         const checkoutResult = await checkoutShoppingCartTool(
