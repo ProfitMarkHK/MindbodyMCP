@@ -47,6 +47,14 @@ function productLines(sale: ReturnType<typeof mapSale>) {
   return sale.items.filter((i) => i.isService === false && !i.returned);
 }
 
+/**
+ * Tips are not sales of anything. The v6 PurchasedItem has no tip flag; prod sells them as a
+ * non-service line described "Tip" (CategoryId is site-specific, so it is not used).
+ * shortcut: matches the description only; switch to a flag if Mindbody adds one.
+ */
+const isTip = (i: NonNullable<Sale['PurchasedItems']>[number]) =>
+  i.IsService === false && i.Description?.trim().toLowerCase() === 'tip';
+
 function mapSale(s: Sale) {
   return {
     id: s.Id,
@@ -55,7 +63,7 @@ function mapSale(s: Sale) {
     salesRepId: s.SalesRepId,
     clientId: s.ClientId,
     locationId: s.LocationId,
-    items: (s.PurchasedItems ?? []).map((i) => ({
+    items: (s.PurchasedItems ?? []).filter((i) => !isTip(i)).map((i) => ({
       id: i.Id,
       description: i.Description,
       isService: i.IsService,
@@ -121,6 +129,8 @@ export async function getSalesTool(
   const clientFilter = options.clientIds?.length ? new Set(options.clientIds.map(String)) : undefined;
   let sales = rows
     .map(mapSale)
+    // A sale that was only a tip has nothing left to report.
+    .filter((s, i) => s.items.length > 0 || (rows[i].PurchasedItems ?? []).length === 0)
     .filter((s) => !repFilter || (s.salesRepId !== undefined && repFilter.has(s.salesRepId)))
     .filter((s) => !clientFilter || (s.clientId !== undefined && clientFilter.has(String(s.clientId))));
   if (options.productsOnly) {
