@@ -62,8 +62,8 @@ const service = (id: number, total: number) => ({
 });
 
 const SALES = [
-  // Rep 7: shampoo x2 plus a haircut, and a returned conditioner that must not count.
-  { Id: 1, SaleDateTime: "2026-11-03T10:15:00", SalesRepId: 7, ClientId: "c1", LocationId: 1,
+  // Rep 7 (wire shape: site-local time with a spurious Z, D-11): shampoo x2 plus a haircut, and a returned conditioner that must not count.
+  { Id: 1, SaleDateTime: "2026-11-03T10:15:00Z", SalesRepId: 7, ClientId: "c1", LocationId: 1,
     PurchasedItems: [product(101, 40, { Quantity: 2 }), service(201, 90), product(102, 25, { Returned: true })],
     Payments: [{ Id: 9, Amount: 155, Method: 1, Type: "Cash" }] },
   // Rep 8: service only.
