@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added agent guidance: `AGENTS.md` as the canonical guide, role definitions for Claude Code and OpenCode, and the ponytail plugin configuration.
 
 ### Changed
+- `getClients` accepts any number of `clientIds`. Production Mindbody refuses more than 20 `ClientIds` per `GET /client/clients` (`InvalidParameter`), so the IDs are sent in sequential batches of 20 and the results merged, de-duplicated by client ID; if any batch fails the whole call fails. Client-name lookups and the Next.js app's `getClients` batch the same way.
 - List reads now page through every result: each Mindbody list GET is fetched 200 rows at a time until the server's total is reached, instead of returning only the first page.
 - All dates and times use the studio's own timezone, read from the site record. `MINDBODY_SITE_TIMEZONE` is used only when the site record has no usable zone, and write operations refuse it when it disagrees with the record.
 - The `SiteId` header is no longer sent when `MINDBODY_SITE_ID` is unset.

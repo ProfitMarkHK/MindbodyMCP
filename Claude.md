@@ -225,7 +225,7 @@ Search and retrieve client information.
 
 **Parameters:**
 - `searchText` (optional): Search by name/email/phone
-- `clientIds` (optional): Specific client IDs
+- `clientIds` (optional): Specific client IDs, any number. Mindbody refuses more than 20 per request, so the server sends them in batches of 20 (`MAX_CLIENT_IDS_PER_REQUEST`), one after another, and merges the results de-duplicated by ID; `totalClients` is the merged count. If any batch fails, the call fails.
 - `lastModifiedDate` (optional): Recently modified clients
 - `isProspect` (optional): Filter prospects
 

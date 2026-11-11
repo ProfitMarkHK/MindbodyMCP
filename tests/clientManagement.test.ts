@@ -224,6 +224,46 @@ describe("getClientsTool", () => {
   });
 });
 
+describe("getClientsTool with more than 20 clientIds", () => {
+  /** Validates each query against the spec, records its ClientIds, and answers with those ids' rows. */
+  class BatchRecordingClient extends SpecValidatingClient {
+    readonly idBatches: string[][] = [];
+    constructor(private failOnCall?: number) {
+      super(spec, { Clients: [] });
+    }
+    async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+      await super.get(url, config);
+      const ids = (config?.params?.ClientIds ?? []) as string[];
+      this.idBatches.push(ids);
+      if (this.idBatches.length === this.failOnCall) throw new Error("chunk failed");
+      // c-0 comes back in every chunk, so the merge must de-duplicate it.
+      const rows = [...new Set(["c-0", ...ids])].map((Id) => ({ Id, FirstName: Id, LastName: "X" }));
+      return {
+        PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: rows.length, TotalResults: rows.length },
+        Clients: rows,
+      } as T;
+    }
+  }
+
+  const ids = Array.from({ length: 45 }, (_, i) => `c-${i}`);
+
+  it("splits 45 ids into 3 requests of at most 20 and merges the rows", async () => {
+    const client = new BatchRecordingClient();
+    const result = await getClientsTool(undefined, ids, undefined, undefined, client);
+
+    expect(client.idBatches.map((b) => b.length)).toEqual([20, 20, 5]);
+    expect(client.idBatches.flat()).toEqual(ids);
+    expect(result.clients.map((c) => c.id)).toEqual(ids);
+    expect(result.totalClients).toBe(45);
+  });
+
+  it("fails the whole call when any chunk fails", async () => {
+    await expect(
+      getClientsTool(undefined, ids, undefined, undefined, new BatchRecordingClient(2))
+    ).rejects.toThrow("chunk failed");
+  });
+});
+
 // ── getClientVisitsTool (C-15) ───────────────────────────────────────────────
 
 /** Spec `Visit`: ids only, no embedded `Location` or `Staff`. */

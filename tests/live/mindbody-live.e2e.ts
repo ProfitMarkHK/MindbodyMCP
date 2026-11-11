@@ -889,6 +889,20 @@ describe('live tier — clients', () => {
     expect(typeof result.totalClients).toBe('number');
   });
 
+  itLive('getClients batches more than 20 clientIds and returns every one', async () => {
+    // Read-only. Production refuses more than 20 ClientIds per request; the tool
+    // must batch, so the caller never sees that cap.
+    const all = await callTool('getClients', {});
+    const ids: string[] = [...new Set<string>(all.clients.map((c: { id: unknown }) => String(c.id)))].slice(0, 45);
+    expect(ids.length).toBeGreaterThan(20);
+
+    const result = await callTool('getClients', { clientIds: ids });
+    const returned = result.clients.map((c: { id: unknown }) => String(c.id));
+    expect(new Set(returned)).toEqual(new Set(ids));
+    expect(returned).toHaveLength(ids.length);
+    expect(result.totalClients).toBe(ids.length);
+  });
+
   itLive('addClient creates a client that is then readable back', async () => {
     const created = await callTool('addClient', {
       firstName: 'LiveE2E',

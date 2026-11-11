@@ -1,5 +1,8 @@
 import { MindbodyApiClient, getMindbodyClient } from './client';
 import { fetchAllPages, DEFAULT_PAGE_SIZE } from './paging';
+
+/** Production `GET /client/clients` refuses more than 20 ClientIds (InvalidParameter, observed 2026-11-11). */
+export const MAX_CLIENT_IDS_PER_REQUEST = 20;
 import { getSiteTimeZone, withDefaultDates } from './siteTime';
 import { errorMessage } from '../errors';
 import type {
@@ -327,18 +330,36 @@ export class MindbodyService {
   // ==========================================================================
 
   async getClients(params?: GetClientsParams): Promise<ListResult<Client>> {
-    const { items: rows, totalResults } = await fetchAllPages<MindbodyClient>(
-      this.client,
-      '/client/clients',
-      {
-        SearchText: params?.searchText,
-        ClientIds: params?.clientIds,
-        LastModifiedDate: params?.lastModifiedDate,
-        IsProspect: params?.isProspect,
-      },
-      'Clients',
-      params?.limit || DEFAULT_PAGE_SIZE
-    );
+    const query = {
+      SearchText: params?.searchText,
+      LastModifiedDate: params?.lastModifiedDate,
+      IsProspect: params?.isProspect,
+    };
+    const pageSize = params?.limit || DEFAULT_PAGE_SIZE;
+    const ids = params?.clientIds?.length ? [...new Set(params.clientIds)] : undefined;
+    let rows: MindbodyClient[];
+    let totalResults: number;
+    if (!ids) {
+      ({ items: rows, totalResults } = await fetchAllPages<MindbodyClient>(
+        this.client, '/client/clients', { ...query, ClientIds: params?.clientIds }, 'Clients', pageSize
+      ));
+    } else {
+      // Production refuses more than MAX_CLIENT_IDS_PER_REQUEST ClientIds per call:
+      // batch sequentially, fail on any chunk, de-duplicate by Id.
+      const byId = new Map<string, MindbodyClient>();
+      for (let i = 0; i < ids.length; i += MAX_CLIENT_IDS_PER_REQUEST) {
+        const { items } = await fetchAllPages<MindbodyClient>(
+          this.client,
+          '/client/clients',
+          { ...query, ClientIds: ids.slice(i, i + MAX_CLIENT_IDS_PER_REQUEST) },
+          'Clients',
+          pageSize
+        );
+        for (const row of items) if (!byId.has(String(row.Id))) byId.set(String(row.Id), row);
+      }
+      rows = [...byId.values()];
+      totalResults = rows.length;
+    }
     const clients = rows.map((c: MindbodyClient) => ({
       id: c.Id,
       firstName: c.FirstName,
