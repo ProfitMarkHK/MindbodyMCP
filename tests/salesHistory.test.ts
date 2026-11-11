@@ -49,7 +49,7 @@ const page = (key: string, rows: unknown[]) => ({
   [key]: rows,
 });
 
-const STAFF = page("Staff", [
+const STAFF = page("StaffMembers", [
   { Id: 7, FirstName: "Lena", LastName: "Ko" },
   { Id: 8, FirstName: "Ana", LastName: "Ruiz" },
 ]);
@@ -122,6 +122,24 @@ describe("getSalesTool", () => {
     expect(result.sales.map((s) => s.id)).toEqual([1, 3]);
     expect(result.sales[0].items.map((i) => i.id)).toEqual([101, 102]);
     expect(result.bySalesRep.map((r) => r.salesRepId)).toEqual([7]);
+  });
+
+  it("drops tip lines everywhere, and sales that were only a tip", async () => {
+    const tip = (amount: number) => product(10, amount, { Description: "Tip", CategoryId: 21 });
+    const rows = [
+      { Id: 4, SaleDateTime: "2026-11-06T10:00:00", SalesRepId: 7, ClientId: "c4", LocationId: 1,
+        PurchasedItems: [product(104, 30), tip(50)], Payments: [] },
+      { Id: 5, SaleDateTime: "2026-11-06T11:00:00", SalesRepId: 8, ClientId: "c5", LocationId: 1,
+        PurchasedItems: [tip(200)], Payments: [] },
+    ];
+    const client = new RoutedClient({ "/sale/sales": page("Sales", rows), "/staff/staff": STAFF });
+    const result = await run(client);
+
+    expect(result.sales.map((s) => s.id)).toEqual([4]);
+    expect(result.sales[0].items.map((i) => i.id)).toEqual([104]);
+    expect(result.bySalesRep).toEqual([
+      { salesRepId: 7, staffName: "Lena Ko", saleCount: 1, productItemCount: 1, productTotal: 30 },
+    ]);
   });
 
   it("filters by salesRepIds and clientIds client-side", async () => {

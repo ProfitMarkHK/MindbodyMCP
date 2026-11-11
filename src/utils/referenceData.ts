@@ -139,7 +139,7 @@ export async function getStaffNames(
         deps.client ?? mindbodyClient,
         '/staff/staff',
         {},
-        'Staff'
+        'StaffMembers'
       );
       return items;
     }, staffDisplayName);
