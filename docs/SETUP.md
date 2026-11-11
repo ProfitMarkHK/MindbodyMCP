@@ -237,6 +237,41 @@ With desktop app integration, each launch needs a 1Password approval. An MCP ser
    export OP_SERVICE_ACCOUNT_TOKEN="$(security find-generic-password -s op-service-account -a mindbody-prod -w)"; exec op run -- bun run src/index.ts
    ```
 
+#### Claude Desktop on macOS, with an env file
+
+Claude Desktop can launch the same instance from `claude_desktop_config.json` instead of `claude mcp add`. Keep the four `op://` references in an env file outside the repo, readable only by you:
+
+```bash
+mkdir -p ~/.config/mindbody
+cat > ~/.config/mindbody/prod.env <<'EOF'
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
+EOF
+chmod 600 ~/.config/mindbody/prod.env
+```
+
+The file holds references, not values. Then add the server under `mcpServers`, replacing `<repo>` with the absolute path of your checkout:
+
+```json
+"mindbody-prod": {
+  "command": "/bin/zsh",
+  "args": [
+    "-lc",
+    "export PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; cd <repo> && export OP_SERVICE_ACCOUNT_TOKEN=\"$(security find-generic-password -s op-service-account -a mindbody-prod -w)\" && exec op run --no-masking --env-file=\"$HOME/.config/mindbody/prod.env\" -- bun run src/index.ts"
+  ]
+}
+```
+
+- The app starts servers with a minimal `PATH`, so the command sets one that finds `bun` and `op`, and changes into the checkout itself.
+- It runs `src/index.ts` directly, so the instance serves whatever the checkout has; there is no build step. Restart it after pulling new code: quit and reopen Claude Desktop.
+- Check the command resolves before restarting the app. This prints `resolved` or `unresolved` per variable, never a value:
+
+  ```bash
+  OP_SERVICE_ACCOUNT_TOKEN="$(security find-generic-password -s op-service-account -a mindbody-prod -w)" op run --env-file="$HOME/.config/mindbody/prod.env" -- sh -c 'for v in MINDBODY_API_KEY MINDBODY_SITE_ID MINDBODY_SOURCE_NAME MINDBODY_SOURCE_PASSWORD; do eval "x=\${$v}"; case "$x" in ""|op://*) echo "$v unresolved";; *) echo "$v resolved";; esac; done'
+  ```
+
 The token gives standing read access to the production credentials. Revoke it in 1Password if it leaks. The instance uses live credentials, so it can book, cancel and charge for real.
 
 ### Check both instances
