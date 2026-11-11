@@ -221,7 +221,23 @@ The production instance pulls its four required values from 1Password at launch,
    claude mcp add mindbody-prod --scope user -e MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field> -e MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field> -e MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field> -e MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field> -- op run -- bun run --cwd E:/MindbodyMCP src/index.ts
    ```
 
-Each launch of the production instance triggers a 1Password approval through the desktop app. The instance uses live credentials, so it can book, cancel and charge for real.
+With desktop app integration, each launch needs a 1Password approval. An MCP server started by Claude has no terminal to show that prompt, so `op` reports `account is not signed in` and the instance fails to connect. To launch without a prompt, use a 1Password service account:
+
+1. Move the production item to a vault of its own. Service accounts cannot read Personal or Private vaults. Moving an item gives it a new ID, so update the `op://` references afterwards.
+2. Create a service account with read-only access to that vault only. Do not reuse the sandbox's service account.
+3. Store its token in the macOS Keychain (you are prompted for it, so it never appears in shell history):
+
+   ```bash
+   security add-generic-password -s op-service-account -a mindbody-prod -w
+   ```
+
+4. Export the token in the launch command, before `op run`:
+
+   ```bash
+   export OP_SERVICE_ACCOUNT_TOKEN="$(security find-generic-password -s op-service-account -a mindbody-prod -w)"; exec op run -- bun run src/index.ts
+   ```
+
+The token gives standing read access to the production credentials. Revoke it in 1Password if it leaks. The instance uses live credentials, so it can book, cancel and charge for real.
 
 ### Check both instances
 
