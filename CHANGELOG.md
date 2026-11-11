@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
 - Brought the tool set from 38 to 41 with `getClassVisits` (attendance for a single class), `cancelAppointments` and `cancelEnrollmentVisits`.
 - Added dependency injection for the API client and cache in every tool, so tests run without the global client.
 - Added an OpenAPI-validated stub client for tool tests, so test requests are checked against the Mindbody v6 spec.

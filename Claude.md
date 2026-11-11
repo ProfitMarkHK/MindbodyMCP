@@ -148,7 +148,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (42 tools)
+## Available Tools (43 tools)
 
 ### 📅 Class Management
 
@@ -284,6 +284,15 @@ View client's contracts and auto-renewing memberships.
 
 **Parameters:**
 - `clientId` (required): Client ID
+
+#### `getClientFormulaNotes`
+Read a client's formula notes (`GET /client/clientformulanotes`, every page fetched). Read-only: adding and deleting notes are not exposed. There is no site-wide listing; each call is scoped to a client, an appointment, or both.
+
+**Parameters** (at least one is required; with neither, the call is refused before any request):
+- `clientId` (optional): Client ID
+- `appointmentId` (optional): Only notes tied to this appointment
+
+**Returns:** `{ formulaNotes: [{ id, clientId, appointmentId, entryDate, note, siteId, siteName, staffName }], totalFormulaNotes }`. Notes are cross-regional, so a note's `clientId` is the client's ID at the site the note came from and can differ from the requested one. `staffName` is set only for notes tied to an appointment.
 
 ### 💰 Sales & Commerce
 

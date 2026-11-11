@@ -6,6 +6,7 @@
  *   - `clientProfile.ts`  — getClients, addClient, updateClient (identity)
  *   - `clientAccount.ts`  — memberships, contracts, balances (account state)
  *   - `clientActivity.ts` — visits, arrival (attendance)
+ *   - `clientNotes.ts`    — formula notes
  *
  * Re-exports are explicit rather than `export *`: a new export in a sub-file is
  * then a reviewable change here, not silent public-surface drift.
@@ -20,3 +21,4 @@ export {
   getClientContractsTool,
 } from './clientAccount.js';
 export { getClientVisitsTool, addClientArrivalTool } from './clientActivity.js';
+export { getClientFormulaNotesTool } from './clientNotes.js';

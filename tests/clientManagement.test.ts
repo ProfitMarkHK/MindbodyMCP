@@ -30,6 +30,7 @@ import {
   addClientTool,
   getClientAccountBalancesTool,
   getClientContractsTool,
+  getClientFormulaNotesTool,
   getClientMembershipsTool,
   getClientVisitsTool,
   getClientsTool,
@@ -691,5 +692,67 @@ describe("addClientArrivalTool", () => {
     const [post] = recorder.posts;
     expect(post.url).toBe("/client/addarrival");
     expect(post.body).toEqual({ ClientId: "c-9", LocationId: 1 });
+  });
+});
+// ── getClientFormulaNotesTool ────────────────────────────────────────────────
+
+const formulaNotesFixture = {
+  FormulaNotes: [
+    {
+      Id: 501,
+      ClientId: "100000123",
+      AppointmentId: 9001,
+      EntryDate: "2026-10-04T10:15:00",
+      Note: "6N + 20vol, 35 min",
+      SiteId: 1,
+      SiteName: "Main Site",
+      StaffFirstName: "Lena",
+      StaffLastName: "Park",
+      StaffDisplayName: "Lena P.",
+    },
+    {
+      Id: 502,
+      ClientId: "100000123",
+      EntryDate: "2026-09-01T09:00:00",
+      Note: "Patch test clear",
+      SiteId: 1,
+      SiteName: "Main Site",
+      StaffFirstName: null,
+      StaffLastName: null,
+      StaffDisplayName: null,
+    },
+  ],
+};
+
+describe("getClientFormulaNotesTool", () => {
+  it("maps FormulaNoteResponse fields and the staff name", async () => {
+    const result = await getClientFormulaNotesTool("c-1", undefined, makeClient(formulaNotesFixture));
+
+    expect(result.totalFormulaNotes).toBe(2);
+    expect(result.formulaNotes[0]).toEqual({
+      id: 501,
+      clientId: "100000123",
+      appointmentId: 9001,
+      entryDate: "2026-10-04T10:15:00",
+      note: "6N + 20vol, 35 min",
+      siteId: 1,
+      siteName: "Main Site",
+      staffName: "Lena P.",
+    });
+    // A note with no appointment has no staff.
+    expect(result.formulaNotes[1].staffName).toBeUndefined();
+  });
+
+  it("accepts an appointmentId on its own", async () => {
+    const result = await getClientFormulaNotesTool(undefined, 9001, makeClient(formulaNotesFixture));
+    expect(result.totalFormulaNotes).toBe(2);
+  });
+
+  it("refuses a call with neither clientId nor appointmentId, before any request", async () => {
+    const recorder = new RecordingClient({});
+    await expect(getClientFormulaNotesTool(undefined, undefined, recorder)).rejects.toThrow(
+      /clientId, an appointmentId/
+    );
+    expect(recorder.posts).toHaveLength(0);
   });
 });

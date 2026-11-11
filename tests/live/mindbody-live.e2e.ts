@@ -80,6 +80,8 @@ const BUN_BINARY = process.execPath;
 
 /** Live API calls are slow and the client retries 5xx with 1s+2s+4s backoff. */
 const CALL_TIMEOUT_MS = 60_000;
+/** How many clients the read-only formula note test checks before giving up. */
+const FORMULA_NOTE_CLIENT_SCAN = 40;
 const CONNECT_TIMEOUT_MS = 60_000;
 
 /**
@@ -943,6 +945,49 @@ describe('live tier — clients', () => {
 
     const readBack = await callTool('getClients', { clientIds: [createdClientId] });
     expect(readBack.clients[0]).toMatchObject({ firstName: 'LEFTOVER', lastName: RUN_TOKEN });
+  });
+
+  itLive('getClientFormulaNotes reads a client\'s formula notes, read-only', async () => {
+    const name = "getClientFormulaNotes reads a client's formula notes, read-only";
+    // Read-only: the server exposes no way to add a note, so walk existing
+    // clients until one has notes. Bounded so a noteless site cannot run long.
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, FORMULA_NOTE_CLIENT_SCAN);
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientFormulaNotes', { clientId: String(candidate.id) });
+      expect(Array.isArray(result.formulaNotes)).toBe(true);
+      expect(result.totalFormulaNotes).toBe(result.formulaNotes.length);
+      if (result.totalFormulaNotes > 0) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a formula note, so the`,
+        'field mapping is untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    for (const note of found.result.formulaNotes) {
+      expect(Number.isInteger(note.id)).toBe(true);
+      expect(typeof note.note).toBe('string');
+      expect(typeof note.entryDate).toBe('string');
+      expect(typeof note.siteId).toBe('number');
+    }
+    console.log(
+      `\n LIVE formula notes: client ${found.clientId} has ${found.result.totalFormulaNotes} ` +
+        `(first note id ${found.result.formulaNotes[0].id}).\n`
+    );
+  }, FORMULA_NOTE_CLIENT_SCAN * CALL_TIMEOUT_MS);
+
+  itLive('getClientFormulaNotes with neither id is refused', async () => {
+    if (!client) throw new Error('MCP client is not connected; the live tier did not start.');
+    const result = await client.callTool({ name: 'getClientFormulaNotes', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('needs a clientId, an appointmentId, or both');
   });
 });
 
