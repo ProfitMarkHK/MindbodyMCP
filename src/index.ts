@@ -54,6 +54,13 @@ import {
 } from './tools/salesManagement.js';
 import { getSalesTool } from './tools/salesHistory.js';
 import {
+  getSessionTypePricingOptionsTool,
+  setSessionTypeServiceTool,
+  resolveCheckoutServiceTool,
+} from './tools/checkoutPricing.js';
+import { getPricingMapTool, setStylistTierTool } from './tools/stylistTiers.js';
+import { STYLIST_TIERS, type StylistTier } from './utils/pricingMap.js';
+import {
   getSitesTool,
   getLocationsTool,
   getProgramsTool,
@@ -411,6 +418,62 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             classId: { type: 'number', description: 'Class ID' },
             hideRelatedPrograms: { type: 'boolean', description: 'Hide related programs' },
           },
+        },
+      },
+      {
+        name: 'resolveCheckoutService',
+        description: 'At checkout, pick the single-visit service this staff member\'s title books for a session type, from the local pricing map. Checks the mapping against the live catalogue and returns the price. Pass serviceId as the cart item metadata.id. Any status other than "resolved" means stop and ask; never guess a title.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            staffId: { type: 'number', description: 'Staff ID of the stylist performing the session' },
+            sessionTypeId: { type: 'number', description: 'Session type ID of the appointment' },
+            locationId: { type: 'number', description: 'Location ID (optional)' },
+          },
+          required: ['staffId', 'sessionTypeId'],
+        },
+      },
+      {
+        name: 'getPricingMap',
+        description: 'The local staff title and session-type pricing map, with live staff names. Flags staff no longer on the staff list.',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      {
+        name: 'setStylistTier',
+        description: `Set or clear one staff member's title in the local pricing map. Titles: ${STYLIST_TIERS.join(', ')}. Pass tier null to clear. The staff ID must be on the live staff list.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            staffId: { type: 'number', description: 'Staff ID' },
+            tier: { type: ['string', 'null'], enum: [...STYLIST_TIERS, null], description: 'Title, or null to clear' },
+          },
+          required: ['staffId', 'tier'],
+        },
+      },
+      {
+        name: 'getSessionTypePricingOptions',
+        description: 'Single-visit services that book a session type, with a suggested title for each (from the service name) and the mapping currently stored. Use it to fill in setSessionTypeService.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionTypeId: { type: 'number', description: 'Session type ID' },
+            locationId: { type: 'number', description: 'Location ID (optional)' },
+          },
+          required: ['sessionTypeId'],
+        },
+      },
+      {
+        name: 'setSessionTypeService',
+        description: 'Set or clear the single-visit service a title books for a session type. The service must be offered for that session type in the live catalogue. Pass serviceId null to clear.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionTypeId: { type: 'number', description: 'Session type ID' },
+            tier: { type: 'string', enum: [...STYLIST_TIERS], description: 'Title' },
+            serviceId: { type: ['number', 'null'], description: 'Service ID, or null to clear' },
+            locationId: { type: 'number', description: 'Location ID (optional)' },
+          },
+          required: ['sessionTypeId', 'tier', 'serviceId'],
         },
       },
       {
@@ -999,7 +1062,47 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.hideRelatedPrograms as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(servicesResult, null, 2) }] };
-      
+
+      case 'resolveCheckoutService': {
+        const resolved = await resolveCheckoutServiceTool(
+          args.staffId as number,
+          args.sessionTypeId as number,
+          args.locationId as number | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(resolved, null, 2) }] };
+      }
+
+      case 'getPricingMap': {
+        const pricingMap = await getPricingMapTool();
+        return { content: [{ type: 'text', text: JSON.stringify(pricingMap, null, 2) }] };
+      }
+
+      case 'setStylistTier': {
+        const updatedTier = await setStylistTierTool(
+          args.staffId as number,
+          args.tier as StylistTier | null
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(updatedTier, null, 2) }] };
+      }
+
+      case 'getSessionTypePricingOptions': {
+        const options = await getSessionTypePricingOptionsTool(
+          args.sessionTypeId as number,
+          args.locationId as number | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(options, null, 2) }] };
+      }
+
+      case 'setSessionTypeService': {
+        const updatedService = await setSessionTypeServiceTool(
+          args.sessionTypeId as number,
+          args.tier as StylistTier,
+          args.serviceId as number | null,
+          args.locationId as number | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(updatedService, null, 2) }] };
+      }
+
       case 'getPackages':
         const packagesResult = await getPackagesTool(
           args.locationId as number | undefined,

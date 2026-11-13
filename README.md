@@ -89,6 +89,7 @@ MINDBODY_SOURCE_PASSWORD=your_source_password
 # Optional settings
 MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
+# MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services). Unset disables the checkout resolver
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless this is set; then only within N hours of the start
 CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
@@ -144,7 +145,7 @@ Or use the GitHub repository directly:
 
 ## 🛠️ Available Tools
 
-The server provides 44 tools across 6 categories:
+The server provides 49 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -169,6 +170,11 @@ The server provides 44 tools across 6 categories:
 
 ### 💰 Sales & Commerce
 - `getServices` - View available services. `priority` is the string "High"/"Medium"/"Low" and `taxIncludedAmount` is a money amount, because that is what the API defines
+- `resolveCheckoutService` - At checkout, the single-visit service for a stylist's title and a session type, checked against the live catalogue. Needs the local pricing map (see below); any status other than `resolved` means stop and ask
+- `getPricingMap` - The local staff title and session-type map, with live staff names. Flags mapped staff no longer on the staff list
+- `setStylistTier` - Set or clear one staff member's title. Ungated until RBAC lands
+- `getSessionTypePricingOptions` - Single-visit services for a session type, with a suggested title from each service name
+- `setSessionTypeService` - Set or clear the service a title books for a session type. The service must be offered for that session type
 - `getPackages` - List class packages. A package has no price of its own: `classCount` and `price` are summed from the services it contains
 - `getProducts` - Browse retail products. Categories are exposed as ids; the API returns no category names
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it

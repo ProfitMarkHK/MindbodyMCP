@@ -149,7 +149,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (44 tools)
+## Available Tools (49 tools)
 
 ### 📅 Class Management
 
@@ -674,7 +674,7 @@ One appointment, followed from booking to checkout. Each step names its tool.
 - **Book:** `getBookableItems` finds a window, then `addAppointment` books it (`clientId`, `staffId`, `locationId`, `sessionTypeId`, `startDateTime`). A window is not enough: the start must be one of the session type's active times (`getActiveSessionTimes`), or Mindbody refuses it with `InvalidBookingTime`. Choose a `startDateTime` on one of those times.
 - **Reschedule:** `updateAppointment` with a new `startDateTime`.
 - **Check in:** `updateAppointment` with `execute: "arrive"` marks the appointment arrived. `addClientArrival` checks the client in at the location. It is a no-op in the live tier by decision, because it consumes a paid visit (see [No-op policy](tests/live/README.md#no-op-policy)).
-- **Check out:** `checkoutShoppingCart`. Pay with the pricing option that covers the appointment: find it with `getServices` filtered by `sessionTypeIds` (an array, e.g. `[sessionTypeId]`), and send that service as the cart item with the booked appointment's ID in `appointmentIds`, so the sale reconciles it.
+- **Check out:** `checkoutShoppingCart`. Pay with the pricing option that covers the appointment: find it with `getServices` filtered by `sessionTypeIds` (an array, e.g. `[sessionTypeId]`), and send that service as the cart item with the booked appointment's ID in `appointmentIds`, so the sale reconciles it. Pick the service with `resolveCheckoutService(staffId, sessionTypeId)`, which reads the local pricing map (see docs/API.md, "Pricing map"); stop and ask on any status other than `resolved`.
 - **Cancel:** `cancelAppointments` (`clientId`, `appointmentIds`). It works only before check-out. A checked-out appointment is `Completed`, and the guard refuses it.
 
 The live tier ([`tests/live/README.md`](tests/live/README.md)) runs this lifecycle against the Mindbody sandbox. By default it covers booking, reschedule, appointment arrival, a comp-paid checkout, a contract purchase funded by account credit, and cancellation (which the checkout prevents: the appointment is re-noted as a LEFTOVER instead). One workflow is a deliberate no-op there: `addClientArrival`, because it consumes a paid visit. See the [No-op policy](tests/live/README.md#no-op-policy). The tier has run against the sandbox with authentication; its last recorded result is in that file's Status section, and the field behaviour it asserts is still being verified.
@@ -696,6 +696,7 @@ CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
+# MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
 ```
 

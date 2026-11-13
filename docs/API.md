@@ -759,3 +759,21 @@ Required credentials:
 | 401 | Unauthorized | Token expired, will auto-refresh |
 | 429 | Rate limit exceeded | Wait and retry, check cache settings |
 | 500 | Server error | A GET was already retried 3 times. A POST was not retried: reconcile first (see below) |
+
+## Pricing map (checkout service by stylist title)
+
+Mindbody prices the same session differently by stylist title (for example "Highlights & Finish" for an Emerging stylist vs a Director). The catalogue does not say which service a session type books, so the server keeps a local map instead of guessing from names.
+
+- **File.** `<MINDBODY_PRICING_MAP_DIR>/pricing.<siteId>.json`, keyed by the configured `MINDBODY_SITE_ID`. Holds `staff` (staff ID to title) and `sessionTypeServices` (session type ID, then title, to single-visit service ID). It is read on every call, so an edit takes effect immediately. A sibling `.bak` keeps the previous version and `pricing.<siteId>.audit.jsonl` logs each change.
+- **Titles.** `emerging`, `stylist`, `senior`, `creative`, `director`. "Davy" is a stylist's personal price list in the catalogue, not a title.
+- **Writes.** `setStylistTier` and `setSessionTypeService` are ungated until RBAC exists. Staff IDs must be on the live staff list; services must be offered for the session type and be single-visit.
+- **Checkout.** `resolveCheckoutService(staffId, sessionTypeId)` returns `resolved` with the `serviceId` to pass as the cart item's `metadata.id`, and the live price. Any other status is a reason to stop and ask, never to fall back to a default title.
+
+| `status` | Meaning |
+|----------|---------|
+| `resolved` | Title and service found, and the service is still offered in the live catalogue |
+| `map_absent` | `MINDBODY_PRICING_MAP_DIR` unset, or no file for this site yet |
+| `map_invalid` | File fails validation (bad title, wrong site ID, non-numeric key) |
+| `no_tier` | The staff member has no title in the map |
+| `no_service_mapping` | The title has no service for this session type |
+| `service_not_in_catalogue` | The mapped service is no longer offered for the session type |
