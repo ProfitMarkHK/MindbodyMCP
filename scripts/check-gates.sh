@@ -138,10 +138,15 @@ if [ ! -f "$SPEC_JSON" ]; then
   fail "Gate 16 OpenAPI spec integrity could not run: ${SPEC_JSON} is missing (run: bun run spec:update)"
 elif [ ! -f "$SPEC_LOCK" ]; then
   fail "Gate 16 OpenAPI spec integrity could not run: ${SPEC_LOCK} is missing (run: bun run spec:update)"
-elif ! command -v shasum >/dev/null 2>&1; then
-  fail "Gate 16 OpenAPI spec integrity could not run: no sha256 tool found (shasum is absent from this environment)"
+elif ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
+  fail "Gate 16 OpenAPI spec integrity could not run: no sha256 tool found (neither shasum nor sha256sum is on PATH)"
 else
-  SPEC_ACTUAL=$(shasum -a 256 "$SPEC_JSON" | awk '{print $1}')
+  # shasum ships with macOS and most Linux; Git Bash on Windows has sha256sum.
+  if command -v shasum >/dev/null 2>&1; then
+    SPEC_ACTUAL=$(shasum -a 256 "$SPEC_JSON" | awk '{print $1}')
+  else
+    SPEC_ACTUAL=$(sha256sum "$SPEC_JSON" | awk '{print $1}')
+  fi
   SPEC_PINNED=$(head -n 1 "$SPEC_LOCK" | tr -d '[:space:]')
 
   if ! printf '%s' "$SPEC_ACTUAL" | grep -qE "$SPEC_HEX"; then

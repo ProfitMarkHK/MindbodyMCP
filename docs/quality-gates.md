@@ -10,10 +10,19 @@ file in sync with the tooling. An out-of-date checklist is a bug.
 bun run check
 ```
 
-Equivalent to `bash scripts/check-gates.sh`, which lives in
+`bun run check` runs [`scripts/check.ts`](../scripts/check.ts), which picks the
+right `bash` for the host and then runs
 [`scripts/check-gates.sh`](../scripts/check-gates.sh). It runs every automated
 gate and exits non-zero on any automated failure, so it also works in the
 pre-commit hook and in local or remote automation.
+
+The same command works from PowerShell, cmd, Git Bash, Linux and macOS. On
+Windows the launcher uses Git Bash, never `C:\Windows\System32\bash.exe`: that
+is the WSL launcher, which runs the script in a Linux distro with no bun. Set
+`CHECK_BASH` to override the bash it picks. Inside WSL, run `bun run check` from
+a WSL shell with bun and the dependencies installed in WSL (the launcher then
+uses WSL's own `bash`); a Windows checkout and its `node_modules` cannot be
+shared with WSL.
 
 Local enforcement is the enforcement point. The runner is installed as a
 pre-commit hook with one command per clone:

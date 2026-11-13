@@ -31,6 +31,13 @@ build/
 *.swo
 *~
 
+# Agent worktrees
+# Claude Code and OpenCode worktrees are full copies of this repo, so anything
+# that walks the tree finds every file twice or more: rg and fd both honour
+# .gitignore, and bun test would run the whole suite once per worktree (which is
+# why bunfig.toml scopes discovery to tests/). These dirs hold no tracked files.
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

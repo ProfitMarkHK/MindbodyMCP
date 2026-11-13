@@ -56,7 +56,7 @@
     "start:prod": "MCP_TRANSPORT=sse MCP_PORT=3000 op run -- bun run src/index.ts",
     "build": "tsc && chmod +x dist/index.js",
     "test": "bun test",
-    "check": "bash scripts/check-gates.sh",
+    "check": "bun scripts/check.ts",
     "test:tool": "bun run tests/test-tool.ts",
     "test:sse": "bun run tests/test-sse-client.ts",
     "benchmark": "bun run tests/benchmark.ts",
@@ -80,13 +80,13 @@
   "devDependencies": {
     "@types/bun": "^1.1.6",
     "@types/node": "^22.8.4",
-    "rimraf": "^6.0.1",
+    "rimraf": "^6.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   },
   "engines": {
     "bun": ">=1.0.0",
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,

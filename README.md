@@ -59,7 +59,7 @@ bun run start # or npm start
 
 ## 📋 Prerequisites
 
-- Node.js 18+ or Bun 1.0+
+- Node.js 20+ or Bun 1.0+
 - Mindbody API credentials (API Key, Site ID, Source credentials)
 - 1Password CLI (`op`) to run this repo's server scripts; see [1Password setup](#1password-setup)
 - Claude Desktop or any MCP-compatible client

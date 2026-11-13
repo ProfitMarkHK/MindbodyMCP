@@ -43,7 +43,7 @@ bun --version
 If you prefer Node.js:
 
 ```bash
-# Ensure Node.js 18+ is installed
+# Ensure Node.js 20+ is installed
 node --version
 
 # Switch to Node.js configuration
