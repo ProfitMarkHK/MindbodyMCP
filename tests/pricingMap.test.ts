@@ -127,6 +127,13 @@ describe("pricing map validation", () => {
 });
 
 describe("resolveCheckoutService", () => {
+  it("rejects a non-positive or non-integer staffId or sessionTypeId", async () => {
+    for (const bad of [0, -1, 1.5, NaN]) {
+      await expect(resolveCheckoutServiceTool(bad, 277, undefined, stubClient())).rejects.toThrow("staffId must be a positive integer");
+      await expect(resolveCheckoutServiceTool(111, bad, undefined, stubClient())).rejects.toThrow("sessionTypeId must be a positive integer");
+    }
+  });
+
   it("returns map_absent when no map is configured", async () => {
     const result = await resolveCheckoutServiceTool(111, 277, undefined, stubClient());
     expect(result.status).toBe("map_absent");

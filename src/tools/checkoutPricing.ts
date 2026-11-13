@@ -136,6 +136,12 @@ export async function resolveCheckoutServiceTool(
   locationId?: number,
   client: IMindbodyClient = mindbodyClient
 ) {
+  if (!Number.isInteger(staffId) || staffId <= 0) {
+    throw new PricingMapError('staffId must be a positive integer');
+  }
+  if (!Number.isInteger(sessionTypeId) || sessionTypeId <= 0) {
+    throw new PricingMapError('sessionTypeId must be a positive integer');
+  }
   const state = await loadPricingMap();
   if (state.status !== 'ok') {
     return { status: state.status === 'absent' ? 'map_absent' : 'map_invalid', reason: state.reason };
