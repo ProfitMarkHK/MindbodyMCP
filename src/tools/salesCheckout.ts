@@ -22,6 +22,11 @@ export async function checkoutShoppingCartTool(
     quantity: number;
     /** Existing appointment IDs this item pays for (reconciles). */
     appointmentIds?: number[];
+    /**
+     * Lowers this item's price, sent as `DiscountAmount`. Non-negative; Mindbody
+     * ignores it for packages. There is no field that raises or replaces a price.
+     */
+    discountAmount?: number;
     appointmentBookingRequests?: Array<{
       staffId: number;
       locationId: number;
@@ -95,6 +100,20 @@ export async function checkoutShoppingCartTool(
     };
   }
 
+  // `DiscountAmount` can only lower a price (a negative value on a 0-priced
+  // service left the total at 0 on the sandbox), so refuse anything else.
+  const badDiscount = items.filter(
+    (item) =>
+      item.discountAmount !== undefined &&
+      !(typeof item.discountAmount === 'number' && Number.isFinite(item.discountAmount) && item.discountAmount >= 0)
+  );
+  if (badDiscount.length > 0) {
+    return {
+      success: false,
+      message: `discountAmount must be a non-negative number (got ${badDiscount.map((item) => JSON.stringify(item.discountAmount)).join(', ')}); nothing was charged.`,
+    };
+  }
+
   // A cart item's appointmentIds are paid for by THIS client's payments, so each
   // must be this client's own. All-or-nothing, before anything is sent; fails
   // closed when the site zone or the lookup is unavailable.
@@ -121,7 +140,10 @@ export async function checkoutShoppingCartTool(
   }
 
   try {
-    // Map items to API format
+    // Map items to API format. `Item.Metadata` is rebuilt here, not passed
+    // through: only `id` (Service, Product, Package) or `amount` (Tip) is sent,
+    // and any other caller key (e.g. `price`) is dropped. The API has no
+    // per-sale price override (issue #32), so there is nothing else to send.
     const cartItems = items.map(item => {
       const baseItem: any = {
         Quantity: item.quantity,
@@ -159,6 +181,10 @@ export async function checkoutShoppingCartTool(
 
       if (item.appointmentIds && item.appointmentIds.length > 0) {
         baseItem.AppointmentIds = item.appointmentIds;
+      }
+
+      if (item.discountAmount !== undefined) {
+        baseItem.DiscountAmount = item.discountAmount;
       }
 
       if (item.appointmentBookingRequests) {

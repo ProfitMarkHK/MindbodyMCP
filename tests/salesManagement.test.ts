@@ -905,3 +905,67 @@ describe("checkoutShoppingCartTool — dry run (test)", () => {
     expect(client.bodies).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #32 — item metadata keys and discountAmount
+// ---------------------------------------------------------------------------
+
+describe("checkoutShoppingCartTool — item metadata and discountAmount (#32)", () => {
+  const payments = [{ type: "Comp" as const, metadata: { amount: 90 } }];
+  const service = (extra: Record<string, unknown> = {}) => [
+    { item: { type: "Service" as const, metadata: { id: 1395 } }, quantity: 1, ...extra } as any,
+  ];
+  const run = (client: RecordingClient, items: any[]) =>
+    checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
+
+  it("drops an unknown metadata key such as price: there is no price override", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, [
+      { item: { type: "Service", metadata: { id: 1395, price: 250, name: "x" } }, quantity: 1 },
+    ]);
+    expect(client.bodies[0].data.Items[0].Item).toEqual({ Type: "Service", Metadata: { Id: 1395 } });
+  });
+
+  it("sends only Amount for a Tip", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, [{ item: { type: "Tip", metadata: { amount: 5, id: 9, price: 1 } }, quantity: 1 }]);
+    expect(client.bodies[0].data.Items[0].Item).toEqual({ Type: "Tip", Metadata: { Amount: 5 } });
+  });
+
+  it("sends discountAmount as DiscountAmount on that cart item", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, service({ discountAmount: 10 }));
+    expect(client.bodies[0].data.Items[0].DiscountAmount).toBe(10);
+  });
+
+  it("sends no DiscountAmount key when discountAmount is omitted", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, service());
+    expect(Object.keys(client.bodies[0].data.Items[0])).not.toContain("DiscountAmount");
+  });
+
+  for (const bad of [-1, "10", Number.NaN, null]) {
+    it(`refuses discountAmount ${typeof bad === "string" ? JSON.stringify(bad) : String(bad)} before any request`, async () => {
+      const client = new RecordingClient(checkoutResponse);
+      const result = await run(client, service({ discountAmount: bad }));
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("discountAmount");
+      expect(client.bodies).toHaveLength(0);
+    });
+  }
+
+  it("sends appointmentBookingRequests as AppointmentBookingRequests", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(
+      client,
+      service({
+        appointmentBookingRequests: [
+          { staffId: 7, locationId: 1, sessionTypeId: 3, startDateTime: "2026-12-01T10:00:00", notes: "n" },
+        ],
+      })
+    );
+    expect(client.bodies[0].data.Items[0].AppointmentBookingRequests).toEqual([
+      { StaffId: 7, LocationId: 1, SessionTypeId: 3, StartDateTime: "2026-12-01T10:00:00", Notes: "n" },
+    ]);
+  });
+});
