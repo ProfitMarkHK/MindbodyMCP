@@ -57,6 +57,16 @@ a second entry point would be a second source of truth, and the suite is cheap
 enough that the trade buys nothing. It is the same command as `bun run check`,
 so nothing a commit passes can fail a manual check and vice versa.
 
+**Documentation-only commits skip the hook.** When every staged file is a
+`*.md` file or `LICENSE`, the hook prints a notice and exits 0 without running
+the gates. No automated gate reads those files (the secret scan already
+excludes `*.md`), so the gates would only re-test unchanged code. "Docs" means
+those files only, not the `docs/` directory: Gates 13 and 16 read
+`docs/openapi.json`, so a commit that touches it runs the full suite. A commit
+that mixes docs with any other file runs the full suite. The skip lives only in
+the hook; `bun run check` always runs everything, and Gate 5 (documentation
+review) still applies to a docs-only change.
+
 `bun run build` writes to `dist/`, which is gitignored. The runner prints it in
 its output so the side effect is never a surprise.
 

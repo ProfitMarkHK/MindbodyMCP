@@ -8,8 +8,18 @@
 # the commit is blocked until they pass. The runner does not read stdin and does
 # not skip, so a hook can never pass silently.
 #
+# Exception: a commit whose staged files are all documentation (*.md, LICENSE)
+# skips the gates, because no gate reads those files. docs/openapi.json is not
+# documentation here: Gates 13 and 16 read it.
+#
 # Full checklist: docs/quality-gates.md
 
 set -uo pipefail
+
+staged=$(git diff --cached --name-only)
+if [ -n "$staged" ] && ! printf '%s\n' "$staged" | grep -qvE '(\.md|^LICENSE)$'; then
+  echo "pre-commit: documentation-only commit, quality gates skipped (see docs/quality-gates.md)."
+  exit 0
+fi
 
 exec bash "$(git rev-parse --show-toplevel)/scripts/check-gates.sh"
