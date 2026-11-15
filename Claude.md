@@ -298,10 +298,15 @@ Read a client's formula notes (`GET /client/clientformulanotes`, every page fetc
 #### `getClientCompleteInfo`
 A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.
 
+By default only services **expiring on or after today** are returned (observed API behaviour; the spec claims a purchase-date window). Pass `startDate: "2000-01-01"` to include expired purchase history.
+
 **Parameters:**
 - `clientId` (required): Client ID
+- `requiredClientData` (optional): array of `Services`, `Contracts`, `Memberships`, `ArrivalPrograms` — collections to return; omit for all four. Other values are rejected, because the API ignores them silently and returns every collection
+- `showActiveOnly` (optional): `true` keeps only services that can pay now (`current: true`)
+- `startDate` (optional): include services expiring on or after this ISO date
 
-**Returns:** `{ client: { id, firstName, lastName, accountBalance }, services, contracts, memberships, arrivals }`. `arrivals[].locations` carries `{ id, name }`, where `name` is `undefined` if the location catalogue does not hold the id. See [`docs/API.md`](docs/API.md#getclientcompleteinfo) for the fields and the parameters the tool deliberately does not send.
+**Returns:** `{ client: { id, firstName, lastName, accountBalance }, services, contracts, memberships, arrivals }`. `arrivals[].locations` carries `{ id, name }`, where `name` is `undefined` if the location catalogue does not hold the id. See [`docs/API.md`](docs/API.md#getclientcompleteinfo) for the fields, the parameters the tool does not send and the probe evidence behind each choice.
 
 ### 💰 Sales & Commerce
 

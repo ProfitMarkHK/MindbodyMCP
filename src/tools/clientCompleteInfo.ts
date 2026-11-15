@@ -39,27 +39,44 @@ function toService(service: ClientServiceWithActivationType) {
  *
  * The endpoint returns all four collections in one object and has no
  * pagination envelope, so this is a single `client.get`, not `fetchAllPages`.
+ * (Verified against the sandbox 2026-10-26: `Limit`/`Offset` are ignored
+ * silently with HTTP 200 and the body carries no `PaginationResponse`.)
  *
- * `requiredClientData` is deliberately not sent. The spec documents it with no
- * enum, and its prose names values (`Services`, `Contracts`, `Memberships`,
- * `ArrivalPrograms`) that do not match the response keys. The v6 API ignores an
- * unknown query value silently, so a wrong one would return a different subset
- * with no error. Omitting it returns all four collections, which is what a
- * snapshot needs.
+ * `options.requiredClientData` narrows the response to a subset of the
+ * collections. The accepted values are the spec's prose spellings —
+ * `Services`, `Contracts`, `Memberships`, `ArrivalPrograms` — verified against
+ * the sandbox. The response-key spellings (`ClientServices`, …) and any other
+ * value are ignored silently with HTTP 200, so the tool rejects anything
+ * outside the verified set rather than let a typo quietly widen the response
+ * back to all four collections.
  *
- * `startDate`, `endDate`, `showActiveOnly`, `useActivateDate` and the
- * cross-regional options are not exposed either: the call takes the API's
- * defaults. The spec states the default for `StartDate` and `EndDate` as
- * "today's date", which, if literal, would drop services and memberships bought
- * before today. That is not sandbox-verified, so it is a known gap: see
- * `docs/API.md`.
+ * `options.showActiveOnly` sends `ShowActiveOnly: true`, which the sandbox
+ * verifiably narrows `ClientServices` to the rows that can pay right now
+ * (`Current: true`); the other collections are untouched.
+ *
+ * `options.startDate` sends `StartDate`. It is NOT sent by default, because
+ * the default window — every service expiring on or after today — is exactly
+ * the snapshot this tool wants. Send a wide past date (for example
+ * `2000-01-01`) to include expired purchase history; see the
+ * SANDBOX-OBSERVED note at the call site for what the filter actually
+ * compares.
  *
  * `client` is `undefined` when the response carries no `Client`. `arrivals`
  * location names come from the cached location catalogue and are `undefined`
  * when it does not hold an id.
  */
+export interface ClientCompleteInfoOptions {
+  /** Collections to request. Omit for all four. Verified values only. */
+  requiredClientData?: ReadonlyArray<'Services' | 'Contracts' | 'Memberships' | 'ArrivalPrograms'>;
+  /** `true` narrows services to the rows that can pay now (`Current`). */
+  showActiveOnly?: boolean;
+  /** Include services expiring on or after this ISO date. Wide past values recover expired purchases. */
+  startDate?: string;
+}
+
 export async function getClientCompleteInfoTool(
   clientId: string,
+  options: ClientCompleteInfoOptions = {},
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<{
@@ -79,9 +96,40 @@ export async function getClientCompleteInfoTool(
     locations: Array<{ id: number; name?: string }>;
   }>;
 }> {
-  // SPEC-ALIGNED BUT UNVERIFIED: no sandbox probe of the default date window.
+  const params: Record<string, unknown> = { ClientId: clientId };
+  if (options.requiredClientData !== undefined) {
+    // The sandbox accepts exactly these four spellings; anything else is
+    // dropped silently and the response widens back to all four collections
+    // with HTTP 200 (docs/mindbody-spec-discrepancies.md F-3). Reject here so
+    // the failure is loud on this side of the wire.
+    const invalid = options.requiredClientData.filter(
+      (value) => value !== 'Services' && value !== 'Contracts' && value !== 'Memberships' && value !== 'ArrivalPrograms'
+    );
+    if (invalid.length > 0) {
+      throw new Error(
+        `requiredClientData accepts only Services, Contracts, Memberships and ArrivalPrograms. ` +
+        `The Mindbody API ignores any other value silently and returns every collection instead: ${invalid.join(', ')}`
+      );
+    }
+    if (options.requiredClientData.length > 0) {
+      params.RequiredClientData = [...options.requiredClientData];
+    }
+  }
+  if (options.showActiveOnly === true) {
+    params.ShowActiveOnly = true;
+  }
+  if (options.startDate !== undefined) {
+    // SANDBOX-OBSERVED (differs from spec): StartDate filters services by EXPIRATION
+    // date ("expiring on or after"), not the documented purchase date, and omitted it
+    // defaults to today and silently drops expired purchases. Evidence: F-3.
+    params.StartDate = options.startDate;
+  }
+
+  // SANDBOX-OBSERVED (differs from spec): with RequiredClientData set, the unrequested
+  // collections come back as JSON null, not the arrays the response model declares, so
+  // the `?? []` mappings below are load-bearing. Evidence: F-3.
   const response = await client.get<GetClientCompleteInfoResponse>('/client/clientcompleteinfo', {
-    params: { ClientId: clientId },
+    params,
   });
 
   const arrivalRows = response.ClientArrivals ?? [];

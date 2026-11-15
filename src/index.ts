@@ -407,11 +407,30 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'getClientCompleteInfo',
-        description: 'Get a client\'s whole wallet in one call: account balance, purchased services, contracts, memberships and arrival programs',
+        description:
+          'Get a client\'s whole wallet in one call: account balance, purchased services, contracts, memberships and arrival programs. ' +
+          'By default only services expiring on or after today are returned; pass a wide past startDate (e.g. 2000-01-01) to include expired purchase history',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
+            requiredClientData: {
+              type: 'array',
+              items: { type: 'string', enum: ['Services', 'Contracts', 'Memberships', 'ArrivalPrograms'] },
+              description:
+                'Collections to return. Omit for all four. Only these four values are accepted by the API; ' +
+                'anything else is silently ignored and returns every collection',
+            },
+            showActiveOnly: {
+              type: 'boolean',
+              description: 'When true, services are narrowed to the ones that can pay now (Current). Other collections are unaffected',
+            },
+            startDate: {
+              type: 'string',
+              description:
+                'ISO date. Includes services EXPIRING on or after this date (observed behaviour; the spec claims purchase date). ' +
+                'Omit for the default window, which drops expired purchases',
+            },
           },
           required: ['clientId'],
         },
@@ -1065,7 +1084,13 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
       case 'getClientCompleteInfo':
-        const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string);
+        const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string, {
+          requiredClientData: Array.isArray(args.requiredClientData)
+            ? (args.requiredClientData as Array<'Services' | 'Contracts' | 'Memberships' | 'ArrivalPrograms'>)
+            : undefined,
+          showActiveOnly: args.showActiveOnly === true ? true : undefined,
+          startDate: typeof args.startDate === 'string' ? args.startDate : undefined,
+        });
         return { content: [{ type: 'text', text: JSON.stringify(completeInfoResult, null, 2) }] };
 
       // Sales & Commerce Tools

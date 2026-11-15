@@ -206,6 +206,21 @@ watching for:
    value. `Service.Priority` is the string `"High"|"Medium"|"Low"`, not a
    number; `Service.TaxIncluded` and `Product.TaxIncluded` are money amounts,
    not booleans. Check `type` in the spec, not just the property list.
+4. **Silent auth degradation.** The spec marks the `authorization` header
+   (`A staff user authorization token`) as optional on every endpoint, but some
+   client-data reads **silently return empty collections with HTTP 200 when no
+   staff usertoken is presented** — they do not answer 401/403. Verified on the
+   sandbox (2026-10-26/27): `GET /client/clients` with the API key alone returns
+   `{Clients: [], PaginationResponse: {TotalResults: 0}}`; the same call with a
+   Bearer usertoken returns 4,465 clients. `GET /client/clientcompleteinfo`
+   returns full data with the API key alone, so the degradation is
+   endpoint-specific and cannot be assumed either way. `src/api/auth.ts` falls
+   back to API-key-only auth when `POST /usertoken/issue` fails and logs one
+   stderr line (`Falling back to API-key-only auth`) — the tool response itself
+   carries no hint. **Rule for any probe or investigation: acquire and present
+   a staff usertoken (or confirm one was attached) before reading an empty
+   collection as evidence of absence.** An empty 200 is proof of nothing until
+   the token state is known.
 
 **Where the spec and the sandbox disagree, the sandbox wins** — and the
 divergence is recorded in three places: a `// SANDBOX-OBSERVED (differs from

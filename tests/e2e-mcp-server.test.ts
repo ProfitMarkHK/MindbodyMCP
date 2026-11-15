@@ -2093,6 +2093,80 @@ describe('pagination — multi-page walks through the real server', () => {
     expect(requests[0].query.ClientId).toBe(STUB_FIXTURES.clientId);
   });
 
+  itE2E('getClientCompleteInfo narrows the response to the requested collections and maps the nulls the API really returns', async () => {
+    stub.resetLog();
+
+    // F-3: with RequiredClientData set, the unrequested collections come back
+    // as JSON null, which the tool maps to empty arrays.
+    const result = await client.callTool({
+      name: 'getClientCompleteInfo',
+      arguments: { clientId: STUB_FIXTURES.clientId, requiredClientData: ['Memberships'] },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = resultJson(result);
+    expect(payload.services).toEqual([]);
+    expect(payload.contracts).toEqual([]);
+    expect(payload.arrivals).toEqual([]);
+    expect(payload.memberships[0]).toMatchObject({ id: 6601, remainingClasses: 8 });
+
+    const requests = stub.requestsTo('/public/v6/client/clientcompleteinfo', 'GET');
+    expect(requests[0].queryAll['RequiredClientData[]']).toEqual(['Memberships']);
+  });
+
+  itE2E('getClientCompleteInfo showActiveOnly keeps only the services that can pay now', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'getClientCompleteInfo',
+      arguments: { clientId: STUB_FIXTURES.clientId, showActiveOnly: true },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = resultJson(result);
+    // 'Depleted Pack' is unexpired (survives the default date window) but not
+    // Current, so ShowActiveOnly drops it; '10 Class Pack' survives both.
+    expect(payload.services.map((s: { name: string }) => s.name)).toEqual(['10 Class Pack']);
+    expect(payload.memberships[0]).toMatchObject({ id: 6601 });
+
+    const requests = stub.requestsTo('/public/v6/client/clientcompleteinfo', 'GET');
+    expect(requests[0].query.ShowActiveOnly).toBe('true');
+  });
+
+  itE2E('getClientCompleteInfo startDate recovers expired purchase history the default window drops', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'getClientCompleteInfo',
+      arguments: { clientId: STUB_FIXTURES.clientId, startDate: '2000-01-01' },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = resultJson(result);
+    // 'Expired Pack' expires before the stub's frozen today, so the default
+    // window drops it; a wide StartDate (which filters by EXPIRATION date,
+    // F-3) brings it back.
+    expect(payload.services.map((s: { name: string }) => s.name)).toEqual([
+      '10 Class Pack',
+      'Depleted Pack',
+      'Expired Pack',
+    ]);
+
+    const requests = stub.requestsTo('/public/v6/client/clientcompleteinfo', 'GET');
+    expect(requests[0].query.StartDate).toBe('2000-01-01');
+  });
+
+  itE2E('getClientCompleteInfo rejects a requiredClientData value the API would ignore silently', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'getClientCompleteInfo',
+      arguments: { clientId: STUB_FIXTURES.clientId, requiredClientData: ['ClientServices'] },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toMatch(/requiredClientData accepts only/);
+    // Nothing reached the wire: the failure is loud on this side, not a
+    // silently widened response from the API.
+    expect(stub.requestsTo('/public/v6/client/clientcompleteinfo', 'GET')).toHaveLength(0);
+  });
+
   itE2E('getClientEnrollments resolves schedule visits to classes and keeps only Enrollment-program sessions', async () => {
     stub.resetLog();
 

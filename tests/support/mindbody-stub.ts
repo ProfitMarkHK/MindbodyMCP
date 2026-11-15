@@ -208,6 +208,8 @@ export const STUB_FIXTURES = {
 
   // ── Clients ────────────────────────────────────────────────────────────────
   clientId: 'c-1001',
+  /** The same client's `Client.UniqueId`, accepted by clientcompleteinfo. */
+  clientUniqueId: 1001001,
   client: {
     Id: 'c-1001',
     FirstName: 'Grace',
@@ -302,6 +304,12 @@ export const STUB_FIXTURES = {
 
   // GET /client/clientcompleteinfo: the whole wallet in one object, with no
   // pagination envelope. ClientMemberships is filled in by the route.
+  //
+  // The three services exist to make the two sandbox-verified filters
+  // distinguishable (F-3): the default date window drops 'Expired Pack'
+  // (expiry before the route's frozen today), ShowActiveOnly drops
+  // 'Depleted Pack' (Current: false though unexpired), and only '10 Class
+  // Pack' survives both.
   clientCompleteInfo: {
     Client: { Id: 'c-1001', FirstName: 'E2E', LastName: 'Client', AccountBalance: -42.5 },
     ClientServices: [
@@ -315,6 +323,36 @@ export const STUB_FIXTURES = {
         ActiveDate: '2026-02-01T00:00:00',
         ExpirationDate: '2026-08-01T00:00:00',
         PaymentDate: '2026-02-01T00:00:00',
+        Program: { Id: 3, Name: 'Yoga', ScheduleType: 'Class' },
+        SiteId: -99,
+        ActivationType: 'OnFirstVisit',
+        CannotPayForClassesBeforeActivation: false,
+      },
+      {
+        Id: 7102,
+        ProductId: 55,
+        Name: 'Depleted Pack',
+        Count: 10,
+        Remaining: 0,
+        Current: false,
+        ActiveDate: '2026-02-01T00:00:00',
+        ExpirationDate: '2026-08-01T00:00:00',
+        PaymentDate: '2026-02-01T00:00:00',
+        Program: { Id: 3, Name: 'Yoga', ScheduleType: 'Class' },
+        SiteId: -99,
+        ActivationType: 'OnFirstVisit',
+        CannotPayForClassesBeforeActivation: false,
+      },
+      {
+        Id: 7103,
+        ProductId: 56,
+        Name: 'Expired Pack',
+        Count: 5,
+        Remaining: 5,
+        Current: false,
+        ActiveDate: '2025-11-01T00:00:00',
+        ExpirationDate: '2026-01-01T00:00:00',
+        PaymentDate: '2025-11-01T00:00:00',
         Program: { Id: 3, Name: 'Yoga', ScheduleType: 'Class' },
         SiteId: -99,
         ActivationType: 'OnFirstVisit',
@@ -1174,16 +1212,89 @@ export class MindbodyStub {
     });
 
     this.route('GET', '/client/clientcompleteinfo', (request) => {
-      if (!request.query.ClientId) {
+      // SANDBOX-OBSERVED (differs from spec): modelled behaviours, evidence
+      // docs/mindbody-spec-discrepancies.md F-3 —
+      // - ClientId OR UniqueClientId satisfies the lookup (the spec marks
+      //   clientId required and documents uniqueClientId with an unrelated
+      //   description); neither is HTTP 400 MissingRequiredFields naming both.
+      //   When both are sent, ClientId wins.
+      // - an unknown id is HTTP 400 ClientNotFound, not an empty 200.
+      // - requiredClientData accepts only Services/Contracts/Memberships/
+      //   ArrivalPrograms (repeated key, []-suffixed or indexed); any other
+      //   value is ignored silently with HTTP 200 and every collection is
+      //   returned. Unrequested collections come back as JSON null, not [].
+      // - ShowActiveOnly=true narrows ClientServices to Current rows only.
+      // - StartDate filters ClientServices by EXPIRATION date, and when omitted
+      //   the window is "expiring on or after today". "Today" is frozen below
+      //   so the stub is deterministic; the fixture dates are chosen around it.
+      const byClientId = request.query.ClientId;
+      const byUniqueId = request.query.UniqueClientId;
+      if (byClientId === undefined && byUniqueId === undefined) {
         return {
           status: 400,
-          body: { Error: { Code: 'InvalidParameter', Message: 'ClientId is required' } },
+          body: {
+            Error: {
+              Code: 'MissingRequiredFields',
+              Message: 'At least one of the following parameters must be passed: ClientId, UniqueClientId',
+            },
+          },
         };
       }
-      return {
-        status: 200,
-        body: { ...STUB_FIXTURES.clientCompleteInfo, ClientMemberships: [STUB_FIXTURES.clientMembership] },
+      const known =
+        byClientId !== undefined
+          ? byClientId === STUB_FIXTURES.clientId
+          : byUniqueId === String(STUB_FIXTURES.clientUniqueId);
+      if (!known) {
+        return {
+          status: 400,
+          body: {
+            Error: {
+              Code: 'ClientNotFound',
+              Message:
+                byClientId !== undefined
+                  ? `Client with Custom ID ${byClientId} does not exist.`
+                  : `Client with unique ID ${byUniqueId} does not exist.`,
+            },
+          },
+        };
+      }
+
+      const rcdRaw = [
+        ...(request.queryAll['RequiredClientData[]'] ?? []),
+        ...(request.queryAll['RequiredClientData'] ?? []),
+        ...(request.queryAll['requiredClientData[]'] ?? []),
+        ...(request.queryAll['requiredClientData'] ?? []),
+      ];
+      const rcdValid = rcdRaw.filter(
+        (value) => value === 'Services' || value === 'Contracts' || value === 'Memberships' || value === 'ArrivalPrograms'
+      );
+      // No recognised value at all: silently ignored, every collection returned.
+      const wants = rcdValid.length === 0
+        ? { ClientServices: true, ClientContracts: true, ClientMemberships: true, ClientArrivals: true }
+        : {
+            ClientServices: rcdValid.includes('Services'),
+            ClientContracts: rcdValid.includes('Contracts'),
+            ClientMemberships: rcdValid.includes('Memberships'),
+            ClientArrivals: rcdValid.includes('ArrivalPrograms'),
+          };
+
+      const today = '2026-03-15'; // frozen "today"; see the comment above
+      const start = (request.query.StartDate ?? request.query.startDate ?? today).slice(0, 10);
+      let services = STUB_FIXTURES.clientCompleteInfo.ClientServices.filter(
+        (service: { ExpirationDate?: string }) => String(service.ExpirationDate).slice(0, 10) >= start
+      );
+      if (request.query.ShowActiveOnly === 'true' || request.query.showActiveOnly === 'true') {
+        services = services.filter((service: { Current?: boolean }) => service.Current === true);
+      }
+
+      const body: Record<string, unknown> = {
+        Client: STUB_FIXTURES.clientCompleteInfo.Client,
+        ClientServices: wants.ClientServices ? services : null,
+        ClientContracts: wants.ClientContracts ? STUB_FIXTURES.clientCompleteInfo.ClientContracts : null,
+        ClientMemberships: wants.ClientMemberships ? [STUB_FIXTURES.clientMembership] : null,
+        ClientArrivals: wants.ClientArrivals ? STUB_FIXTURES.clientCompleteInfo.ClientArrivals : null,
       };
+      return { status: 200, body };
     });
 
     this.route('GET', '/client/clientschedule', (request) => {

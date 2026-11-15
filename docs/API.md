@@ -539,15 +539,18 @@ interface CancelEnrollmentVisitsResponse {
 
 ### getClientCompleteInfo
 
-Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination, so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
+Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination (sandbox-verified: `Limit`/`Offset` are ignored silently and no `PaginationResponse` envelope exists), so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
+
+By default the endpoint returns only services **expiring on or after today** — an undocumented behaviour that silently drops expired purchase history (verified on the sandbox: 7 of 88 services for the probe client; see [F-3](mindbody-spec-discrepancies.md#f-3-clientcompleteinfo-parameter-behaviour-probed-end-to-end)). Pass a wide past `startDate` to include expired purchases.
 
 #### Parameters
 
 | Parameter | Type | Required | Description | Default |
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Client to read | - |
-
-No other parameter is exposed. See [What the tool does not send](#what-the-tool-does-not-send).
+| `requiredClientData` | string[] | No | Collections to return: any of `Services`, `Contracts`, `Memberships`, `ArrivalPrograms`. Omit for all four. These are the only values the API accepts; anything else is silently ignored with HTTP 200, so the tool rejects other values with an error instead | All four collections |
+| `showActiveOnly` | boolean | No | `true` narrows `services` to the rows that can pay now (`current: true`). Other collections are unaffected | `false` |
+| `startDate` | string | No | ISO date. Includes services **expiring on or after** this date (the observed semantics — the spec claims purchase date). Send e.g. `2000-01-01` to include expired purchase history | Today, which drops expired purchases |
 
 #### Response
 
@@ -584,9 +587,14 @@ No other parameter is exposed. See [What the tool does not send](#what-the-tool-
 
 #### What the tool does not send
 
-- **`requiredClientData` is omitted on purpose.** The spec documents the parameter with no enum, and its prose names values (`Services`, `Contracts`, `Memberships`, `ArrivalPrograms`) that do not match the response keys (`ClientServices`, `ClientContracts`, `ClientMemberships`, `ClientArrivals`). The v6 API ignores an unknown query value silently, so a wrong value would return a different subset with no error. Without the parameter the endpoint returns all four collections, which is what a snapshot needs. Add it only once the enum is confirmed against the sandbox.
-- **`startDate`, `endDate`, `showActiveOnly`, `useActivateDate`, `crossRegionalLookup`, `clientAssociatedSitesOffset`, `excludeInactiveSites` are not sent.** The API's defaults apply.
-- **Known gap, not verified.** The spec states the default for `StartDate` and `EndDate` as "today's date". Read literally, that would drop services and memberships purchased before today. No sandbox probe has checked this, so the tool is marked `SPEC-ALIGNED BUT UNVERIFIED` at the call site. If a probe shows the window is narrower than the full history, send explicit `startDate`/`endDate` values and record the deviation in the table above.
+Every omission below is backed by a sandbox probe (2026-10-26/27, evidence in
+[F-3](mindbody-spec-discrepancies.md#f-3-clientcompleteinfo-parameter-behaviour-probed-end-to-end)):
+
+- **`endDate` is not sent and not exposed.** It has no observable effect: `StartDate=2000-01-01&EndDate=2026-10-12` still returned every row purchased and expiring after that date. A parameter that verifiably does nothing is not exposed as if it did.
+- **`useActivateDate` is not sent.** No probe could distinguish it from `false` (every probed row had `ActiveDate == PaymentDate`), so it is undetermined rather than verified, and undetermined parameters stay unsent.
+- **`crossRegionalLookup`, `clientAssociatedSitesOffset`, `excludeInactiveSites` are not sent.** On a single-site client they produce no observable change, and an out-of-range offset answers HTTP 400 with a range message. Multi-site behaviour cannot be probed without creating cross-site data, so none of the three is exposed.
+- **`uniqueClientId` is not exposed.** It verifiably works as an alternative lookup key (`uniqueClientId=100009444` returned the full wallet of the client whose `Id` is `008221`, and when both are sent `ClientId` wins), but it adds no capability: it reads the same data the tool already returns by `clientId`. Recorded in F-3 and raised with Mindbody, because the spec wrongly marks `clientId` as required and documents `uniqueClientId` with a description copied from the class endpoint.
+- **`limit`/`offset` are not sent.** The endpoint ignores both silently and pages nothing.
 
 ## Planned Tools
 
@@ -657,6 +665,8 @@ names the section quoted in the last column.
 | `POST /sale/checkoutshoppingcart` | `CartItem.Appointments` is described as "the IDs of the appointments that were reconciled by this cart item" but typed as `Appointment[]`. The sibling `AppointmentIds` has the placeholder description "Gets or sets the item." | A committed sale that sent `AppointmentIds: [<id>]` did reconcile the appointment (it read back `Completed`), yet `CartItems[].Appointments`, `CartItems[].AppointmentIds` and the top-level `Appointments` all came back empty. | Accepts both shapes of `Appointments`, and states that an absent reconciliation list does not mean the sale failed. **To confirm which appointment a sale paid for, re-read the appointment.** | D-8 |
 | `POST /client/addclient` and `POST /sale/purchasecontract` | Both request definitions document `Test: boolean` — "input information is validated, but not committed". | `addclient` with `Test: true` answers HTTP 400 `Test mode is not allowed for this endpoint.` `purchasecontract` with `Test: true` and no card demands a payment instrument the sandbox cannot supply. | Sends no `Test` flag to either. **`addClient` and `purchaseContract` always commit.** The endpoint behind `purchaseContract` does accept `Test: true` when paired with `UseAccountCredit: true` (D-10), but the tool does not expose it. | D-10 |
 | `GET /sale/services` | Only the array filter `request.sessionTypeIds` is documented; there is no singular form. | `SessionTypeId=23` returns the unfiltered 21 services; `SessionTypeIds=23` returns 1. Unknown query names are dropped without error, as they are across the API. | Sends the documented plural only. Worth knowing when a filter appears to do nothing: a mis-pluralised filter degrades to a full-table read with a 200, not an error. | D-7 |
+| `GET /client/clientcompleteinfo` | `GetClientCompleteInfoResponse` types all four collections as arrays. | With `RequiredClientData` set, the unrequested collections come back as **JSON `null`**, not `[]`. Unknown `RequiredClientData` values are silently ignored with HTTP 200 and every collection is returned. | Maps every collection with `?? []` (load-bearing) and exposes `requiredClientData` validated to the four verified values, so a typo fails loudly instead of silently widening the response. | F-3 |
+| `GET /client/clientcompleteinfo` | `StartDate` "Filters results to pricing options that are purchased on or after this date. Default: today's date." | Filters by **expiration** date; omitted, the window is expiry ≥ today and it silently drops expired purchase history. `EndDate` has no observable effect. | Sends no date by default — the observed default window is the snapshot the tool wants — and documents the observed semantics on `startDate` so a wide past value can recover history. | F-3 |
 
 Adding a new entry is not a judgement call. The ADR states the five conditions
 — the specification and the sandbox must genuinely disagree, there must be
@@ -798,6 +808,38 @@ Required credentials:
 - `MINDBODY_SITE_ID`: Your site ID (use -99 for sandbox)
 - `MINDBODY_SOURCE_NAME`: Source credentials username
 - `MINDBODY_SOURCE_PASSWORD`: Source credentials password
+
+### The staff usertoken is not optional in practice
+
+The OpenAPI spec marks the `authorization` header as optional on every
+endpoint. In practice most client-data reads **require** it: without a staff
+usertoken they return **HTTP 200 with empty collections** instead of an auth
+error. Verified on the sandbox (2026-10-26, site `-99`):
+
+| Request | Result |
+|---|---|
+| `GET /client/clients` with `Api-Key` + `SiteId` only | `200` — `Clients: []`, `TotalResults: 0` |
+| Same request plus `Authorization: Bearer <usertoken>` | `200` — 4,465 clients |
+
+So an empty client, visit or membership list from this server can mean one of
+two things: the site has no such records, **or** token acquisition failed and
+every call was silently downgraded to API-key-only auth. The degradation is
+endpoint-specific: it was verified on `GET /client/clients` (empty without a
+token, 4,465 rows with one), while `GET /client/clientcompleteinfo` returns
+full data with the API key alone (verified 2026-10-27). Treat "works without a
+token" as something to verify per endpoint, never to assume. The server logs
+one stderr line when the downgrade happens:
+
+```
+User token acquisition failed (<status>): <message>. Falling back to API-key-only auth.
+```
+
+If a query returns an empty collection unexpectedly, check the server log for
+that line before concluding the data is absent. The failure causes observed so
+far are `Unsupported IP Address …` (the sandbox API key allow-lists IPs; add
+the egress IP in the Mindbody developer portal) and `Staff user was not found
+for this site` (the source credentials are not a staff user of the site in the
+`SiteId` header).
 
 ## Error Codes
 

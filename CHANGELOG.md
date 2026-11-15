@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
 - Added `getClientCompleteInfo`, which reads a client's account balance, services, contracts, memberships and arrivals in one `/client/clientcompleteinfo` request. The tool set is now 50.
+- `getClientCompleteInfo` now exposes the parameters a sandbox probe verified (evidence in `docs/mindbody-spec-discrepancies.md` F-3): `requiredClientData` (validated to `Services`/`Contracts`/`Memberships`/`ArrivalPrograms`, the only values the API accepts — anything else is silently ignored with HTTP 200), `showActiveOnly` (narrows services to the rows that can pay now), and `startDate` (includes services *expiring* on or after the date — the observed semantics; the spec claims purchase date, and the default window silently drops expired purchases). Recorded as deviations D-12/D-13.
+- Documented that the `authorization` staff usertoken is not optional in practice: `GET /client/clients` silently returns an empty 200 without it (4,465 rows with it), while `/client/clientcompleteinfo` works with the API key alone. Captured in `AGENTS.md` (defect class 4), `docs/API.md` (Authentication) and the discrepancies doc (F-2).
 - Brought the tool set from 38 to 41 with `getClassVisits` (attendance for a single class), `cancelAppointments` and `cancelEnrollmentVisits`.
 - Added dependency injection for the API client and cache in every tool, so tests run without the global client.
 - Added an OpenAPI-validated stub client for tool tests, so test requests are checked against the Mindbody v6 spec.

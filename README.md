@@ -167,7 +167,7 @@ The server provides 50 tools across 6 categories:
 - `getClientAccountBalances` - View account balances
 - `getClientContracts` - View contracts
 - `getClientFormulaNotes` - Read a client's formula notes, by client and/or appointment (read-only)
-- `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals
+- `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals. Optional sandbox-verified parameters: `requiredClientData` (subset of collections), `showActiveOnly` (services that can pay now), `startDate` (include expired purchase history)
 
 ### 💰 Sales & Commerce
 - `getServices` - View available services. `priority` is the string "High"/"Medium"/"Low" and `taxIncludedAmount` is a money amount, because that is what the API defines
