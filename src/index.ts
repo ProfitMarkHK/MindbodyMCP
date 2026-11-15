@@ -83,6 +83,7 @@ import {
   getActiveSessionTimesTool,
   getScheduleItemsTool,
 } from './tools/appointmentManagement.js';
+import { cancelClientBookingTool } from './tools/cancelBooking.js';
 import {
   getEnrollmentsTool,
   addClientToEnrollmentTool,
@@ -826,6 +827,33 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         },
       },
       {
+        name: 'cancelClientBooking',
+        description:
+          'Cancel one booking for one client and choose late or normal. Give exactly one locator: classId, appointmentId, ' +
+          'visitId, or startDateTime (site-local, optionally narrowed by classScheduleId). The client\'s schedule is read ' +
+          '(the locator\'s day for startDateTime, otherwise today through 30 days) and only booked, non-waitlisted, ' +
+          'non-signed-in, future rows are kept; zero or several matches refuse with the candidates and write nothing. ' +
+          'lateCancel omitted: late when the start is inside MINDBODY_LATE_CANCEL_WINDOW_HOURS, normal otherwise (normal when unset). ' +
+          'lateCancel true: refused outside the window or when it is unset. The write goes through cancelAppointments, ' +
+          'cancelEnrollmentVisits or removeClientFromClass by kind, so all their guards apply; waitlist entries are refused. ' +
+          'Never retried: if the POST fails the schedule is re-read once and outcome is cancelled, still-booked or unknown. ' +
+          'Returns { success, outcome, mode, booking, decision, receipt: { tool, endpoint, request (exact body), response, error }, message }.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID who owns the booking' },
+            classId: { type: 'number', description: 'Locator: the class ID of a drop-in or enrollment session' },
+            appointmentId: { type: 'number', description: 'Locator: an appointment ID' },
+            visitId: { type: 'number', description: 'Locator: a visit ID from getClientSchedule' },
+            startDateTime: { type: 'string', description: 'Locator: site-local start, YYYY-MM-DDTHH:MM[:SS], no offset' },
+            classScheduleId: { type: 'number', description: 'Narrows a startDateTime match to one class schedule' },
+            lateCancel: { type: 'boolean', description: 'Omit to let the resolver decide; true forces late (refused outside the window); false forces normal' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false). Not supported for drop-in classes' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
         name: 'getBookableItems',
         description: 'Get available appointment slots',
         inputSchema: {
@@ -1321,6 +1349,19 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.sendEmail as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(cancelAppointmentsResult, null, 2) }] };
+
+      case 'cancelClientBooking':
+        const cancelBookingResult = await cancelClientBookingTool({
+          clientId: args.clientId as string,
+          classId: args.classId as number | undefined,
+          appointmentId: args.appointmentId as number | undefined,
+          visitId: args.visitId as number | undefined,
+          startDateTime: args.startDateTime as string | undefined,
+          classScheduleId: args.classScheduleId as number | undefined,
+          lateCancel: args.lateCancel as boolean | undefined,
+          sendEmail: args.sendEmail as boolean | undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(cancelBookingResult, null, 2) }] };
       
       case 'getBookableItems':
         const bookableResult = await getBookableItemsTool(

@@ -33,6 +33,8 @@ export interface ClientBooking {
   visitId: number;
   /** Undefined for an appointment (Mindbody sends `ClassId: 0`). */
   classId?: number;
+  /** The class's ClassScheduleId; undefined for appointments and unresolved classes. */
+  classScheduleId?: number;
   /** Undefined for a class or enrollment visit (Mindbody sends `AppointmentId: 0`). */
   appointmentId?: number;
   /** Mindbody's `AppointmentStatus`, on appointment rows only. */
@@ -121,6 +123,7 @@ export async function getClientScheduleTool(
       kind: bookingKind(visit, cls),
       visitId: Number(visit?.Id),
       classId,
+      classScheduleId: positiveId(cls?.ClassScheduleId),
       appointmentId,
       appointmentStatus: appointmentId === undefined ? undefined : visit?.AppointmentStatus ?? undefined,
       startDateTime: visit?.StartDateTime,

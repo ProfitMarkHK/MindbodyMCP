@@ -121,6 +121,7 @@ const EXPECTED_TOOL_NAMES = [
   'addAppointment',
   'updateAppointment',
   'cancelAppointments',
+  'cancelClientBooking',
   'getBookableItems',
   'getActiveSessionTimes',
   'getScheduleItems',

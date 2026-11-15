@@ -274,6 +274,96 @@ interface CancelAppointmentsResponse {
 | `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`; set `MINDBODY_SITE_TIMEZONE` only if the record has none, and unset it if it disagrees with the record |
 | Mindbody write error | Cancellations already made stand and appear in `cancelled`; the call stops at the failing ID. | Re-check the listed appointments with `getStaffAppointments` |
 
+### cancelClientBooking
+
+Cancels one booking for one client and chooses late or normal. It resolves and decides; the write is delegated to the guarded tool for the booking's kind, so ownership, status, timezone and all-or-nothing guards are the same code as when those tools are called directly. No new endpoint is used.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client who owns the booking | - |
+| `classId` | number | One locator | Class ID of a drop-in or enrollment session | - |
+| `appointmentId` | number | One locator | Appointment ID | - |
+| `visitId` | number | One locator | Visit ID from `getClientSchedule` | - |
+| `startDateTime` | string | One locator | Site-local `YYYY-MM-DDTHH:MM[:SS]`, no offset | - |
+| `classScheduleId` | number | No | Narrows a `startDateTime` match; only with `startDateTime` | - |
+| `lateCancel` | boolean | No | Omitted: decided from the window. `true`: refused outside it. `false`: normal | omitted |
+| `sendEmail` | boolean | No | Email the client. Refused for a drop-in class (`removeClientFromClass` has no `SendEmail`) | false |
+
+#### Steps
+
+1. Validate: exactly one locator, positive integer ids, `startDateTime` format. `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset is refused here with the shared `late cancel refused: the site's late-cancel window is unknown ...` text, before any read.
+2. Resolve the site timezone (refuse if it cannot) and read `getClientScheduleTool`: the locator's day for `startDateTime`, otherwise today through 30 days.
+3. Match the locator. Drop rows that are waitlist entries, signed in, late-cancelled, appointments already `Cancelled`/`LateCancelled`, or already started. One row left proceeds; zero or several refuse with `candidates`.
+4. Decide the mode (table below), then call the delegate with a client wrapper that records the POST body and result. The wrapper passes every call through unchanged.
+5. If the POST failed, re-read the schedule once over the same window and report the outcome.
+
+| Kind | Delegate | POST |
+|------|----------|------|
+| `appointment` | `cancelAppointments` | `/appointment/updateappointment` `{ AppointmentId, Execute: cancel\|latecancel, SendEmail }` |
+| `enrollment` | `cancelEnrollmentVisits` | `/class/removeclientfromclass` `{ ClientId, ClassId, VisitId, LateCancel, SendEmail, Test: false }` |
+| `class` | `removeClientFromClass` | `/class/removeclientfromclass` `{ ClientId, ClassId, LateCancel }` |
+| `waitlist` | refused | none |
+
+| `lateCancel` | Window set, start inside | Window set, start outside | Window unset |
+|---|---|---|---|
+| omitted | late | normal | normal |
+| `true` | late | refused, no POST | refused before any read |
+| `false` | normal | normal | normal |
+
+#### Outcomes
+
+| `outcome` | `success` | When |
+|---|---|---|
+| `cancelled` | true | The delegate's POST succeeded, or it failed and the re-read no longer shows the booking as booked |
+| `still-booked` | false | The POST failed and the re-read still shows the booking |
+| `unknown` | false | The POST failed and the re-read failed too; check Mindbody before retrying |
+| `refused` | false | Nothing was sent: a request, resolution, decision or delegate guard refused it |
+
+The POST is never retried (`src/api/client.ts` does not retry POSTs either). A failed `removeclientfromclass` or `updateappointment` may still have landed, which is why the re-read decides.
+
+#### Response
+
+```typescript
+interface CancelClientBookingResult {
+  success: boolean;
+  outcome: 'cancelled' | 'still-booked' | 'unknown' | 'refused';
+  mode?: 'late' | 'normal';           // undefined only when refused before resolution
+  booking?: ClientBooking;            // the resolved getClientSchedule row
+  candidates?: ClientBooking[];       // on a refused resolution
+  decision?: { mode; requested?: boolean; windowHours?: number; hoursUntilStart: number; reason: string };
+  receipt?: {
+    tool: 'cancelAppointments' | 'cancelEnrollmentVisits' | 'removeClientFromClass';
+    endpoint?: string;                // undefined when the delegate refused before writing
+    request?: Record<string, unknown>; // the exact POST body
+    response?: unknown;               // Mindbody's body on success
+    error?: string;                   // the POST's error on failure
+    sentAt?: string;                  // ISO instant
+    toolResult: unknown;              // the delegate's own return value
+  };
+  reconcile?: { readAt: string; booking: ClientBooking | null; error?: string }; // after a failed POST
+  message: string;
+}
+```
+
+The receipt is the record; nothing is persisted. Forfeit reporting (#26) is planned as a sibling block next to `receipt`, so existing fields stay as they are.
+
+#### Example
+
+```json
+{ "clientId": "12345", "classId": 2201 }
+```
+
+```json
+{
+  "success": true, "outcome": "cancelled", "mode": "late",
+  "decision": { "mode": "late", "windowHours": 24, "hoursUntilStart": 3, "reason": "starts in 3h, inside the 24h late-cancel window" },
+  "receipt": { "tool": "removeClientFromClass", "endpoint": "/class/removeclientfromclass",
+               "request": { "ClientId": "12345", "ClassId": 2201, "LateCancel": true } }
+}
+```
+
 ### checkoutShoppingCart
 
 Processes a shopping cart checkout. A cart item can carry `appointmentIds` to reconcile existing booked appointments.

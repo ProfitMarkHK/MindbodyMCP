@@ -154,6 +154,7 @@ indistinguishable in a CI log.
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
+| Booking-cancel resolver | `cancelClientBooking` refusals for two locators and an unmatched one (no write) | books the run's client into a future class (`addClientToClass`, `requirePayment: false`), then `cancelClientBooking` with `lateCancel: false` and a schedule read-back; loud skip if no class can be booked |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
 | Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
@@ -444,6 +445,8 @@ With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 29 skip, 0 fail`.
 - **Every appointment-lifecycle step ran:** client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
 - `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, one custom-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
 - **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
+
+- **`cancelClientBooking` has not yet run against the sandbox (2026-11-15)**, for the same `403 StaffMemberNotFound` reason as below. Run `-t "cancelClientBooking"` once the sandbox staff user is restored.
 
 - **`getClientSchedule` has not yet run against the sandbox (2026-11-15).** It was added while `-99` refused every user token (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which fails every authenticated live test, existing ones included. Run `-t "getClientSchedule"` once the sandbox staff user is restored.
 

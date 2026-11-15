@@ -122,6 +122,7 @@ describe("getClientScheduleTool", () => {
       kind: "enrollment",
       visitId: 5002,
       classId: 202,
+      classScheduleId: 1102,
       appointmentId: undefined,
       appointmentStatus: undefined,
       startDateTime: "2026-12-02T09:00:00",

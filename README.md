@@ -126,7 +126,7 @@ Or run a local clone:
 
 ## 🛠️ Available Tools
 
-The server provides 50 tools across 6 categories:
+The server provides 51 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -181,6 +181,7 @@ The server provides 50 tools across 6 categories:
 - `addAppointment` - Book appointments. Returns `sessionTypeId`/`locationId` rather than names — the response carries ids, not objects
 - `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
+- `cancelClientBooking` - Cancel one booking (appointment, enrollment session or drop-in class) found by `classId`, `appointmentId`, `visitId` or `startDateTime`, choosing late or normal from `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. The write goes through the guarded tool for the booking's kind, is never retried, and returns a receipt with the exact request body
 - `getBookableItems` - Find available slots
 - `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that. The endpoint documents no day-of-week filter, so there is no `days` parameter
 - `getScheduleItems` - View schedules. Returns three lists — `appointments`, `availabilities` and `unavailabilities` — because the API keeps them separate
