@@ -42,6 +42,7 @@ import {
   getClientAccountBalancesTool,
   getClientContractsTool,
   getClientFormulaNotesTool,
+  getClientCompleteInfoTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -404,7 +405,18 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           },
         },
       },
-      
+      {
+        name: 'getClientCompleteInfo',
+        description: 'Get a client\'s whole wallet in one call: account balance, purchased services, contracts, memberships and arrival programs',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+          },
+          required: ['clientId'],
+        },
+      },
+
       // Sales & Commerce Tools
       {
         name: 'getServices',
@@ -1052,6 +1064,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
+      case 'getClientCompleteInfo':
+        const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string);
+        return { content: [{ type: 'text', text: JSON.stringify(completeInfoResult, null, 2) }] };
+
       // Sales & Commerce Tools
       case 'getServices':
         const servicesResult = await getServicesTool(

@@ -9,17 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
+- Added `getClientCompleteInfo`, which reads a client's account balance, services, contracts, memberships and arrivals in one `/client/clientcompleteinfo` request. The tool set is now 50.
 - Brought the tool set from 38 to 41 with `getClassVisits` (attendance for a single class), `cancelAppointments` and `cancelEnrollmentVisits`.
 - Added dependency injection for the API client and cache in every tool, so tests run without the global client.
 - Added an OpenAPI-validated stub client for tool tests, so test requests are checked against the Mindbody v6 spec.
 - Added cached lookups that resolve location and session type IDs to names.
-- Added a Next.js companion app with pages for classes, appointments, enrollments, sales, locations, sites, clients, and staff.
 - Added a `spec:update` script to track changes to the Mindbody OpenAPI spec, and an offline check that the committed spec matches its lock.
 - Added a quality-gate runner (`scripts/check-gates.sh`) and a pre-commit hook that runs every gate.
 - Added agent guidance: `AGENTS.md` as the canonical guide, role definitions for Claude Code and OpenCode, and the ponytail plugin configuration.
 
 ### Changed
-- `getClients` accepts any number of `clientIds`. Production Mindbody refuses more than 20 `ClientIds` per `GET /client/clients` (`InvalidParameter`), so the IDs are sent in sequential batches of 20 and the results merged, de-duplicated by client ID; if any batch fails the whole call fails. Client-name lookups and the Next.js app's `getClients` batch the same way.
+- `getClients` accepts any number of `clientIds`. Production Mindbody refuses more than 20 `ClientIds` per `GET /client/clients` (`InvalidParameter`), so the IDs are sent in sequential batches of 20 and the results merged, de-duplicated by client ID; if any batch fails the whole call fails. Client-name lookups batch the same way.
 - List reads now page through every result: each Mindbody list GET is fetched 200 rows at a time until the server's total is reached, instead of returning only the first page.
 - All dates and times use the studio's own timezone, read from the site record. `MINDBODY_SITE_TIMEZONE` is used only when the site record has no usable zone, and write operations refuse it when it disagrees with the record.
 - The `SiteId` header is no longer sent when `MINDBODY_SITE_ID` is unset.
@@ -29,20 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getBookableItems` returns availability windows rather than bookable slots; book only at a start time from `getActiveSessionTimes`.
 - The pagination gate (Gate 13) uses the TypeScript compiler to find paginated reads, with a minimum count per source root.
 - CI fails the build on type, test, build and audit errors, and the release workflow runs a shared preflight before publishing.
-- Replaced relaxed types across the server, tests and the Next.js app: `catch (error: any)` now uses `unknown`-narrowing through `errorMessage()` helpers, and `Record<string, any>` / `CacheEntry<any>` / `post(…data?: any)` are `unknown`-typed.
-- Typed the client domain against the OpenAPI spec in both the MCP server and the Next.js app: `fetchAllPages<any>` and ad-hoc `(row: any)` mappers are now spec-derived types (`Client`, `Visit`, `ClientMembership`, `ClientContract`, and the POST response wrappers).
+- Replaced relaxed types across the server and tests: `catch (error: any)` now uses `unknown`-narrowing through `errorMessage()` helpers, and `Record<string, any>` / `CacheEntry<any>` / `post(…data?: any)` are `unknown`-typed.
+- Typed the client domain against the OpenAPI spec: `fetchAllPages<any>` and ad-hoc `(row: any)` mappers are now spec-derived types (`Client`, `Visit`, `ClientMembership`, `ClientContract`, and the POST response wrappers).
 
 ### Fixed
 - Non-idempotent POST requests are no longer retried. A POST that fails transiently is reported for reconciliation, because the v6 API has no idempotency key. Retries apply only to GET, HEAD and OPTIONS.
 - The pager fails loudly instead of truncating a result: it throws on an empty page before the server's total is reached, on a total that contradicts the rows received, and on a server that ignores `Offset`.
 - Corrected how the OAuth token expiry is read, and made user token authentication optional, which resolves `DeniedAccess` errors on the sandbox.
 - `getClassVisits` reads visits from the class in the response and includes the class details.
-- The Next.js app renders every timestamp in the studio's timezone and syncs classes over the site's calendar day rather than the host's.
-- `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, including the Next.js Prisma schema (`Int?` → `String?`), after a live sandbox probe.
-- The Next.js client reads no longer use phantom fields that the server had already dropped: `LiabilityRelease` read as an object, `Location.Name`/`Staff.Name` on `Visit`, `Program` mapped to a string, `ClientCreditCards[]` with `Balance`, and `Description`/`SoldDate`/`Balance`/`ContractType` on `ClientContract`.
-- The Next.js class/staff/sales reads now use the spec field names: `ClassDescription.ImageURL` (not `ImageUrl`), `Class.Substitute` (not `IsSubstitute`), `Staff.IsMale` (not `isMale`), and `Contract.IntroOffer` as a string (not an object).
-- The Next.js date-time render no longer depends on the runtime's ICU/CLDR data: `formatSiteDateTime` and `formatSiteDateTimeLong` format the date and the clock with two separate `Intl.DateTimeFormat`s joined by an explicit separator (`" at "` and `", "`), because a single combined pattern lets ICU insert the CLDR date-time combination glue, which changed for en-US in CLDR 42 (`"{date}, {time}"` → `"{date} 'at' {time}"`). The same code printed "Sun, Oct 18 at 8:00 AM" on a newer ICU and "Sun, Oct 18, 8:00 AM" on the GitHub ubuntu runner, failing five `formatSiteTime` tests in CI only.
-- The zone label is likewise CLDR-independent: bun's Linux build reports the short generic name of `Asia/Hong_Kong` as "Hong Kong SAR China Time" where its macOS build reports "Hong Kong Time", so `siteZoneLabel` normalises known ICU zone-display-name variants to the app's established label before showing one.
+- `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, after a live sandbox probe.
 
 ### Security
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.

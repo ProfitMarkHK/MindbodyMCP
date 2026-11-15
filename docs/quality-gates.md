@@ -57,19 +57,16 @@ a second entry point would be a second source of truth, and the suite is cheap
 enough that the trade buys nothing. It is the same command as `bun run check`,
 so nothing a commit passes can fail a manual check and vice versa.
 
-`bun run build` writes to `dist/`, which is gitignored, and Gate 15's
-`next build` writes to `nextjs-app/.next/`, ignored by `nextjs-app/.gitignore`.
-The runner prints both in its output so the side effects are never a surprise.
-Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
-`cd nextjs-app && bun install`; without it they fail rather than skip.
+`bun run build` writes to `dist/`, which is gitignored. The runner prints it in
+its output so the side effect is never a surprise.
 
 ## Gates
 
 | # | Gate | State | Command / note |
 |---|------|-------|----------------|
-| 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] root = "./tests"`, so discovery never walks nested worktrees or scratch checkouts in the repo root (Bun ignores `.gitignore` for discovery) — see gate 1 below. It also sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. Includes `tests/nextjs-paging.test.ts`, the tests for the Next.js app's pager and service (the app has no test runner of its own). |
+| 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] root = "./tests"`, so discovery never walks nested worktrees or scratch checkouts in the repo root (Bun ignores `.gitignore` for discovery) — see gate 1 below. It also sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. |
 | 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
-| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured, in the root or in `nextjs-app/` (`next lint` has no config to run and only offers to create one). See gaps 3a, 3b and 3c below. |
+| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured. See gaps 3a and 3b below. |
 | 4 | New code covered by non-trivial tests | applies | manual review — the change's tests must exercise real logic paths, assert on outputs or state, and cover error paths, not just "returns without error". |
 | 5 | Documentation updated | applies | manual review — `README.md`, `Claude.md`, `AGENTS.md`, and `docs/` (notably `docs/quality-gates.md`) stay in sync with the change. |
 | 6 | Type checking passes | applies | `bun run typecheck` (`tsc --noEmit`) — currently exits 0. Run by the runner. |
@@ -79,9 +76,7 @@ Gates 14 and 15 need `nextjs-app/node_modules`, installed once per clone with
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
-| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` **and `nextjs-app/src/**/*.ts(x)`** against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`, or its port `nextjs-app/src/lib/mindbody/paging.ts`). Every GET call site under `src/`, `nextjs-app/src/` and `scripts/` is scanned (shell scripts, the Prisma schema and the app's config files are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
-| 14 | nextjs-app type checking passes | applies | `cd nextjs-app && ./node_modules/.bin/tsc --noEmit` — exits 0. Run by the runner; **fails, never skips, when `nextjs-app/node_modules` is absent** (it prints the `bun install` to run). See Gates 14 and 15 below. |
-| 15 | nextjs-app build succeeds | applies | `cd nextjs-app && next build` — exits 0, ~11s warm, 8 routes; writes `nextjs-app/.next/` and `tsconfig.tsbuildinfo`, both ignored by `nextjs-app/.gitignore`. Run by the runner with `NEXT_TELEMETRY_DISABLED=1` and no stdin so it can never block a hook; fail-closed on missing dependencies like Gate 14. |
+| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
 
 State legend: **applies** (must pass), **no-op** (does not apply, reason
@@ -106,7 +101,7 @@ and not needed" from "forgotten":
   - **Both columns, not only % Funcs.** A single number sets the threshold for
     **% Funcs and % Lines alike**, and either column can trip it. Observed
     2026-10-17: with every file above 10% funcs, `bun test` still exited 1
-    (0 tests failing) because `nextjs-app/src/lib/mindbody/service.ts`
+    (0 tests failing) because one file
     sat at 16.33% funcs but **7.10% lines**. Bun prints no message naming the
     file; the runner reports the exit as a probable threshold breach, and the
     reader must find the row below 10% in *either* column. An earlier version of
@@ -401,18 +396,6 @@ and not needed" from "forgotten":
   exist. To close it, after 3a: add `"complexity": ["error", 10]` to the
   eslint config and run it scoped to source (`eslint src --ext .ts`) so `tests/`
   is excluded. Do not raise the threshold or grandfather existing functions.
-- **Gate 3c — nextjs-app has no linter either (gap).** `nextjs-app/package.json`
-  declares `"lint": "next lint"`, but there is no `.eslintrc*` and no `eslint` /
-  `eslint-config-next` dependency, so `next lint` does not lint: it prints
-  `? How would you like to configure ESLint?` and waits for a keypress
-  (checked 2026-10-17). It is therefore **not** wired into the runner — a gate
-  that blocks on stdin would hang the pre-commit hook, and one answered with a
-  default would silently write config. To close it: `cd nextjs-app && bun add -d
-  eslint eslint-config-next`, commit a `.eslintrc.json` with
-  `{"extends": "next/core-web-vitals"}`, then add `next lint` as a gate next to
-  Gates 14 and 15 in `scripts/check-gates.sh`. `next build` currently prints
-  "Linting and checking validity of types" but, with no config, that step is the
-  type check only.
 - **Gate 8 — security and secret scan (applies; secret scan passes).**
   - **Audit.** `npm audit --audit-level=moderate` → **`found 0 vulnerabilities`**,
     exit 0. The 12 advisories that made this gate red were **lockfile staleness,
@@ -461,7 +444,7 @@ and not needed" from "forgotten":
     `||`), takes an optional path argument defaulting to `.`, and scans it with
     `grep -rlE` — **filenames only**, so a matched secret value can never reach
     a terminal or a CI log — under an exclusion list that skips `.git`,
-    `node_modules`, `dist`, `.next`, `coverage`, `*.md`, `.env` / `.env.*`,
+    `node_modules`, `dist`, `coverage`, `*.md`, `.env` / `.env.*`,
     `*.local` / `*.local.*`, `*.example` / `*.example.*`, both lockfiles, and the
     nested linked worktrees described under Scope above. The
     `.env` exclusions are load-bearing in the other direction: real credentials
@@ -528,10 +511,7 @@ and not needed" from "forgotten":
   `request.offset` in [`docs/openapi.json`](openapi.json) (or
   `getCoursesRequest.limit`/`offset`, the one endpoint that names them
   differently) **must** be called through `fetchAllPages`: in
-  [`src/api/client.ts`](../src/api/client.ts) for the MCP server, and in
-  [`nextjs-app/src/lib/mindbody/paging.ts`](../nextjs-app/src/lib/mindbody/paging.ts)
-  for the Next.js app — a port with the same name and the same contract (below),
-  which is what lets one scanner rule cover both code bases. A paginated
+  [`src/api/client.ts`](../src/api/client.ts). A paginated
   endpoint called with a single GET is a failure, because it silently returns
   page one as if it were the whole list. **There is no allowlist and no
   per-endpoint exemption.** The fix for a violation is to page the call, never
@@ -544,10 +524,10 @@ and not needed" from "forgotten":
   It is static and deterministic: no network, no subprocess, no credentials. It
   loads `docs/openapi.json`, classifies every GET path (prefix
   `/public/v{version}` stripped, lowercased) as paginated or not, then parses every
-  `.ts` and `.tsx` file under `src/`, `nextjs-app/src/` and `scripts/` (the roots
-  are listed in `SCAN_ROOTS`; `node_modules` and `.next` are outside them) with
+  `.ts` and `.tsx` file under `src/` and `scripts/` (the roots
+  are listed in `SCAN_ROOTS`; `node_modules` is outside them) with
   the TypeScript compiler, one program per root under that root's own tsconfig
-  (so `@/` imports resolve; `nextjs-app/node_modules` is not needed). Comments
+  (so `@/` imports resolve). Comments
   are not code, so a commented-out call is not counted. Rule 4 also asserts that
   every root has files to parse, so a root silently dropped from the scan cannot
   pass.
@@ -581,17 +561,16 @@ and not needed" from "forgotten":
      `SCAN_ROOTS`), checked per root and independently of the total, or a floor
      that has gone stale. Floors as of 2026-10-19: `src/` **40** = 38
      `fetchAllPages` calls plus single GETs to the two non-paginated endpoints
-     `/class/classvisits` and `/site/activationcode`; `nextjs-app/src/` **28** =
-     27 `fetchAllPages` calls plus one single GET to `/site/activationcode`;
+     `/class/classvisits` and `/site/activationcode`;
      `scripts/` **0** (it holds no Mindbody read, and must still be scanned);
-     total 68, which is the `sites=` the runner prints. Each floor equals the found
+     total 40, which is the `sites=` the runner prints. Each floor equals the found
      count today, so deleting a call site, or turning one into a read the scanner
      cannot see, fails. The suite prints
-     `GATE13_PAGINATION_ROOTS src/=40/40 nextjs-app/src/=28/28 scripts/=0/0 (found/floor)`
+     `GATE13_PAGINATION_ROOTS src/=40/40 scripts/=0/0 (found/floor)`
      (informational, not parsed by the runner): recount from that line, never
      from this document. A root more than 5 sites (`ROOT_FLOOR_SLACK`) above its
      floor also fails with "raise minSites", so the floor cannot quietly fall
-     behind again (it sat at a total of 58 while the real count was 68). Lower a
+     behind again (it once sat well behind the real count). Lower a
      floor only when call sites are really removed;
   5. a call site the scanner cannot resolve to a literal path: `fetchAllPages`
      with a non-literal path (aliased imports and `paging.fetchAllPages(…)` are
@@ -611,12 +590,11 @@ and not needed" from "forgotten":
      read, and a URL that is not a literal fails here;
   6. a network client on a live line of code the scanner cannot parse. The
      TypeScript scan cannot read shell, so **shell scripts are not parsed**:
-     every `*.sh` under `scripts/`, everything under `nextjs-app/prisma/` and the
-     Next.js app's top-level config files (`tailwind.config.ts`, …) must contain no
+     every `*.sh` under `scripts/` must contain no
      `curl`, `wget`, `ncat`, `socat`, `telnet`, `fetch`, `axios`,
      `XMLHttpRequest`, `/dev/tcp/`, absolute `http(s)://` URL or `mindbodyonline`
-     on a non-comment line. The list is checked to be non-empty (the runner, the
-     live-tier launcher and the Prisma schema must be in it), so a moved directory
+     on a non-comment line. The list is checked to be non-empty (the runner and the
+     live-tier launcher must be in it), so a moved directory
      cannot make it vacuous. A shell script that needs the network must be
      rewritten as a `.ts` file under `scripts/`, where it is scanned.
 
@@ -658,18 +636,6 @@ and not needed" from "forgotten":
   The live API does honour a `Limit` above 200: `Limit=500` returned
   `RequestedLimit 500, PageSize 141, TotalResults 141`.
 
-  The Next.js port in `nextjs-app/src/lib/mindbody/paging.ts` has the same
-  constants (`DEFAULT_PAGE_SIZE` 200, `MAX_PAGES` 100), termination rules and
-  throws; the one difference is that it has no `onPage` hook (only the MCP
-  server's `getActiveSessionTimes` merges a second structure across pages).
-  `tests/nextjs-paging.test.ts` (run by Gate 1) holds it to that contract, walks
-  a loopback HTTP server through the real `MindbodyApiClient`, and then drives the real `MindbodyService` against a paging fake
-  server: every one of its list methods is asserted to send `Limit=200`, walk
-  `Offset` 0 → 2 → 4 over a server that caps pages at 2 rows, hit the spec path
-  under the spec's list key, and return all rows; `getClientVisits`,
-  `getClientAccountBalances`, `getClientEnrollments` and the one legitimate
-  single GET (`getActivationCode`) are covered individually.
-
   **How the runner executes it.** Like Gate 2, Gate 13 is subsumed by Gate 1: the
   file is a `*.test.ts`, so the runner's single `bun test` already runs it. The
   suite prints `GATE13_PAGINATION_RESULT sites=N violations=M` from `afterAll`,
@@ -683,31 +649,13 @@ and not needed" from "forgotten":
   and `FAIL Gate 13 mandatory pagination (1 violation(s) across 30 call sites; …)`,
   with a non-zero runner exit. Moving the gate file away gave
   `FAIL Gate 13 mandatory pagination did not run (no GATE13_PAGINATION_RESULT …)`.
-  Demonstrated again for the Next.js root, same day: reverting `getPackages` in
-  `nextjs-app/src/lib/mindbody/service.ts` to a single `this.client.get('/sale/packages', …)`
-  gave `nextjs-app/src/lib/mindbody/service.ts:1103 → /sale/packages (get)` under
-  rule 1 and `GATE13_PAGINATION_RESULT sites=58 violations=1`; restoring the
-  call gave `violations=0` again.
-
-  **What was found when the scan was widened (2026-10-17).** Before this, the
-  Next.js app issued 26 GETs and paged none of them: 24 single GETs to
-  paginated endpoints, one single GET to the non-paginated
-  `/site/activationcode`, and one to `/client/clientenrollments`, a path that is
-  not in the spec and that the live API answers with HTTP 404. All 24 now go
-  through the pager; `getClientEnrollments` reads `GET /client/clientschedule`
-  (list key `Visits`, `IncludeWaitlistEntries: true`, optional `startDate` /
-  `endDate`) and returns `ClientScheduleVisit` rows, mirroring the MCP server's
-  tool, instead of the dead endpoint — the feature was kept rather than removed
-  because it is part of the app's exported service, tRPC router and hook
-  surface. Three unrelated type errors that stopped `nextjs-app` from compiling
-  at all were fixed in passing so that Gates 14 and 15 could exist (see below).
 
   **Runtime counterpart.** The E2E suite's `process health` block asserts that
   every GET the server sent during the session carried `Limit=200` and an
   `Offset`. That holds because every GET route the stub serves is paginated in
   the spec, so a single-GET regression on a stubbed route also fails Gate 2.
 
-  **Scope limits (residual gap).** The scan covers `src/`, `nextjs-app/src/` and
+  **Scope limits (residual gap).** The scan covers `src/` and
   `scripts/*.ts`; any further code base must be added to `SCAN_ROOTS`. `tests/` is
   deliberately outside: its reads go to stubs and fakes, never a live site, and
   the opt-in live tier under `tests/live/` is run by hand against the sandbox.
@@ -722,44 +670,6 @@ and not needed" from "forgotten":
   checks paths, not query parameters, so a call that sends a parameter the spec
   does not document (for example `Days` on `/appointment/activesessiontimes`)
   passes Gate 13. That is Gate 11 work.
-- **Gates 14 and 15 — nextjs-app type check and build (apply; pass).**
-  [`nextjs-app/`](../nextjs-app/README.md) is a second code base in the repo: a
-  Next.js 14 app with its own axios Mindbody client, tRPC routers, Prisma schema
-  and `package.json`, sharing no code with `src/`. Gate 13 proves its reads are
-  paged; these two prove it compiles. Both run from inside `nextjs-app/` using
-  the binaries its own lockfile pins:
-
-  | Gate | Command (in `nextjs-app/`) | Result 2026-10-17 |
-  |---|---|---|
-  | 14 | `./node_modules/.bin/tsc --noEmit` | exit 0 |
-  | 15 | `NEXT_TELEMETRY_DISABLED=1 ./node_modules/.bin/next build </dev/null` | exit 0, "Compiled successfully", 8 routes, ~11s warm |
-
-  **Fail-closed.** If `nextjs-app/node_modules` is missing, each gate **fails**
-  with the install command (`cd nextjs-app && bun install`); neither skips. A
-  gate that cannot run must not read as green. Both need that one `bun install`
-  per clone, which the root install does not do.
-
-  **Why two gates when `next build` also type-checks.** Gate 14 reports a type
-  error as a type error, in seconds; Gate 15 additionally bundles and prerenders
-  every route, so a build-tool failure is distinguishable from a code failure.
-  Gate 15 writes `nextjs-app/.next/` and `nextjs-app/tsconfig.tsbuildinfo`,
-  ignored by `nextjs-app/.gitignore`. The runner prints this in its output.
-
-  **What they were red on before.** When first run on 2026-10-17 both failed on
-  11 pre-existing type errors: the tRPC router mounted as `client` collides with
-  a built-in of the tRPC React proxy (now mounted as `clients`; the hooks were
-  updated), a Prisma `Json` column assigned `null` instead of `Prisma.JsonNull`
-  in `src/lib/sync/index.ts`, and the checkout cart's `metadata.id` typed as
-  required although a `Tip` item carries `amount` instead. All three were code
-  bugs, fixed in the code.
-
-  **Not gates, and why (nextjs-app).** `next lint` — see gap 3c. **Tests** — the
-  app has no test runner, no test script (`npm test` → `Missing script: "test"`)
-  and no test files; its pager and service are tested from the root suite
-  (`tests/nextjs-paging.test.ts`, `tests/nextjs-enrollment.test.ts`,
-   `tests/nextjs-sitetime.test.ts`, Gate 1) so no second runner is needed. Adding
-  a runner inside `nextjs-app/` would also pull `bun:test` types into a tsconfig
-  that `next build` type-checks. The app's own `README.md` says the same.
 - **Gate 16 — OpenAPI spec integrity (applies; passes; offline).**
   `sha256(docs/openapi.json)` must equal the single value in
   [`docs/openapi.lock`](openapi.lock). Purely local: it reads two files and
@@ -868,13 +778,12 @@ and not needed" from "forgotten":
   the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
   is **half** in: its secret scan and staged-`.env` guard run as the first gate of
   the runner, so every commit is covered; only `npm audit` is left out, because it
-  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13,
-  14, 15 and 16. Gates 2
+  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13
+  and 16. Gates 2
   and 13 are executed by Gate 1's single `bun test` run and their verdicts read
   out of that run's log; see the Gate 2 and Gate 13 entries for why neither is
   invoked a second time. Gate 16 runs second, before Gate 1, because Gates 1 and
-  13 both read the spec it verifies. Gates 14 and 15 run inside `nextjs-app/` and need its
-  own `bun install` once per clone; they fail, not skip, without it. The opt-in live
+  13 both read the spec it verifies. The opt-in live
   E2E tier is likewise not in the runner; see its own entry above for why it is
   credential-gated and cannot run unattended.
 - **Follow-up, tracked — closed.** Wiring the Gate 8 secret scan into the local

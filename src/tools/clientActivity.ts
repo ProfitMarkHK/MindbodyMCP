@@ -25,7 +25,7 @@ import { locationNames, staffNames } from './lookups.js';
  * back to `String(id)` or `''`. Do not merge the two: this one deliberately
  * never invents a placeholder.
  */
-function nameFor(index: Map<number, string>, id: unknown): string | undefined {
+export function nameFor(index: Map<number, string>, id: unknown): string | undefined {
   return typeof id === 'number' && Number.isFinite(id) ? index.get(id) : undefined;
 }
 

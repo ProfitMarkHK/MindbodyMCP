@@ -73,7 +73,6 @@ hits=$(grep -rlE "$secret_pattern" \
     --exclude-dir=.git \
     --exclude-dir=node_modules \
     --exclude-dir=dist \
-    --exclude-dir=.next \
     --exclude-dir=coverage \
     --exclude='*.md' \
     --exclude='.env' --exclude='.env.*' \

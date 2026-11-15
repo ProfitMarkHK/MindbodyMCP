@@ -15,14 +15,11 @@
 #   Gate 1  bun test            — full suite (tests + hermetic E2E tier)
 #   Gate 2  (derived from Gate 1)— end-to-end acceptance suite, see below
 #   Gate 13 (derived from Gate 1)— mandatory pagination (tests/pagination-gate.test.ts),
-#                                 scanning src/ AND nextjs-app/src/
+#                                 scanning src/
 #   Gate 7  bun run build       — tsc && chmod +x dist/index.js  (writes dist/, gitignored)
-#   Gate 14 nextjs-app typecheck— tsc --noEmit in nextjs-app/ (needs nextjs-app/node_modules)
-#   Gate 15 nextjs-app build    — next build in nextjs-app/ (writes nextjs-app/.next/, gitignored)
 #
 # Gates 3, 4, 5, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
-# need human judgement. Gate 3 is a gap (no linter or complexity rule is wired;
-# nextjs-app has no ESLint config either, `next lint` only offers to create one).
+# need human judgement. Gate 3 is a gap (no linter or complexity rule is wired).
 # Gate 12 is green but deliberately not yet wired in; it is documented in
 # docs/quality-gates.md rather than run here. Gate 8 is wired, but only its
 # offline half: `npm audit --audit-level=moderate` needs the registry, so it is
@@ -236,11 +233,9 @@ fi
 # ── Gate 13: mandatory pagination ────────────────────────────────────────────
 # Also subsumed by Gate 1, for the same reason as Gate 2: the static check lives
 # in tests/pagination-gate.test.ts, a *.test.ts file the single `bun test` above
-# already ran. It scans src/ and nextjs-app/src/ (.ts and .tsx) for every Mindbody
-# GET call site and fails if any endpoint that docs/openapi.json paginates
+# already ran. It scans src/ (.ts and .tsx) for every Mindbody GET call site and fails if any endpoint that docs/openapi.json paginates
 # (request.limit + request.offset) is called with a single GET instead of
-# fetchAllPages (src/api/client.ts or nextjs-app/src/lib/mindbody/paging.ts, same
-# contract). There is no allowlist.
+# fetchAllPages (src/api/client.ts). There is no allowlist.
 #
 # The suite prints `GATE13_PAGINATION_RESULT sites=N violations=M` from its
 # afterAll hook, and only once its scan completed. Fail-closed on all three:
@@ -262,7 +257,7 @@ else
   elif [ "$PAGINATION_VIOLATIONS" -gt 0 ]; then
     fail "Gate 13 mandatory pagination (${PAGINATION_VIOLATIONS} violation(s) across ${PAGINATION_SITES} call sites; see tests/pagination-gate.test.ts output above)"
   else
-    pass "Gate 13 mandatory pagination (${PAGINATION_SITES} API GET call sites across src/, nextjs-app/src/ and scripts/; every paginated endpoint goes through fetchAllPages)"
+    pass "Gate 13 mandatory pagination (${PAGINATION_SITES} API GET call sites across src/ and scripts/; every paginated endpoint goes through fetchAllPages)"
   fi
 fi
 
@@ -282,53 +277,6 @@ if bun run build; then
   pass "Gate 7  bun run build"
 else
   fail "Gate 7  bun run build"
-fi
-
-# ── Gates 14 and 15: nextjs-app typecheck and build ─────────────────────────
-# nextjs-app/ is a second code base with its own Mindbody client, its own
-# tsconfig and its own dependency tree. Gate 13 scans its source statically, but
-# that proves only that every call is paged, not that the app compiles. These two
-# gates do, from inside nextjs-app/, using the binaries pinned in its lockfile.
-#
-# Fail-closed: if nextjs-app/node_modules is absent the gates FAIL with the
-# install command, never SKIP. A gate that cannot run must not read as green.
-#
-# `next build` is the heavier of the two (~15s warm) and writes nextjs-app/.next/
-# plus nextjs-app/tsconfig.tsbuildinfo, both gitignored by nextjs-app/.gitignore.
-# It also type-checks, but Gate 14 runs tsc separately so a type error is
-# reported as a type error, and so a build-tool failure is distinguishable from
-# a code failure.
-#
-# `next lint` and a nextjs-app test suite are NOT gates: there is no ESLint
-# config (and no eslint dependency) in nextjs-app, so `next lint` only offers to
-# create one, and the app has no test runner. The pager's tests live in the root
-# tests/nextjs-paging.test.ts and are already run by Gate 1. See
-# docs/quality-gates.md for both gaps.
-NEXT_DIR="nextjs-app"
-echo
-echo "=== Gate 14: nextjs-app typecheck (tsc --noEmit in ${NEXT_DIR}/) ==="
-if [ ! -x "$NEXT_DIR/node_modules/.bin/tsc" ]; then
-  fail "Gate 14 nextjs-app typecheck could not run: ${NEXT_DIR}/node_modules is missing (run: cd ${NEXT_DIR} && bun install)"
-elif (cd "$NEXT_DIR" && ./node_modules/.bin/tsc --noEmit); then
-  pass "Gate 14 nextjs-app typecheck"
-else
-  fail "Gate 14 nextjs-app typecheck"
-fi
-
-echo
-echo "=== Gate 15: nextjs-app build (next build in ${NEXT_DIR}/, writes ${NEXT_DIR}/.next/, which is gitignored) ==="
-if [ ! -x "$NEXT_DIR/node_modules/.bin/next" ]; then
-  fail "Gate 15 nextjs-app build could not run: ${NEXT_DIR}/node_modules is missing (run: cd ${NEXT_DIR} && bun install)"
-else
-  BUILD_LOG="$LOG_DIR/next-build.log"
-  # `next build` is given no stdin and no telemetry prompt so it can never block a hook.
-  if (cd "$NEXT_DIR" && NEXT_TELEMETRY_DISABLED=1 ./node_modules/.bin/next build </dev/null >"$BUILD_LOG" 2>&1); then
-    grep -E '^\s*(✓|Route \(app\)|RESULT|Failed)' "$BUILD_LOG" | sed 's/^/    /'
-    pass "Gate 15 nextjs-app build"
-  else
-    sed 's/^/    /' "$BUILD_LOG"
-    fail "Gate 15 nextjs-app build"
-  fi
 fi
 
 # ── Report ───────────────────────────────────────────────────────────────────
