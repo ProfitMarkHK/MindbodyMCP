@@ -751,11 +751,12 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       {
         name: 'updateAppointment',
         description:
-          "Update ONE appointment belonging to ONE client: reschedule, change staff, notes or resources, or apply a " +
+          "Update ONE appointment belonging to ONE client: reschedule, change staff, session type, notes or resources, or apply a " +
           `status action via execute (confirm, unconfirm, arrive, unarrive, complete). Guards, all checked before ` +
           `anything is written: clientId and appointmentId must both be given; the appointment must belong to that ` +
           `client, else "not found for this client"; a cancelled appointment is final and accepts no update; a ` +
-          `completed or no-show one takes no status action, no payment and no reschedule (notes are still fine); ` +
+          `completed or no-show one takes no status action, no payment, no reschedule and no session type change ` +
+          `(notes are still fine); ` +
           `execute complete needs the appointment to have started, in the site's timezone. applyPayment may not be ` +
           `combined with a reschedule. Does not cancel: use cancelAppointments.`,
         inputSchema: {
@@ -764,6 +765,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID who owns the appointment; verified before any write' },
             appointmentId: { type: 'number', description: 'Appointment ID' },
             staffId: { type: 'number', description: 'Staff ID' },
+            sessionTypeId: {
+              type: 'number',
+              description:
+                'New session type (service), a positive integer. Allowed on Booked, Confirmed and Arrived ' +
+                'appointments; refused on Completed, NoShow, Cancelled and LateCancelled. Not a reschedule, so it ' +
+                'may be combined with applyPayment. Mindbody may reset the end time to the new type\'s duration; ' +
+                'the response returns the updated times and sessionTypeId.',
+            },
             startDateTime: { type: 'string', description: 'Start date/time' },
             endDateTime: { type: 'string', description: 'End date/time' },
             resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
@@ -1287,7 +1296,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.executePayment as boolean | undefined,
           args.sendEmail as boolean | undefined,
           args.applyPayment as boolean | undefined,
-          args.execute as UpdateAppointmentExecute | undefined
+          args.execute as UpdateAppointmentExecute | undefined,
+          args.sessionTypeId as number | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(updateAppointmentResult, null, 2) }] };
 

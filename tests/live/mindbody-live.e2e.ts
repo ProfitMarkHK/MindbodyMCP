@@ -313,6 +313,7 @@ function wasLoudlySkipped(name: string): boolean {
 }
 
 const ADD_APPOINTMENT_TEST = 'addAppointment books a slot that is then readable back';
+const SESSION_TYPE_CHANGE_TEST = 'updateAppointment changes an arrived appointment\'s session type and restores it';
 
 /**
  * `/appointment/bookableitems` discovery parameters. Up to this many
@@ -326,6 +327,9 @@ const BOOKABLE_WINDOW_DAYS = 14;
 
 /** How many distinct staff/session type/location candidates addAppointment may try. */
 const MAX_BOOKING_CANDIDATES = 8;
+
+/** Other session types the session type change test tries before skipping loudly. */
+const MAX_SESSION_TYPE_CHANGE_ATTEMPTS = 6;
 
 /**
  * Mindbody refusals of an addAppointment REQUEST that availability cannot
@@ -1511,6 +1515,87 @@ describe('live tier — appointments', () => {
       return;
     }
     expect(readBack.status).toBe('Arrived');
+  });
+
+  // Issue #29: a booking made under the wrong service is corrected before
+  // checkout, usually once the client has arrived. The appointment is changed to
+  // another session type and then RESTORED, so the comp-paid checkout below
+  // still pays for the type it discovered a service for.
+  itLive(SESSION_TYPE_CHANGE_TEST, async () => {
+    if (!requireCreatedAppointment(SESSION_TYPE_CHANGE_TEST)) return;
+    if (!requireDiscovered(SESSION_TYPE_CHANGE_TEST, ['sessionTypeId', 'appointmentSessionTypeIds'])) return;
+
+    const before = await readBackCreatedAppointment();
+    const original: number = before.sessionTypeId ?? discovered.sessionTypeId!;
+
+    // Prefer a type availability already pairs with this staff member; then the
+    // other Appointment types. Mindbody refuses a type the staff cannot teach,
+    // and a refusal writes nothing, so trying the next one is free.
+    const paired = (discovered.bookingCandidates ?? [])
+      .filter((candidate) => candidate.staffId === discovered.staffId)
+      .map((candidate) => candidate.sessionTypeId);
+    const targets = [...new Set([...paired, ...discovered.appointmentSessionTypeIds!])]
+      .filter((id) => id !== original)
+      .slice(0, MAX_SESSION_TYPE_CHANGE_ATTEMPTS);
+
+    const refusals: string[] = [];
+    let changed: any = null;
+    let target: number | null = null;
+    for (const candidate of targets) {
+      const attempt = await callTool('updateAppointment', {
+        clientId: createdClientId,
+        appointmentId: createdAppointmentId,
+        sessionTypeId: candidate,
+        sendEmail: false,
+      });
+      if (attempt.success) {
+        changed = attempt;
+        target = candidate;
+        break;
+      }
+      // A refusal by this server's own guards is a failure: the appointment is
+      // this client's and not yet checked out, so every guard should pass.
+      expect(attempt.rejected, `updateAppointment's own guard refused session type ${candidate}: ${attempt.message}`)
+        .toEqual([]);
+      refusals.push(`session type ${candidate}: ${attempt.message}`);
+    }
+    if (refusals.length > 0) {
+      console.log(
+        `\n LIVE session type change: ${refusals.length} type(s) refused by Mindbody:\n` +
+          refusals.map((line) => `   ${line}`).join('\n') +
+          '\n'
+      );
+    }
+    if (changed === null) {
+      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
+        `reason: Mindbody refused every other session type tried (${targets.join(', ') || 'none available'})`,
+        `for staff ${discovered.staffId}, so there is no type to change appointment ${createdAppointmentId} to.`,
+      ]);
+      return;
+    }
+
+    expect(changed.appointment.sessionTypeId).toBe(target);
+    const afterChange = await readBackCreatedAppointment();
+    expect(afterChange.sessionTypeId, `appointment ${createdAppointmentId} reads back as session type ${afterChange.sessionTypeId}`)
+      .toBe(target);
+    expect(afterChange.status).toBe(before.status);
+    console.log(
+      `\n LIVE session type change: appointment ${createdAppointmentId} (${before.status}) moved from type ` +
+        `${original} to ${target}; end ${before.endDateTime} -> ${afterChange.endDateTime}.\n`
+    );
+
+    const restored = await callTool('updateAppointment', {
+      clientId: createdClientId,
+      appointmentId: createdAppointmentId,
+      sessionTypeId: original,
+      sendEmail: false,
+    });
+    expect(restored.success, `restoring session type ${original} failed: ${restored.message}`).toBe(true);
+    const afterRestore = await readBackCreatedAppointment();
+    expect(afterRestore.sessionTypeId).toBe(original);
+    console.log(
+      `   restored to type ${original}; end ${afterRestore.endDateTime}.\n`
+    );
   });
 
   // `addClientArrival` (POST /client/addarrival) is deliberately NOT exercised

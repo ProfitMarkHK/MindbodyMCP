@@ -178,7 +178,7 @@ The server provides 50 tools across 6 categories:
 ### 📆 Appointments
 - `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client. Session-type and location **names** are resolved from the cached site catalogue; the client name, email and phone are not returned by this endpoint, so only `clientId` is available
 - `addAppointment` - Book appointments. Returns `sessionTypeId`/`locationId` rather than names — the response carries ids, not objects
-- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
+- `updateAppointment` - Reschedule (new `startDateTime`), change staff, notes or session type (`sessionTypeId`, on Booked, Confirmed or Arrived appointments only), or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `getBookableItems` - Find available slots
 - `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that. The endpoint documents no day-of-week filter, so there is no `days` parameter
