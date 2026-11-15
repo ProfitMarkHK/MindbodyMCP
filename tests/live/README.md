@@ -149,7 +149,7 @@ indistinguishable in a CI log.
 |---|---|---|
 | Configuration | sandbox SiteId, no credential inheritance, STDIO + MCP handshake, host reachability | — |
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
-| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal) | `addClient`, read-back, cleanup |
+| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientSchedule` (default window for one client, then walks up to 40 clients from a year back for one with bookings and checks each row's `kind`, ids and flags; loud skip if none has any) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
@@ -444,6 +444,8 @@ With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 29 skip, 0 fail`.
 - **Every appointment-lifecycle step ran:** client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
 - `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, one custom-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
 - **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
+
+- **`getClientSchedule` has not yet run against the sandbox (2026-11-15).** It was added while `-99` refused every user token (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which fails every authenticated live test, existing ones included. Run `-t "getClientSchedule"` once the sandbox staff user is restored.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.

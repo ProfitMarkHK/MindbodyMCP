@@ -82,6 +82,8 @@ const BUN_BINARY = process.execPath;
 const CALL_TIMEOUT_MS = 60_000;
 /** How many clients the read-only formula note test checks before giving up. */
 const FORMULA_NOTE_CLIENT_SCAN = 40;
+/** Clients getClientSchedule walks before it reports a loud skip (a booking-less site cannot run long). */
+const SCHEDULE_CLIENT_SCAN = 40;
 const CONNECT_TIMEOUT_MS = 60_000;
 
 /**
@@ -996,6 +998,55 @@ describe('live tier — clients', () => {
         `(first note id ${found.result.formulaNotes[0].id}).\n`
     );
   }, FORMULA_NOTE_CLIENT_SCAN * CALL_TIMEOUT_MS);
+
+  itLive("getClientSchedule lists a client's bookings as flat, typed rows, read-only", async () => {
+    const name = "getClientSchedule lists a client's bookings as flat, typed rows, read-only";
+    // Read-only. The default window (today through 30 days out) may be empty
+    // for every sandbox client, so the scan starts a year back to find a client
+    // with bookings and exercise the field mapping on real rows.
+    const yearBack = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, SCHEDULE_CLIENT_SCAN);
+    expect(candidates.length).toBeGreaterThan(0);
+
+    const byDefault = await callTool('getClientSchedule', { clientId: String(candidates[0].id) });
+    expect(Array.isArray(byDefault.bookings)).toBe(true);
+    expect(byDefault.totalBookings).toBe(byDefault.bookings.length);
+
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientSchedule', { clientId: String(candidate.id), startDate: yearBack });
+      expect(result.totalBookings).toBe(result.bookings.length);
+      if (result.totalBookings > 0) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a booking since ${yearBack}, so the`,
+        'row mapping is untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    const kinds = new Set(['waitlist', 'appointment', 'enrollment', 'class']);
+    for (const booking of found.result.bookings) {
+      expect(kinds.has(booking.kind)).toBe(true);
+      expect(Number.isInteger(booking.visitId)).toBe(true);
+      expect(booking.startDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(booking.startDateTime.slice(0, 10) >= yearBack).toBe(true);
+      if (booking.kind === 'appointment') expect(Number.isInteger(booking.appointmentId)).toBe(true);
+      if (booking.kind === 'class' || booking.kind === 'enrollment') expect(Number.isInteger(booking.classId)).toBe(true);
+      if (booking.kind === 'waitlist') expect(booking.isWaitlisted).toBe(true);
+      for (const flag of ['signedIn', 'lateCancelled', 'missed', 'isWaitlisted']) expect(typeof booking[flag]).toBe('boolean');
+    }
+    const counts = [...kinds].map((kind) => `${kind} ${found!.result.bookings.filter((b: any) => b.kind === kind).length}`);
+    console.log(
+      `\n LIVE client schedule: client ${found.clientId} has ${found.result.totalBookings} booking(s) since ${yearBack} ` +
+        `(${counts.join(', ')}); default window for client ${candidates[0].id}: ${byDefault.totalBookings}.\n`
+    );
+  }, (SCHEDULE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
 
   itLive('getClientFormulaNotes with neither id is refused', async () => {
     if (!client) throw new Error('MCP client is not connected; the live tier did not start.');

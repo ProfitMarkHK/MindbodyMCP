@@ -53,7 +53,8 @@ function scheduledDays(schedule: any): string[] {
   return DAY_NAMES.filter((day) => schedule?.[`Day${day}`] === true);
 }
 
-function isEnrollmentClass(cls: any): boolean {
+/** True when a GET /class/classes row belongs to a Program with ScheduleType `Enrollment`. */
+export function isEnrollmentClass(cls: any): boolean {
   return cls?.ClassDescription?.Program?.ScheduleType === ENROLLMENT_SCHEDULE_TYPE;
 }
 
@@ -62,7 +63,7 @@ function isEnrollmentClass(cls: any): boolean {
  * Returns a map ClassId -> Class. Dates bound the lookup the same way the
  * caller bounded the visits, so a class outside the window is simply absent.
  */
-async function lookupClasses(
+export async function lookupClasses(
   client: IMindbodyClient,
   classIds: number[],
   startDateTime: string,
@@ -85,6 +86,27 @@ async function lookupClasses(
     for (const cls of items) byId.set(Number(cls.Id), cls);
   }
   return byId;
+}
+
+/**
+ * Every row of a client's schedule in [startDate, endDate]: GET
+ * /client/clientschedule (paginated, list key `Visits`, rows are
+ * VisitWithWaitlistInfo) with waitlist entries included. Shared by the
+ * enrollment tools and getClientSchedule, so the endpoint is read one way.
+ */
+export async function fetchClientSchedule(
+  client: IMindbodyClient,
+  clientId: string,
+  startDate: string,
+  endDate: string
+): Promise<any[]> {
+  const { items } = await fetchAllPages<any>(
+    client,
+    '/client/clientschedule',
+    { ClientId: clientId, StartDate: startDate, EndDate: endDate, IncludeWaitlistEntries: true },
+    'Visits'
+  );
+  return items;
 }
 
 // ── getEnrollments ───────────────────────────────────────────────────────────
@@ -381,17 +403,7 @@ export async function getClientEnrollmentsTool(
   cache: SimpleCache = classCache
 ): Promise<{ enrollments: ClientEnrollment[]; totalEnrollments: number; totalSessions: number }> {
   const dates = await withDefaultDates(startDate, endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS, client, cache);
-  const { items: visits } = await fetchAllPages<any>(
-    client,
-    '/client/clientschedule',
-    {
-      ClientId: clientId,
-      StartDate: dates.start,
-      EndDate: dates.end,
-      IncludeWaitlistEntries: true,
-    },
-    'Visits'
-  );
+  const visits = await fetchClientSchedule(client, clientId, dates.start, dates.end);
 
   const classVisits = visits.filter((visit: any) => Number(visit?.ClassId) > 0);
   if (classVisits.length === 0) return { enrollments: [], totalEnrollments: 0, totalSessions: 0 };
@@ -606,12 +618,7 @@ export async function cancelEnrollmentVisitsTool(
   let rows: any[];
   let classes: Map<number, any>;
   try {
-    ({ items: rows } = await fetchAllPages<any>(
-      client,
-      '/client/clientschedule',
-      { ClientId: clientId, StartDate: start, EndDate: end, IncludeWaitlistEntries: true },
-      'Visits'
-    ));
+    rows = await fetchClientSchedule(client, clientId, start, end);
     const wanted = rows.filter((row) => visitIds.includes(Number(row?.Id)) && Number(row?.ClassId) > 0);
     classes = await lookupClasses(
       client,

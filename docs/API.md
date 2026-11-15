@@ -436,6 +436,64 @@ Updates an existing client. The server nests the changed fields under `Client`, 
 }
 ```
 
+### getClientSchedule
+
+A client's bookings in a window, one flat row per booking, shaped so a cancel flow can resolve "Jane's 6pm tonight" to the ids the cancel tools take. Read-only: no POST.
+
+Reads `GET /client/clientschedule` with `ClientId`, `StartDate`, `EndDate` and `IncludeWaitlistEntries: true`, through `fetchAllPages`. The read is shared with `getClientEnrollments` and `cancelEnrollmentVisits` (`fetchClientSchedule` in `src/tools/enrollmentManagement.ts`). When some rows have a `ClassId`, it also reads `GET /class/classes` by `ClassIds` (chunks of 50, same helper as `getClientEnrollments`) to learn each class's program. An empty schedule costs one request. Staff and location names come from the cached `/staff/staff` and `/site/locations` catalogues, each read only when a row carries that id.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to look up | - |
+| `startDate` | string | No | Start date (YYYY-MM-DD), sent unchanged | Today at the site |
+| `endDate` | string | No | End date (YYYY-MM-DD), sent unchanged | 30 days after today at the site |
+
+#### `kind`
+
+Checked in this order; the first match wins.
+
+| `kind` | Rule | Cancel with |
+|--------|------|-------------|
+| `waitlist` | `WaitlistInfo.WaitlistId` is set | Not a seat. Remove it from the waitlist |
+| `appointment` | `AppointmentId > 0` | `cancelAppointments` (`appointmentId`) |
+| `enrollment` | `ClassId > 0` and the class's `ClassDescription.Program.ScheduleType` is `Enrollment` | `cancelEnrollmentVisits` (`visitId`) |
+| `class` | Any other `ClassId > 0`, including a class `/class/classes` did not return | `removeClientFromClass` (`classId`) |
+
+#### Response
+
+```typescript
+interface GetClientScheduleResponse {
+  bookings: Array<{
+    kind: 'waitlist' | 'appointment' | 'enrollment' | 'class';
+    visitId: number;
+    classId?: number;            // undefined on appointments (Mindbody sends 0)
+    appointmentId?: number;      // undefined on class rows (Mindbody sends 0)
+    appointmentStatus?: string;  // appointment rows only
+    startDateTime: string;       // site-local, no offset
+    endDateTime: string;
+    name?: string;
+    staffId?: number;
+    staffName?: string;          // undefined when the staff catalogue lacks the id
+    locationId?: number;
+    locationName?: string;       // undefined when the location catalogue lacks the id
+    serviceId?: number;
+    serviceName?: string;
+    programId?: number;          // from the class; undefined on appointments
+    programName?: string;
+    signedIn: boolean;
+    lateCancelled: boolean;
+    missed: boolean;             // the sandbox sets it on future unattended enrollment visits too
+    isWaitlisted: boolean;
+    waitlistEntryId?: number;
+  }>;                            // sorted by startDateTime
+  totalBookings: number;
+}
+```
+
+The tool does not decide whether a cancellation would be late. That policy belongs to the cancel path.
+
 ### getClientEnrollments
 
 A client's enrollments (courses, workshops, series) with every session they hold, grouped by enrollment.

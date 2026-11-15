@@ -260,6 +260,21 @@ Get client's attendance history.
 
 **Returns:** Visit history with attendance stats, no-shows, late cancels
 
+#### `getClientSchedule`
+A client's bookings in a window, one flat row per booking, for working out which booking to cancel. Read-only. Reads `GET /client/clientschedule` (every page, `IncludeWaitlistEntries: true`). When some rows have a `ClassId`, it also reads `GET /class/classes` for those classes, to learn their program. It does not decide whether a cancellation would be late: that is the cancel path's job. This tool reports timestamps only.
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, sent unchanged. Default: today through 30 days ahead in the site's zone (`DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS`)
+
+**`kind`**, checked in this order:
+1. `waitlist`: `WaitlistInfo.WaitlistId` is set. Not a seat; `waitlistEntryId` is the entry
+2. `appointment`: `AppointmentId > 0`. Cancel with `cancelAppointments`
+3. `enrollment`: the class's program has `ScheduleType: Enrollment`. Cancel with `cancelEnrollmentVisits` (`visitId`)
+4. `class`: any other class visit, including a class `/class/classes` did not return. Cancel with `removeClientFromClass` (`classId`)
+
+**Returns:** `{ bookings: [{ kind, visitId, classId, appointmentId, appointmentStatus, startDateTime, endDateTime, name, staffId, staffName, locationId, locationName, serviceId, serviceName, programId, programName, signedIn, lateCancelled, missed, isWaitlisted, waitlistEntryId }], totalBookings }`, sorted by start. `classId` is `undefined` on appointments and `appointmentId` on class rows. Staff and location names come from the cached catalogues, and a name is `undefined` when the catalogue does not hold the id. `programId`/`programName` are `undefined` on appointments. The exported function is `getClientScheduleTool(clientId, startDate?, endDate?, client?, cache?)` in `src/tools/clientSchedule.ts`.
+
 #### `getClientMemberships`
 View client's active memberships.
 

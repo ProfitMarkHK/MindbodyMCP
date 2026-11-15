@@ -43,6 +43,7 @@ import {
   getClientContractsTool,
   getClientFormulaNotesTool,
   getClientCompleteInfoTool,
+  getClientScheduleTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -344,6 +345,19 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID' },
             startDate: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
             endDate: { type: 'string', description: 'End date in YYYY-MM-DD format' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
+        name: 'getClientSchedule',
+        description: 'A client\'s bookings in a window, one flat row per booking, for resolving which booking to cancel. Reads GET /client/clientschedule (every page, waitlist entries included) and, for class rows, GET /class/classes to learn the program. Each row has `kind`: `waitlist` (has waitlistEntryId), `appointment` (appointmentId, for cancelAppointments), `enrollment` (class in an Enrollment program; visitId for cancelEnrollmentVisits) or `class` (classId for removeClientFromClass), checked in that order. Rows carry visitId, classId, appointmentId, start/end (site-local), name, staff, location, service, program, signedIn, lateCancelled, missed and isWaitlisted. Staff and location names come from the cached catalogues and are undefined when the id is not in them. Read-only, and it does not say whether a cancellation would be late. Without dates: today through 30 days ahead in the site timezone.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Start date (YYYY-MM-DD); default today at the site' },
+            endDate: { type: 'string', description: 'End date (YYYY-MM-DD); default 30 days after today at the site' },
           },
           required: ['clientId'],
         },
@@ -1054,6 +1068,14 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(visitsResult, null, 2) }] };
       
+      case 'getClientSchedule':
+        const clientScheduleResult = await getClientScheduleTool(
+          args.clientId as string,
+          args.startDate as string | undefined,
+          args.endDate as string | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(clientScheduleResult, null, 2) }] };
+
       case 'getClientMemberships':
         const membershipsResult = await getClientMembershipsTool(
           args.clientId as string,

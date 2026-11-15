@@ -71,9 +71,11 @@ const relPosix = (from: string, to: string) => relative(from, to).split(sep).joi
  * How the numbers were obtained: run `bun test tests/pagination-gate.test.ts` and
  * read the `GATE13_PAGINATION_ROOTS` line it prints (found/floor per root), 2026-11-15:
  *
- *   src/            46 — 43 `fetchAllPages` calls + 3 single GETs to the
+ *   src/            45 — 42 `fetchAllPages` calls + 3 single GETs to the
  *                        non-paginated /class/classvisits, /site/activationcode
- *                        and /client/clientcompleteinfo
+ *                        and /client/clientcompleteinfo. (46 until issue #20
+ *                        folded the two /client/clientschedule reads in
+ *                        enrollmentManagement.ts into one `fetchClientSchedule`.)
  *   scripts/         0 — holds no Mindbody read; rule 4 still requires it to be scanned
  *
  * Revisit when the line shows found != floor: lower a floor only when call sites
@@ -81,7 +83,7 @@ const relPosix = (from: string, to: string) => relative(from, to).split(sep).joi
  * ROOT_FLOOR_SLACK), so it cannot quietly drift 10 sites behind, as 58 did.
  */
 const SCAN_ROOTS = [
-  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 46 },
+  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 45 },
   { dir: join(ROOT, "scripts"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 0 }, // .ts only; .sh is rule 6
 ];
 /** How far above its floor a root may sit before the floor counts as stale and must be raised. */
