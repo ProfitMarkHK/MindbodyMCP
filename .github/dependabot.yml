@@ -13,9 +13,9 @@ updates:
       timezone: "America/New_York"
     open-pull-requests-limit: 10
     reviewers:
-      - "vespo92"
+      - "bgausden"
     assignees:
-      - "vespo92"
+      - "bgausden"
     labels:
       - "dependencies"
       - "automated"
@@ -51,9 +51,9 @@ updates:
       time: "09:00"
       timezone: "America/New_York"
     reviewers:
-      - "vespo92"
+      - "bgausden"
     assignees:
-      - "vespo92"
+      - "bgausden"
     labels:
       - "github-actions"
       - "automated"

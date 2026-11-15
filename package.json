@@ -1,5 +1,5 @@
 {
-  "name": "@vespo92/mindbody-mcp",
+  "name": "@profitmarkhk/mindbody-mcp",
   "version": "2.0.2",
   "description": "Comprehensive MCP server for Mindbody API - Complete yoga studio management via AI assistants",
   "keywords": [
@@ -15,16 +15,16 @@
     "claude",
     "ai-assistant"
   ],
-  "author": "Vinnie Esposito <vinnie@vespo92.com>",
+  "author": "ProfitMarkHK",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vespo92/MindbodyMCP.git"
+    "url": "git+https://github.com/ProfitMarkHK/MindbodyMCP.git"
   },
   "bugs": {
-    "url": "https://github.com/vespo92/MindbodyMCP/issues"
+    "url": "https://github.com/ProfitMarkHK/MindbodyMCP/issues"
   },
-  "homepage": "https://github.com/vespo92/MindbodyMCP#readme",
+  "homepage": "https://github.com/ProfitMarkHK/MindbodyMCP#readme",
   "type": "module",
   "exports": {
     ".": "./dist/index.js"

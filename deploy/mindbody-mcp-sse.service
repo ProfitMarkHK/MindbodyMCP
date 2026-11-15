@@ -1,6 +1,6 @@
 [Unit]
 Description=Mindbody MCP Server (SSE Transport)
-Documentation=https://github.com/vespo92/MindbodyMCP
+Documentation=https://github.com/ProfitMarkHK/MindbodyMCP
 After=network.target
 
 [Service]

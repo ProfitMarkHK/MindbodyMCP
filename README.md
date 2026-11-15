@@ -1,7 +1,6 @@
 # 🧘 Mindbody MCP Server
 
-[![npm version](https://badge.fury.io/js/%40vespo92%2Fmindbody-mcp.svg)](https://www.npmjs.com/package/@vespo92/mindbody-mcp)
-[![CI](https://github.com/vespo92/MindbodyMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/vespo92/MindbodyMCP/actions/workflows/ci.yml)
+[![CI](https://github.com/ProfitMarkHK/MindbodyMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/ProfitMarkHK/MindbodyMCP/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-v1.17.2-blue)](https://github.com/modelcontextprotocol/sdk)
 
@@ -21,37 +20,19 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 
 ## 🚀 Quick Start
 
-### Installation with npx (Node.js)
-
-```bash
-# Run directly without installation
-npx @vespo92/mindbody-mcp
-
-# Or install globally
-npm install -g @vespo92/mindbody-mcp
-```
-
-### Installation with bunx (Bun - 4x faster)
-
-```bash
-# Run directly without installation  
-bunx @vespo92/mindbody-mcp
-
-# Or install globally with Bun
-bun install -g @vespo92/mindbody-mcp
-```
+This project is not published to npm under its own name yet. Install it from GitHub.
 
 ### Install from GitHub
 
 ```bash
 # Using npx
-npx github:vespo92/MindbodyMCP
+npx github:ProfitMarkHK/MindbodyMCP
 
 # Using bunx (recommended for performance)
-bunx github:vespo92/MindbodyMCP
+bunx github:ProfitMarkHK/MindbodyMCP
 
 # Or clone and run locally
-git clone https://github.com/vespo92/MindbodyMCP.git
+git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
 bun install # or npm install
 bun run start # or npm start
@@ -112,7 +93,7 @@ Add to your Claude Desktop configuration:
   "mcpServers": {
     "mindbody": {
       "command": "bunx",
-      "args": ["@vespo92/mindbody-mcp"],
+      "args": ["github:ProfitMarkHK/MindbodyMCP"],
       "env": {
         "MINDBODY_API_KEY": "your_api_key",
         "MINDBODY_SITE_ID": "-99",
@@ -124,14 +105,14 @@ Add to your Claude Desktop configuration:
 }
 ```
 
-Or use the GitHub repository directly:
+Or run a local clone:
 
 ```json
 {
   "mcpServers": {
     "mindbody": {
       "command": "bunx",
-      "args": ["github:vespo92/MindbodyMCP"],
+      "args": ["github:ProfitMarkHK/MindbodyMCP"],
       "env": {
         "MINDBODY_API_KEY": "your_api_key",
         "MINDBODY_SITE_ID": "-99",
@@ -231,7 +212,7 @@ Once configured, you can ask Claude:
 
 ```bash
 # Clone the repository
-git clone https://github.com/vespo92/MindbodyMCP.git
+git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
 
 # Install dependencies
@@ -366,9 +347,7 @@ Full checklist: [docs/quality-gates.md](docs/quality-gates.md).
 
 ## 📦 Publishing
 
-The package is available on:
-- **npm**: [@vespo92/mindbody-mcp](https://www.npmjs.com/package/@vespo92/mindbody-mcp)
-- **GitHub Packages**: [vespo92/MindbodyMCP](https://github.com/vespo92/MindbodyMCP/packages)
+The release workflow (`.github/workflows/release.yml`) publishes `@profitmarkhk/mindbody-mcp` to npm and GitHub Packages and pushes `ghcr.io/profitmarkhk/mindbody-mcp`. No release has been cut under this name yet.
 
 ## 🔒 Security
 
@@ -409,12 +388,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Mindbody API](https://developers.mindbodyonline.com) for providing comprehensive fitness studio APIs
 - [Anthropic MCP SDK](https://github.com/modelcontextprotocol/sdk) for the Model Context Protocol
 - [Bun](https://bun.sh) for the blazing fast JavaScript runtime
+- [vespo92/MindbodyMCP](https://github.com/vespo92/MindbodyMCP), the project this one was forked from and has since diverged from
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/vespo92/MindbodyMCP/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vespo92/MindbodyMCP/discussions)
-- **Email**: vinnie@vespo92.com
+- **Issues**: [GitHub Issues](https://github.com/ProfitMarkHK/MindbodyMCP/issues)
+- **Security reports**: see [SECURITY.md](SECURITY.md)
 
 ## 🚀 Roadmap
 

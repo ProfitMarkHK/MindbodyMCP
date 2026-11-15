@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added agent guidance: `AGENTS.md` as the canonical guide, role definitions for Claude Code and OpenCode, and the ponytail plugin configuration.
 
 ### Changed
+- The project is now standalone: it has left the `vespo92/MindbodyMCP` fork network and lives at `ProfitMarkHK/MindbodyMCP`. The npm package is renamed `@profitmarkhk/mindbody-mcp` (the command stays `mindbody-mcp`), and the release workflow publishes to the ProfitMarkHK npm scope, GitHub Packages and `ghcr.io/profitmarkhk`. Entries for 2.0.2 and earlier describe upstream releases.
 - `getClients` accepts any number of `clientIds`. Production Mindbody refuses more than 20 `ClientIds` per `GET /client/clients` (`InvalidParameter`), so the IDs are sent in sequential batches of 20 and the results merged, de-duplicated by client ID; if any batch fails the whole call fails. Client-name lookups batch the same way.
 - List reads now page through every result: each Mindbody list GET is fetched 200 rows at a time until the server's total is reached, instead of returning only the first page.
 - All dates and times use the studio's own timezone, read from the site record. `MINDBODY_SITE_TIMEZONE` is used only when the site record has no usable zone, and write operations refuse it when it disagrees with the record.
@@ -104,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Efficient caching to respect API rate limits
 - Optimized API client with connection pooling
 
-[Unreleased]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/ProfitMarkHK/MindbodyMCP/commits/master
 [2.0.2]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/vespo92/MindbodyMCP/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/vespo92/MindbodyMCP/compare/2b75b9e...v2.0.0
