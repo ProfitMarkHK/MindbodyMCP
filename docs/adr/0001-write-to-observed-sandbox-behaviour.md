@@ -101,8 +101,9 @@ this decision too.
 
 ## Deviations
 
-Eight deviations are recorded. Sections D-1, D-2, D-4, D-5, D-6, D-8 and D-10
-of the reconciliation carry call-site comments in code.
+Eight deviations are recorded, plus two added 2026-10-27 from the
+`clientcompleteinfo` parameter probe (F-3). Sections D-1, D-2, D-4, D-5, D-6,
+D-8, D-10 and F-3 of the reconciliation carry call-site comments in code.
 
 | # | Endpoint | The specification says | The sandbox does | The code does |
 |---|---|---|---|---|
@@ -113,6 +114,8 @@ of the reconciliation carry call-site comments in code.
 | D-6 | `POST /client/updateclient` | `CrossRegionalUpdate` is documented as propagating to every site in the region and as falling back to a single-site update for a region that is not enabled. No default is stated. | Defaults to true and answers HTTP 400 `The current site does not belong to a region. If you are attempting to update a client at a single site, set CrossRegionalUpdate to false. (ValidationFailed)`. With `false` it returns 200. | Always sends `CrossRegionalUpdate: false`. Marked at the call site. |
 | D-8 | `POST /sale/checkoutshoppingcart` | `CartItem.Appointments` is described as "the IDs of the appointments that were reconciled by this cart item" but typed as `Appointment[]`. A sibling `AppointmentIds` carries the placeholder description "Gets or sets the item." | A committed sale that sent `AppointmentIds: [<id>]` reconciled the appointment — it read back `Completed` — yet returned `CartItems[].Appointments`, `CartItems[].AppointmentIds` and the top-level `Appointments` all empty. | Accepts both shapes of `Appointments`, and states at the call site and in the tool's documentation that an absent reconciliation list does not mean the sale failed. The caller must re-read the appointment to confirm. |
 | D-10 | `POST /client/addclient` and `POST /sale/purchasecontract` | Both request definitions document `Test: boolean`, meaning "input information is validated, but not committed". | `addclient` with `Test: true` answers HTTP 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`. `purchasecontract` with `Test: true` and no card answers HTTP 400 demanding a payment instrument, so validation-only runs need payment details the sandbox cannot supply. | Sends no `Test` flag to either, so both tools always commit. `addclient` has no dry run at all; `purchasecontract` does validate without committing when `Test: true` is paired with `UseAccountCredit: true` (verified 2026-10-20, see D-10 in `docs/mindbody-spec-discrepancies.md`), but the tool does not expose it. |
+| D-12 | `GET /client/clientcompleteinfo` | `GetClientCompleteInfoResponse` types all four collections as arrays. | With `RequiredClientData` set, the unrequested collections come back as **JSON `null`**, not `[]`. Unknown `RequiredClientData` values are silently ignored with HTTP 200 and every collection is returned. | Maps every collection with `?? []` (load-bearing), and exposes `requiredClientData` validated to the four values the sandbox verifiably accepts, so a typo fails loudly on the client side instead of silently widening the response. Marked at the call site. Evidence: F-3. |
+| D-13 | `GET /client/clientcompleteinfo` | `StartDate` "Filters results to pricing options that are purchased on or after this date. Default: today's date." | Filters by **expiration** date ("expiring on or after"); omitted, the window is expiry ≥ today and it silently drops expired purchase history (81 of 88 rows for the probe client). `EndDate` has no observable effect in any probe. | Sends no date by default — the observed default window is exactly the snapshot the tool wants — and documents the observed semantics on the `startDate` parameter, which exists so a wide past value can recover expired history. Marked at the call site. Evidence: F-3. |
 
 ## Consequences
 

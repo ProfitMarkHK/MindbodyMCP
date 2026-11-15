@@ -895,7 +895,7 @@ describe("getClientCompleteInfoTool", () => {
       "/client/clientcompleteinfo": completeInfoFixture,
       "/site/locations": locationsFixture,
     });
-    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+    const result = await getClientCompleteInfoTool("c-1", {}, client, emptyCache());
 
     expect(result.client).toEqual({
       id: "c-1",
@@ -964,19 +964,75 @@ describe("getClientCompleteInfoTool", () => {
     expect(client.gets.filter((g) => g.url.endsWith("/client/clientcompleteinfo"))).toHaveLength(1);
   });
 
-  it("sends only ClientId, so requiredClientData and the date filters are left to the API", async () => {
+  it("sends only ClientId when no options are given, so the API's default window applies", async () => {
     const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
-    await getClientCompleteInfoTool("c-1", client, emptyCache());
+    await getClientCompleteInfoTool("c-1", {}, client, emptyCache());
 
     expect(client.gets).toHaveLength(1);
     expect(client.gets[0].params).toEqual({ ClientId: "c-1" });
+  });
+
+  it("sends the probe-verified parameters when they are given, and nothing else", async () => {
+    const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
+    await getClientCompleteInfoTool(
+      "c-1",
+      { requiredClientData: ["Services", "Contracts"], showActiveOnly: true, startDate: "2000-01-01" },
+      client,
+      emptyCache()
+    );
+
+    expect(client.gets[0].params).toEqual({
+      ClientId: "c-1",
+      RequiredClientData: ["Services", "Contracts"],
+      ShowActiveOnly: true,
+      StartDate: "2000-01-01",
+    });
+  });
+
+  it("does not send showActiveOnly when it is false, and an empty requiredClientData list", async () => {
+    const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
+    await getClientCompleteInfoTool("c-1", { requiredClientData: [], showActiveOnly: false }, client, emptyCache());
+
+    expect(client.gets[0].params).toEqual({ ClientId: "c-1" });
+  });
+
+  it("rejects a requiredClientData value the sandbox has not verified, instead of letting the API ignore it", async () => {
+    // The response-key spelling is the trap: the API ignores it silently with
+    // HTTP 200 and returns every collection (F-3).
+    const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
+    for (const bad of [["ClientServices"], ["Bogus"], ["Services", "Bogus"]]) {
+      expect(getClientCompleteInfoTool("c-1", { requiredClientData: bad as string[] }, client, emptyCache())).rejects.toThrow(
+        /requiredClientData accepts only/
+      );
+    }
+    expect(client.gets).toHaveLength(0);
+  });
+
+  it("maps the null collections of a filtered response to empty arrays", async () => {
+    // F-3: with RequiredClientData set, the unrequested collections come back
+    // as JSON null, not the arrays the spec's response model declares.
+    const client = new RoutedClient({
+      "/client/clientcompleteinfo": {
+        Client: { Id: "c-1", FirstName: "Grace", LastName: "Hopper" },
+        ClientServices: completeInfoFixture.ClientServices,
+        ClientContracts: null,
+        ClientMemberships: null,
+        ClientArrivals: null,
+      },
+    });
+    const result = await getClientCompleteInfoTool("c-1", { requiredClientData: ["Services"] }, client, emptyCache());
+
+    expect(result.services).toHaveLength(1);
+    expect(result.contracts).toEqual([]);
+    expect(result.memberships).toEqual([]);
+    expect(result.arrivals).toEqual([]);
   });
 
   it("leaves accountBalance undefined rather than coercing a missing value to 0", async () => {
     const client = new RoutedClient({
       "/client/clientcompleteinfo": { Client: { Id: "c-1", FirstName: "Grace", LastName: "Hopper" } },
     });
-    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+    const result = await getClientCompleteInfoTool("c-1", {}, client, emptyCache());
 
     expect(result.client?.accountBalance).toBeUndefined();
     expect("accountBalance" in (result.client ?? {})).toBe(true);
@@ -992,7 +1048,7 @@ describe("getClientCompleteInfoTool", () => {
         ClientArrivals: [],
       },
     });
-    const result = await getClientCompleteInfoTool("c-2", client, emptyCache());
+    const result = await getClientCompleteInfoTool("c-2", {}, client, emptyCache());
 
     expect(result.services).toEqual([]);
     expect(result.contracts).toEqual([]);
@@ -1004,7 +1060,7 @@ describe("getClientCompleteInfoTool", () => {
 
   it("returns no client when the response carries none, and empty collections when the keys are absent", async () => {
     const client = new RoutedClient({ "/client/clientcompleteinfo": {} });
-    const result = await getClientCompleteInfoTool("c-1", client, emptyCache());
+    const result = await getClientCompleteInfoTool("c-1", {}, client, emptyCache());
 
     expect(result).toEqual({ client: undefined, services: [], contracts: [], memberships: [], arrivals: [] });
   });

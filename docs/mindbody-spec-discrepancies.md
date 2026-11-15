@@ -465,6 +465,122 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Impact:** `getSales` strips the `Z` from `saleDateTime` and sends `T00:00:00`–`T23:59:59` so each requested day is matched in full. Time-of-day filtering is not possible.
 - **Write-up:** "GET /public/v6/sale/sales returns SaleDate and SaleDateTime with a trailing `Z` although both are site-local times, and StartSaleDateTime/EndSaleDateTime filter on the sale date only, ignoring the time component. Please drop the `Z` or document the zone, and document the date-only filter."
 
+### F-2. Missing staff usertoken degrades client reads to a silent empty 200
+
+**Found:** 2026-10-26, while probing `GET /client/clientcompleteinfo` (the
+probe behind the `getClientCompleteInfo` parameter extension).
+
+**Spec.** Every endpoint declares the `authorization` header — "A staff user
+authorization token" — with `required: false`, and does not say what happens
+when it is omitted.
+
+**Sandbox, site -99.** With only the `Api-Key` and `SiteId` headers:
+
+```
+GET /client/clients            → 200 {Clients: [], PaginationResponse: {TotalResults: 0}}
+GET /client/clients (Bearer)   → 200 {Clients: [4,465 rows…], PaginationResponse: {TotalResults: 4465}}
+```
+
+Same IP, same API key, same site; the only difference is the usertoken. The
+unauthenticated-in-effect call answers **200 with an empty list**, not 401/403,
+so a caller cannot distinguish "no clients exist" from "no staff token
+presented". `POST /usertoken/issue` also fails with distinct messages per cause
+(`Unsupported IP Address …` / `Staff user was not found for this site`), and
+`src/api/auth.ts` responds by silently downgrading every subsequent call to
+API-key-only auth (one stderr log line, no marker in any tool response).
+
+**Implication for this repo.** Any empty result from the client domain is
+unproven until the token state is confirmed. This is now defect class 4 in
+`AGENTS.md` ("Spec Conformance"). `GET /client/clientcompleteinfo` was probed
+both ways on 2026-10-27: it returns **full data with the API key alone**
+(collections identical to the token-authenticated call), so it does not degrade
+— but that is the exception being verified, not the assumption.
+
+### F-3. `GET /client/clientcompleteinfo` parameter behaviour, probed end to end
+
+**Found:** 2026-10-26/27. Read-only GET probe against site `-99`, staff
+usertoken attached, ~50 calls, two clients with real wallets:
+`100015484` (2 services, 1 contract, 1 membership, 1 arrival) and `008221`
+(`UniqueId` 100009444; 88 services across 2024–2026 with a wide window, 4
+contracts). This is the evidence behind the parameter support added to
+`getClientCompleteInfoTool` and deviations D-12/D-13 below.
+
+**Pagination is absent — now verified, not assumed.** `Limit=1&Offset=0`,
+`Offset=1` and lowercase `limit`/`offset` all return HTTP 200 with collections
+untruncated and byte-identical to the baseline; there is no
+`PaginationResponse` envelope in any response. The endpoint pages nothing.
+
+**`requiredClientData`: the prose values are the real enum.**
+
+| Value sent | HTTP | Outcome |
+|---|---|---|
+| `Services` | 200 | only `ClientServices` as an array; `ClientContracts`, `ClientMemberships`, `ClientArrivals` present as **JSON `null`** |
+| `Contracts` / `Memberships` / `ArrivalPrograms` | 200 | same pattern for the named collection |
+| `ClientServices`, `ClientContracts`, `ClientMemberships`, `ClientArrivals` | 200 | **silently ignored** — all four collections returned (the response-key spellings are the trap) |
+| `Bogus` | 200 | silently ignored — all four collections |
+| `Services` + `Bogus` (multi) | 200 | `Services` applies; `Bogus` dropped value-by-value |
+| `RequiredClientData[]=…`, `RequiredClientData[0]=…`, repeated key | 200 | all bind and filter; Pascal and lowercase names both bind |
+
+Two defects: unknown values are accepted with HTTP 200 and silently ignored
+(no enum, no validation anywhere in the contract), and a filtered response
+types its unrequested collections as `null` where the response model declares
+arrays.
+
+**The date window filters by EXPIRATION date, not purchase date.**
+
+| Request | Services returned |
+|---|---|
+| no dates (client `008221`) | 7 of 88 — every returned row expires on/after today, every dropped row expires before today |
+| `StartDate=2000-01-01` | 88 — full history including expired purchases |
+| `startDate=2026-06-15` | 19 — purchases from 2026-01-31 (before the start date) included; minimum expiration 2026-06-21 (after it) |
+| `startDate=2099-01-01` | 7 — identical to the default view; a far-future value is silently treated as omitted |
+| `StartDate=2000-01-01` + `EndDate=2026-10-12` | 88 — **`EndDate` has no observable effect**; rows purchased and expiring after that date are returned |
+
+The default window is therefore "services expiring on or after today", which
+silently drops expired purchase history (81 of 88 rows for `008221`). The
+spec's "Default: today's date" on *purchase* date is refuted twice over:
+purchases months old are returned by default, and an expired purchase from the
+same purchase date as a current one is dropped. Dates affect `ClientServices`
+only; contract, membership and arrival counts never changed across any probe.
+`useActivateDate=true` showed no observable effect (every probed row had
+`ActiveDate == PaymentDate`), so it stays undetermined and unsent.
+
+**`ShowActiveOnly=true` is a real filter.** Services narrow to `Current == true`
+(7 → 3 on `008221`), dropping an unexpired-but-depleted row the default date
+window keeps — the two filters are independent. Other collections untouched.
+
+**Cross-regional options: functional, no observable effect on one site.**
+`crossRegionalLookup=true`, `excludeInactiveSites=true` and
+`clientAssociatedSitesOffset=0` all return 200 with no visible change (the
+client resolves exactly 1 cross-regional site). `clientAssociatedSitesOffset=10`
+returns HTTP 400: `"The ClientAssociatedSitesOffset value 10 is out of range.
+1 cross-regional site(s) resolved for this client, so valid offsets are 0 to
+0. If this client is expected to belong to more sites, their cross-regional
+links may be incomplete."` Multi-site behaviour is not probeable without
+creating cross-site data, so the tool does not send any of these.
+
+**`ClientId` XOR `UniqueClientId` — the spec's `required: true` is wrong.** No
+lookup parameter at all returns HTTP 400 `MissingRequiredFields`: `"At least
+one of the following parameters must be passed: ClientId, UniqueClientId"`.
+`uniqueClientId=100009444` alone returns the full wallet of the client whose
+string `Id` is `008221` — decisive, because `Id ≠ UniqueId` for that client —
+and a nonexistent value returns 400 `ClientNotFound` (`"Client with unique ID
+999999999 does not exist."`). When both are sent and disagree, `ClientId`
+wins. The spec also documents `uniqueClientId` with a description copied from
+the class endpoint ("The unique ID of the client who is viewing this class
+list"). The tool keeps `clientId` as its only lookup key; the alternative is
+recorded here and raised in the support ticket rather than exposed, because it
+adds no capability the caller cannot already reach.
+
+**What the code does.** `getClientCompleteInfoTool` now sends `ClientId`
+always; `RequiredClientData` (validated to the four verified values, so a typo
+fails loudly on the client side instead of silently widening the API
+response), `ShowActiveOnly: true` and `StartDate` only when requested. `?? []`
+mappings absorb the `null` collections of a filtered response. Everything
+else — `EndDate`, `useActivateDate`, the cross-regional trio, `Limit`/`Offset`
+— stays unsent, with the evidence above recorded in
+[`docs/API.md`](API.md#getclientcompleteinfo).
+
 ## E. Unverified items
 
 | # | Item | Why it could not be verified |
