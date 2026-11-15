@@ -59,11 +59,22 @@ export function hasValidBearerToken(
   if (!authorization) {
     return false;
   }
-  const match = /^Bearer[ \t]+(.+)$/i.exec(authorization.trim());
-  if (!match) {
+  // Linear parse, no regex: the header is attacker-controlled (CodeQL
+  // js/polynomial-redos flagged a backtracking pattern here).
+  const value = authorization.trim();
+  const scheme = 'bearer';
+  if (value.length <= scheme.length || value.slice(0, scheme.length).toLowerCase() !== scheme) {
     return false;
   }
-  const presented = Buffer.from(match[1].trim(), 'utf8');
+  const separator = value[scheme.length];
+  if (separator !== ' ' && separator !== '\t') {
+    return false;
+  }
+  const credential = value.slice(scheme.length + 1).trim();
+  if (!credential) {
+    return false;
+  }
+  const presented = Buffer.from(credential, 'utf8');
   const wanted = Buffer.from(expected, 'utf8');
   if (presented.length !== wanted.length) {
     return false;

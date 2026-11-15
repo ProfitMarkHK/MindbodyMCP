@@ -178,6 +178,23 @@ describe('hasValidBearerToken', () => {
     expect(hasValidBearerToken('Bearer ', TOKEN)).toBe(false);
   });
 
+  it('parses a long whitespace-padded header in linear time', () => {
+    const padding = '\t'.repeat(200_000);
+    const started = performance.now();
+    expect(hasValidBearerToken(`bearer${padding}x`, TOKEN)).toBe(false);
+    expect(hasValidBearerToken(`bearer${padding}`, TOKEN)).toBe(false);
+    expect(hasValidBearerToken(`Bearer${padding}${TOKEN}${padding}`, TOKEN)).toBe(true);
+    expect(hasValidBearerToken(`Bearer ${' '.repeat(200_000)}${TOKEN}`, TOKEN)).toBe(true);
+    // The regex this replaced backtracked quadratically: ~200 ms on a failing
+    // match of 20,000 tabs, so seconds at this size.
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it('rejects a scheme that only starts with Bearer', () => {
+    expect(hasValidBearerToken(`Bearerx ${TOKEN}`, TOKEN)).toBe(false);
+    expect(hasValidBearerToken(`Bearer${TOKEN}`, TOKEN)).toBe(false);
+  });
+
   it('rejects a wrong token of the same length and of another length without throwing', () => {
     expect(WRONG_SAME_LENGTH.length).toBe(TOKEN.length);
     expect(() => hasValidBearerToken(`Bearer ${WRONG_SAME_LENGTH}`, TOKEN)).not.toThrow();
