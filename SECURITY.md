@@ -11,7 +11,7 @@ We release patches for security vulnerabilities. Which versions are eligible for
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability within Mindbody MCP, please send an email to vinnie@vespo92.com. All security vulnerabilities will be promptly addressed.
+If you discover a security vulnerability within Mindbody MCP, please report it privately through [GitHub's private vulnerability reporting](https://github.com/ProfitMarkHK/MindbodyMCP/security/advisories/new). All security vulnerabilities will be promptly addressed.
 
 Please do not report security vulnerabilities through public GitHub issues.
 

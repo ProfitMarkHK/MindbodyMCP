@@ -3,7 +3,7 @@
 ## 1. Install Dependencies
 
 ```bash
-cd C:\Users\VinSpo\Desktop\MindbodyMCP
+cd /path/to/MindbodyMCP
 npm install
 ```
 
@@ -42,7 +42,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
   "mcpServers": {
     "mindbody": {
       "command": "node",
-      "args": ["C:\\Users\\VinSpo\\Desktop\\MindbodyMCP\\dist\\index.js"],
+      "args": ["/path/to/MindbodyMCP/dist/index.js"],
       "env": {
         "MINDBODY_API_KEY": "your_api_key",
         "MINDBODY_SITE_ID": "-99",

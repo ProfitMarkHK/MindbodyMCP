@@ -50,7 +50,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
   "mcpServers": {
     "mindbody": {
       "command": "bun",
-      "args": ["run", "C:\\Users\\VinSpo\\Desktop\\MindbodyMCP\\src\\index.ts"],
+      "args": ["run", "/path/to/MindbodyMCP/src/index.ts"],
       "env": {
         "MINDBODY_API_KEY": "your_api_key",
         "MINDBODY_SITE_ID": "-99",
