@@ -12,8 +12,6 @@ updates:
       time: "09:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 10
-    reviewers:
-      - "bgausden"
     assignees:
       - "bgausden"
     labels:
@@ -37,11 +35,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Ignore specific dependencies if needed
-    ignore:
-      # Example: - dependency-name: "axios"
-      #            versions: ["1.x"]
-    
+    # To ignore a dependency, add an `ignore:` list here, e.g.
+    #   ignore:
+    #     - dependency-name: "axios"
+    #       versions: ["1.x"]
+
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -50,8 +48,6 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "America/New_York"
-    reviewers:
-      - "bgausden"
     assignees:
       - "bgausden"
     labels:
