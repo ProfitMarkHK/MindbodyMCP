@@ -289,14 +289,23 @@ Processes a shopping cart checkout. A cart item can carry `appointmentIds` to re
 | `promotionCode` | string | No | Promotion code | - |
 | `sendEmail` | boolean | No | Send email receipt | true |
 | `locationId` | number | No | Location ID | - |
+| `test` | boolean | No | Dry run, sent as `Test: true`: Mindbody validates the cart and computes its totals but records no sale. See "Dry run" below. Omitted or false, `Test` is not sent. | false |
 
 #### Guards
 
+Every guard below runs on a dry run exactly as on a real checkout, and refuses before any request.
+
 Every `appointmentIds` entry (across all items) is verified before the sale is sent, all-or-nothing: if any one fails, nothing is charged and no partial cart is built. The check is the same ownership lookup `cancelAppointments` and `updateAppointment` use (`GET /appointment/staffappointments` filtered by `ClientId`, a year back through two years ahead). An appointment that belongs to another client, or is outside that window, is reported as `not found for this client`; the owner is never named. If the site timezone or the lookup fails, the checkout is refused (fail closed). A request with no `appointmentIds` makes no lookup.
+
+#### Dry run (`test: true`)
+
+Mindbody's test mode does **not** check payments. On the `-99` sandbox (2026-10-28) a Cash payment of 107 against a cart total of 100 passed with `Test: true`, while the same cart with `Test: false` was refused (`The input payment total (107) does not match the calculated total (100) for the entire cart.`). So the tool checks payments itself: it sums `payments[].metadata.amount` and compares it with the returned `GrandTotal` in whole cents. On a mismatch it returns `success: false` with both figures, as the real call would.
+
+A dry-run result carries `dryRun: true`. The response's `ShoppingCart.SaleId` is never returned: in test mode the sandbox still hands one back, but no such sale exists (`GET /sale/sales` by that id returns no rows). `shoppingCart.id` is the cart id, not a sale id.
 
 #### Response
 
-The response has `success`, a `shoppingCart` with totals and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled.
+The response has `success`, a `shoppingCart` with totals (`subTotal`, `discountTotal`, `taxTotal`, `grandTotal`) and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled. A dry run adds `dryRun: true`.
 
 #### Examples
 
@@ -317,6 +326,8 @@ The response has `success`, a `shoppingCart` with totals and `items`, and a top-
 | `Appointment(s) failed verification (<id>: not found for this client; ...); nothing was charged.` | An `appointmentIds` entry is not this client's. Nothing is charged. | Check the appointment ID and `clientId` |
 | `Appointment id(s) ... are not positive integers; nothing was charged.` | A malformed ID. Nothing is charged. | Fix the ID |
 | `Could not verify the appointments (site timezone unavailable: ... / appointment lookup failed: ...); nothing was charged.` | The ownership lookup could not run. Nothing is charged. | Retry; check the site record's `TimeZone` |
+| `Dry run: the payment total (<sum>) does not match the calculated total (<GrandTotal>); ...` | `test: true` and the payments do not sum to the cart total. The real checkout would be refused. | Fix the payment amounts |
+| `Dry run: Mindbody returned no GrandTotal, ...` | `test: true` and the response had no cart total, so payments could not be checked | Retry; check the items |
 | Mindbody error | Returned as `success: false` with Mindbody's message | Check item IDs, payment amounts and the appointment IDs |
 
 ### getActiveSessionTimes

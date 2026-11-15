@@ -156,6 +156,7 @@ indistinguishable in a CI log.
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
+| Dry-run checkout | `getSales` for the run's client, before and after | `checkoutShoppingCart` with `test: true` (Comp, matching and mismatched amounts); expects no new sale and the mismatch refused; leaves nothing |
 | Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
 
 `addClientArrival` (`POST /client/addarrival`) is deliberately **not** in the

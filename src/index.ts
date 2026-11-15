@@ -568,7 +568,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'checkoutShoppingCart',
-        description: 'Process a shopping cart checkout',
+        description: 'Process a shopping cart checkout. Commits a real sale unless test is true (dry run).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -620,6 +620,10 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             promotionCode: { type: 'string', description: 'Promotion code' },
             sendEmail: { type: 'boolean', description: 'Send email receipt' },
             locationId: { type: 'number', description: 'Location ID' },
+            test: {
+              type: 'boolean',
+              description: 'Dry run (default false): Mindbody validates the cart and returns its totals but records no sale. Mindbody does not check payments in test mode, so the tool checks that the payment amounts sum to GrandTotal and returns success false if not. The result carries dryRun: true and no sale ID. All other checks still run.',
+            },
           },
           required: ['clientId', 'items', 'payments'],
         },
@@ -1193,7 +1197,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.inStore as boolean | undefined,
           args.promotionCode as string | undefined,
           args.sendEmail as boolean | undefined,
-          args.locationId as number | undefined
+          args.locationId as number | undefined,
+          undefined,
+          undefined,
+          args.test === true
         );
         return { content: [{ type: 'text', text: JSON.stringify(checkoutResult, null, 2) }] };
       

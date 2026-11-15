@@ -822,3 +822,86 @@ describe("checkoutShoppingCartTool — Custom payments", () => {
     expect(client.bodies[0].data.Payments).toEqual([{ Type: "Cash", Metadata: { Amount: 1020 } }]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #31 — checkoutShoppingCartTool dry run (`test`)
+// ---------------------------------------------------------------------------
+
+describe("checkoutShoppingCartTool — dry run (test)", () => {
+  const items = [{ item: { type: "Service" as const, metadata: { id: 1395 } }, quantity: 1 }];
+  const pay = (...amounts: number[]) => amounts.map((amount) => ({ type: "Cash" as const, metadata: { amount } }));
+  const dryRun = (client: RecordingClient, payments = pay(98.25), cartItems: any = items, cache?: SimpleCache) =>
+    checkoutShoppingCartTool("c1", cartItems, payments, true, undefined, false, 1, client, cache, true);
+
+  it("sends Test: true", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await dryRun(client);
+    expect(client.bodies[0].data.Test).toBe(true);
+  });
+
+  it("never sends Test when test is omitted or false", async () => {
+    const omitted = new RecordingClient(checkoutResponse);
+    const off = new RecordingClient(checkoutResponse);
+    await checkoutShoppingCartTool("c1", items, pay(98.25), true, undefined, false, 1, omitted);
+    await checkoutShoppingCartTool("c1", items, pay(98.25), true, undefined, false, 1, off, undefined, false);
+    expect("Test" in omitted.bodies[0].data).toBe(false);
+    expect("Test" in off.bodies[0].data).toBe(false);
+  });
+
+  it("a non-test result carries no dryRun flag and the committed message", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await checkoutShoppingCartTool("c1", items, pay(1), true, undefined, false, 1, client);
+    expect(result.success).toBe(true);
+    expect("dryRun" in result).toBe(false);
+    expect(result.message).toBe("Checkout completed successfully");
+  });
+
+  it("matching payments: success, dryRun, the four totals and lines, and no SaleId anywhere", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await dryRun(client, pay(50, 48.25));
+    expect(result.success).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(result.shoppingCart).toMatchObject({ subTotal: 100, discountTotal: 10, taxTotal: 8.25, grandTotal: 98.25 });
+    expect(result.shoppingCart!.items).toHaveLength(1);
+    expect(result.message).toContain("Nothing was charged");
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("555");
+    expect(serialized.toLowerCase()).not.toContain("saleid");
+  });
+
+  it("compares in whole cents, so float sums do not cause a false mismatch", async () => {
+    const response = { ...checkoutResponse, ShoppingCart: { ...checkoutResponse.ShoppingCart, GrandTotal: 0.3 } };
+    const result = await dryRun(new RecordingClient(response), pay(0.1, 0.2));
+    expect(result.success).toBe(true);
+  });
+
+  it("mismatched payments: success false with both figures", async () => {
+    const result = await dryRun(new RecordingClient(checkoutResponse), pay(107));
+    expect(result.success).toBe(false);
+    expect(result.dryRun).toBe(true);
+    expect(result.message).toContain("107");
+    expect(result.message).toContain("98.25");
+  });
+
+  it("fails when the dry run returns no GrandTotal", async () => {
+    const result = await dryRun(new RecordingClient({ ShoppingCart: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("GrandTotal");
+  });
+
+  it("refuses another client's appointment before any request", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED, FOREIGN]);
+    const result = await dryRun(client, pay(98.25), apptItem([8888]), client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("8888: not found for this client");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("refuses a Custom payment without a valid id before any request", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await dryRun(client, [{ type: "Custom", metadata: { amount: 98.25 } }] as any);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("getCustomPaymentMethods");
+    expect(client.bodies).toHaveLength(0);
+  });
+});
