@@ -67,11 +67,20 @@ that mixes docs with any other file runs the full suite. The skip lives only in
 the hook and CI; `bun run check` always runs everything, and Gate 5
 (documentation review) still applies to a docs-only change.
 
-CI follows the same rule: `.github/workflows/ci.yml` sets
-`paths-ignore: ['**.md', 'LICENSE']` on both `push` and `pull_request`, so a
-push or PR whose changed files all match is not run at all. If branch
-protection ever makes a CI job a required check, a docs-only PR would wait on
-it forever; switch to a path-filter step inside the job before doing that.
+CI follows the same rule. The workflow in `.github/workflows/ci.yml` always
+starts. Its first job, `changes`, runs
+[`scripts/ci-code-changed.sh`](../scripts/ci-code-changed.sh), which diffs the
+PR against its base (or a push against its previous tip) and prints
+`code=false` only when every changed file is `*.md` or `LICENSE`. Every other
+job has `needs: changes` and `if: needs.changes.outputs.code == 'true'`, so on
+a docs-only change they are skipped. The skip is deliberately a job-level `if`
+and not a trigger-level `paths-ignore`: a skipped job reports a result and
+counts as passing a required status check, while a workflow that never starts
+leaves a required check pending forever. The script errs toward running: a new
+branch (all-zero previous sha), an unknown sha or a failed diff all print
+`code=true`. One caveat if you make checks required: a matrix job skipped this
+way (`Test with Node.js`) reports a single unexpanded check, not one per Node
+version, so require that name rather than the per-version names.
 
 `bun run build` writes to `dist/`, which is gitignored. The runner prints it in
 its output so the side effect is never a surprise.
