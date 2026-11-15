@@ -1,10 +1,15 @@
 name: CI
 
+# Documentation-only changes skip CI, matching the pre-commit hook: a run is
+# skipped only when every changed file matches paths-ignore. docs/openapi.json
+# is not ignored, because Gates 13 and 16 read it. See docs/quality-gates.md.
 on:
   push:
     branches: [main, master, develop]
+    paths-ignore: ['**.md', 'LICENSE']
   pull_request:
     branches: [main, master, develop]
+    paths-ignore: ['**.md', 'LICENSE']
 
 # Least privilege: this workflow only reads the repo. Without this block the
 # GITHUB_TOKEN inherits the repository default (often contents: write).

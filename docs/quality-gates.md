@@ -64,8 +64,14 @@ excludes `*.md`), so the gates would only re-test unchanged code. "Docs" means
 those files only, not the `docs/` directory: Gates 13 and 16 read
 `docs/openapi.json`, so a commit that touches it runs the full suite. A commit
 that mixes docs with any other file runs the full suite. The skip lives only in
-the hook; `bun run check` always runs everything, and Gate 5 (documentation
-review) still applies to a docs-only change.
+the hook and CI; `bun run check` always runs everything, and Gate 5
+(documentation review) still applies to a docs-only change.
+
+CI follows the same rule: `.github/workflows/ci.yml` sets
+`paths-ignore: ['**.md', 'LICENSE']` on both `push` and `pull_request`, so a
+push or PR whose changed files all match is not run at all. If branch
+protection ever makes a CI job a required check, a docs-only PR would wait on
+it forever; switch to a path-filter step inside the job before doing that.
 
 `bun run build` writes to `dist/`, which is gitignored. The runner prints it in
 its output so the side effect is never a surprise.
