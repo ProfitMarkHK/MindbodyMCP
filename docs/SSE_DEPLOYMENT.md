@@ -190,10 +190,25 @@ docker-compose up -d --scale mindbody-mcp-sse=3
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/sse` | GET/POST | SSE event stream for MCP communication (token required) |
+| `/sse` | GET | Opens the event stream (token required). The first event, `endpoint`, carries the message URL: `/sse?sessionId=<uuid>` |
+| `/sse?sessionId=<uuid>` | POST | One JSON-RPC message for that session (token required). `202` when accepted; the response arrives on that session's stream |
 | `/health` | GET | Health check endpoint (no token) |
 | `/info` | GET | Server information and capabilities (token required) |
 | `/metrics` | GET | Prometheus metrics (optional) |
+
+### How messages are routed
+
+Each `GET /sse` gets its own MCP server instance and a fresh `sessionId`. The server keeps open sessions in memory, keyed by `sessionId`, and removes one when its stream closes. A message POST goes through the same bearer check and the same DNS-rebinding check as the stream, then:
+
+| Request | Result |
+|---------|--------|
+| `POST /sse?sessionId=<live id>` | `202`; the JSON-RPC response is sent on that session's stream only |
+| `POST /sse` with no `sessionId` | `400` |
+| `POST /sse?sessionId=<unknown or closed id>` | `404` |
+| `Host` (or a configured `Origin`) not on the allowlist | `403`; the message is not dispatched |
+| No or wrong bearer token | `401` |
+
+Sessions live in one process's memory, so behind a load balancer with several replicas (for example `docker-compose --scale`), every request for a session must reach the replica that opened its stream: use sticky sessions, or run one replica.
 
 ## Client Connection
 

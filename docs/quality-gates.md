@@ -285,8 +285,13 @@ and not needed" from "forgotten":
     opt-in live tier targets exactly this gap (see the live-tier entry below). It
     has now been run against the sandbox, but its last recorded run is not all
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
-  - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
-    manual script needing a server already listening.
+  - **SSE transport.** Everything here is STDIO. The SSE transport is covered
+    outside Gate 2, still inside Gate 1's `bun test`: `tests/sse-routing.test.ts`
+    runs the routing in-process and the real `src/index.ts` with
+    `--transport sse` against this stub (`initialize`, `tools/list` compared
+    with STDIO, one tool call, with and without `MCP_AUTH_TOKEN`), and
+    `tests/sse-auth.test.ts` covers the bearer check. `bun run test:sse` remains
+    a manual script for a server that is already listening.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
