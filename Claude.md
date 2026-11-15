@@ -68,7 +68,10 @@ src/
 │   ├── appointmentManagement.ts
 │   ├── enrollmentManagement.ts
 │   ├── siteManagement.ts
-│   ├── salesManagement.ts
+│   ├── salesManagement.ts    # sales barrel (catalogue / contracts / checkout)
+│   ├── salesCatalogue.ts     # getServices, getPackages, getProducts
+│   ├── salesContracts.ts     # getContracts, purchaseContract
+│   ├── salesCheckout.ts      # checkoutShoppingCart, getCustomPaymentMethods
 │   ├── salesHistory.ts       # getSales (read-only sales history)
 │   └── teacherSchedule.ts
 ├── cache/               # In-memory caching system
