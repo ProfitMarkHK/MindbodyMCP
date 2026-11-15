@@ -33,6 +33,8 @@ stringData:
   MINDBODY_SITE_ID: "your-site-id-here"
   MINDBODY_SOURCE_NAME: "your-source-name-here"
   MINDBODY_SOURCE_PASSWORD: "REPLACE"
+  # Required: the pod binds 0.0.0.0 and refuses to start without it.
+  MCP_AUTH_TOKEN: "REPLACE"
 ---
 apiVersion: apps/v1
 kind: Deployment

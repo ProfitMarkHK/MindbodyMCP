@@ -269,6 +269,12 @@ MindbodyMCP/
 
 The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
 
+**Client authentication.** Every SSE tool call runs with the server's Mindbody credentials, so the SSE transport requires a shared bearer token, `MCP_AUTH_TOKEN`. Clients send `Authorization: Bearer <token>` on every request except `GET /health`; anything else gets `401`. When the server binds to anything other than `127.0.0.1`, `::1` or `localhost` (the default host is `0.0.0.0`), it refuses to start without the token. On loopback the token may be left unset for local development, with a warning. STDIO needs no token.
+
+```bash
+export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+```
+
 ### Quick Start with SSE
 
 The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
@@ -292,13 +298,14 @@ docker-compose up -d
 
 # Or manually
 docker build -t mindbody-mcp .
-docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse mindbody-mcp
+docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse -e MCP_AUTH_TOKEN mindbody-mcp
 ```
 
 ### Production Configuration
 
 Configure via environment variables:
 - `MCP_TRANSPORT=sse` - Enable SSE transport
+- `MCP_AUTH_TOKEN` - Bearer token clients must send. Required unless `MCP_HOST` is loopback
 - `MCP_PORT=3000` - Server port
 - `MCP_HOST=0.0.0.0` - Server host
 - `MCP_CORS_ORIGIN=https://yourdomain.com` - CORS configuration
@@ -307,9 +314,9 @@ Configure via environment variables:
 
 ### Endpoints
 
-- `/health` - Health check endpoint
-- `/info` - Server information
-- `/sse` - SSE event stream for MCP communication
+- `/health` - Health check endpoint (no token needed)
+- `/info` - Server information (token required)
+- `/sse` - SSE event stream for MCP communication (token required)
 
 For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOYMENT.md).
 
@@ -319,8 +326,8 @@ For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOY
 # Run all tests
 bun test
 
-# Test SSE connection
-bun run test:sse
+# Test SSE connection (pass the server's token if it has one)
+MCP_AUTH_TOKEN=... bun run test:sse
 
 # Test specific tool
 bun run test:tool
