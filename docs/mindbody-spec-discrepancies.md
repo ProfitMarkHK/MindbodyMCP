@@ -376,11 +376,11 @@ Each entry: the wrong field(s), the correct field(s), evidence, and a one-line f
 
 ### C-31. `ClientMembership.IconCode` was typed `number`; the wire value is a string — RESOLVED 2026-10-20
 
-- **File:** `src/tools/clientManagement.ts:418` (and the `nextjs-app/` mirror `src/lib/mindbody/service.ts`).
+- **File:** `src/tools/clientManagement.ts:418`.
 - **Wrong:** `IconCode` typed `number`, conflating it with `Client.MembershipIcon` (an `integer`).
 - **Correct:** `ClientMembership.IconCode` is `string` — "text code that represents the `MembershipIcon`"; the integer is the separate `Client.MembershipIcon` field.
 - **Evidence:** Live `-99` probe of `GET /client/activeclientmemberships` → `IconCode: "6"` (string), `MembershipIcon: 6` (integer), `Program` an object.
-- **Fix:** `IconCode` typed `string` across `src/`, `nextjs-app/` and the Prisma schema (`Int?` → `String?`); test fixtures updated to `"4"`/`"0"`.
+- **Fix:** `IconCode` typed `string` across `src/`; test fixtures updated to `"4"`/`"0"`.
 
 ## D. Spec issues to raise with Mindbody
 
@@ -457,47 +457,6 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Spec:** Both request definitions document `Test: boolean` ("input information is validated, but not committed").
 - **Sandbox:** `addclient` with `Test: true` → 400 `Test mode is not allowed for this endpoint. (InvalidParameter)`, so the flag cannot be used there at all. `purchasecontract` with `Test: true` and no payment parameter → 400 `At least one of the following parameters must be passed: CreditCardInfo, StoredCardInfo, UseDirectDebit, UseAccountCredit`; `Test` does not stand alone. With one supplied it does behave as documented: `Test: true` + `UseAccountCredit: true` → 200, `ClientContractId: null`, `Totals.Total: 0`, and nothing committed — verified 2026-10-20 for payloads with and without `StartDate`, and with `SendNotifications`.
 - **Write-up:** "`AddClientRequest.Test` is documented but the endpoint answers `Test mode is not allowed for this endpoint`. Please either honour the flag or remove it from the schema. For `PurchaseContractRequest`, `Test: true` still demands one of the four payment parameters, so a dry run cannot be expressed without naming a payment method — and naming a real one requires credentials a test environment cannot hold. Either let `Test` stand alone, or document that a payment parameter must be supplied and is not used when `Test` is true."
-
-## F. Follow-ups found after this audit (not fixed here)
-
-### F-1. `nextjs-app/` reads the same phantom fields section C fixed in `src/`
-
-**File:** `nextjs-app/src/lib/mindbody/service.ts`
-
-The audit's scope was the 46 call sites in `src/**/*.ts`. The Next.js app is a
-second, independent Mindbody client in this repository that was not in that
-scope, and it still reads fields section C established do not exist:
-
-| Reads | Spec field | Same defect as |
-|---|---|---|
-| `c.LiabilityRelease.IsReleased` / `.AgreementDate` | `c.Liability`; `LiabilityRelease` is a boolean | C-14 |
-| `client?.ClientCreditCards` | `client.ClientCreditCard`, a single object | C-17 |
-| `ImageUrl` | `ImageURL` | C-7 |
-| `c.IsSubstitute` | `c.Substitute` | C-6 |
-| `isMale` | `IsMale` | C-30 |
-| `IntroOffer.Id` / `.Name` / `.Price` | `IntroOffer` is a string | C-25 |
-
-**Resolved 2026-10-20, in two passes.** The client-domain rows (C-14 through
-C-18) were fixed first: `getClients` reads `c.Liability`, `getClientVisits`
-drops `Location.Name`/`Staff.Name`, `getClientMemberships` maps `Program` to
-`programName`/`programId`, `getClientAccountBalances` reads the single
-`ClientCreditCard`, and `getClientContracts` drops `Description`/`SoldDate`/
-`Balance`/`ContractType`. `IconCode` was also retyped `string` (C-31). The
-class/staff/sales rows were fixed in a second pass: `ClassDescription` reads
-`ImageURL` (C-7; note `Staff.ImageUrl` is already correct — only
-`ClassDescription` has the capital-L `ImageURL`), `Class` reads `Substitute`
-(C-6), `Staff` reads `IsMale` (C-30), and `Contract.IntroOffer` is read as a
-string (C-25). All six rows are now fixed; no nextjs phantom-field reads remain.
-
-**Why it is recorded rather than fixed.** The same shapes are consumed
-downstream: `nextjs-app/src/lib/sync/index.ts` and the Prisma schema depend on
-them, and Gates 14 and 15 type-check and build that app. Changing them is a
-migration with its own test surface, not a mechanical field rename, and it
-deserves its own change rather than landing silently inside a fix to `src/`.
-
-**Outcome.** The Next.js app no longer reads any of these fields; the fix
-landed in two passes (the client domain, then class/staff/sales), mirroring the
-server. The "always-empty" rendering described above is gone.
 
 ### D-11. `GET /sale/sales`: `SaleDateTime` is site-local but carries a `Z`; the date filter ignores the time
 

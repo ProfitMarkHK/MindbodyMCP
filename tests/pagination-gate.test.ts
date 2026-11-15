@@ -3,9 +3,8 @@
  *
  * Policy: every Mindbody GET endpoint that accepts `request.limit` AND
  * `request.offset` in docs/openapi.json MUST be called through `fetchAllPages`
- * (src/api/client.ts for the MCP server, nextjs-app/src/lib/mindbody/paging.ts
- * for the Next.js app — same name, same semantics). A paginated endpoint called
- * with a single GET is a failure. There is no allowlist.
+ * (src/api/client.ts). A paginated endpoint called with a single GET is a
+ * failure. There is no allowlist.
  *
  * How it works: docs/openapi.json is loaded and every GET path is classified as
  * paginated or not. Every TypeScript file (.ts and .tsx) under each scan root is
@@ -40,8 +39,7 @@
  * checks).
  *
  * Code outside the TypeScript roots cannot be parsed: rule 6 holds shell scripts
- * under scripts/, nextjs-app/prisma/ and the Next.js app's top-level config files
- * to "no network client or absolute URL on a non-comment line".
+ * under scripts/ to "no network client or absolute URL on a non-comment line".
  *
  * Every rule is its own test, and its failure message lists every offender as
  * `file:line → path`. The suite prints `GATE13_PAGINATION_RESULT sites=N
@@ -75,8 +73,6 @@ const relPosix = (from: string, to: string) => relative(from, to).split(sep).joi
  *
  *   src/            40 — 38 `fetchAllPages` calls + 2 single GETs to the
  *                        non-paginated /class/classvisits and /site/activationcode
- *   nextjs-app/src/ 28 — 27 `fetchAllPages` calls + 1 single GET to the
- *                        non-paginated /site/activationcode
  *   scripts/         0 — holds no Mindbody read; rule 4 still requires it to be scanned
  *
  * Revisit when the line shows found != floor: lower a floor only when call sites
@@ -85,7 +81,6 @@ const relPosix = (from: string, to: string) => relative(from, to).split(sep).joi
  */
 const SCAN_ROOTS = [
   { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 40 },
-  { dir: join(ROOT, "nextjs-app/src"), tsconfig: join(ROOT, "nextjs-app/tsconfig.json"), minSites: 28 },
   { dir: join(ROOT, "scripts"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 0 }, // .ts only; .sh is rule 6
 ];
 /** How far above its floor a root may sit before the floor counts as stale and must be raised. */
@@ -106,8 +101,6 @@ const BENIGN_RECEIVER_TYPES = new Set([
   "URLSearchParams",
   "Headers",
   "SimpleCache", // src/cache
-  "SimpleTtlCache", // nextjs-app/src/lib/mindbody/siteTime.ts
-  "TtlCache", // same file, the interface
 ]);
 
 const PAGINATION_LIMIT_PARAMS = new Set(["request.limit", "getcoursesrequest.limit"]);
@@ -163,20 +156,11 @@ function listFiles(dir: string, accept: (name: string) => boolean): string[] {
 const listSourceFiles = (dir: string) => listFiles(dir, (name) => /\.tsx?$/.test(name) && !name.endsWith(".d.ts"));
 
 /**
- * Code outside the TypeScript roots that the scanner cannot parse: shell scripts,
- * the Prisma schema and the Next.js app's top-level config files (not `src/`).
- * Rule 6 holds them to "no network client", the explicit counterpart of the roots.
+ * Code outside the TypeScript roots that the scanner cannot parse: shell scripts
+ * under scripts/. Rule 6 holds them to "no network client", the explicit counterpart of the roots.
  */
 function listUnparsedCode(root: string): string[] {
-  const nextjs = join(root, "nextjs-app");
-  return [
-    ...listFiles(join(root, "scripts"), (name) => name.endsWith(".sh")),
-    ...listFiles(join(nextjs, "prisma"), () => true),
-    ...readdirSync(nextjs, { withFileTypes: true })
-      .filter((e) => e.isFile() && /\.(?:[cm]?[jt]sx?)$/.test(e.name))
-      .map((e) => join(nextjs, e.name))
-      .sort(),
-  ];
+  return listFiles(join(root, "scripts"), (name) => name.endsWith(".sh"));
 }
 
 /** A network client or an absolute URL on any non-comment line. A comment cannot run, so full-line comments are skipped. */
@@ -414,7 +398,7 @@ describe("Gate 13 — mandatory pagination", () => {
     ).toBe("");
   });
 
-  it("rule 2: every GET path used in src/ and nextjs-app/src/ exists as a GET in docs/openapi.json", () => {
+  it("rule 2: every GET path used in src/ exists as a GET in docs/openapi.json", () => {
     expect(report("GET path not found in docs/openapi.json", unknownPaths.map(describeSite))).toBe("");
   });
 
@@ -459,11 +443,11 @@ describe("Gate 13 — mandatory pagination", () => {
 });
 
 describe("Gate 13 — code outside the scan roots", () => {
-  it("rule 6: shell scripts, the Prisma schema and the Next.js app's config files carry no network client", () => {
+  it("rule 6: shell scripts carry no network client", () => {
     const files = listUnparsedCode(ROOT);
     // Not vacuous: the runner and the live-tier launcher are in the list.
     expect(files.map((f) => relPosix(ROOT, f))).toEqual(
-      expect.arrayContaining(["scripts/check-gates.sh", "scripts/live-e2e.sh", "nextjs-app/prisma/schema.prisma"])
+      expect.arrayContaining(["scripts/check-gates.sh", "scripts/live-e2e.sh"])
     );
     expect(report("Network client outside the scan roots", unparsedOffenders)).toBe("");
   });

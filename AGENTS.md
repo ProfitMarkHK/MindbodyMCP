@@ -219,8 +219,6 @@ the deviations table.
 
 The full audit of all 46 call sites, with the evidence for every finding, is
 [`docs/mindbody-spec-discrepancies.md`](docs/mindbody-spec-discrepancies.md).
-Its section F lists what was found *after* the audit, including the same class
-of defect still live in `nextjs-app/`.
 
 ## Adding a New Tool
 
