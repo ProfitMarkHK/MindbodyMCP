@@ -396,6 +396,8 @@ export interface UpdateAppointmentResult {
   };
   rejected: Array<{ id: number; reason: string }>;
   message: string;
+  /** Present and true only for a `test` call: Mindbody validated the update and saved nothing. */
+  dryRun?: true;
 }
 
 /** Every refusal reads the same way: the reason, and the fact nothing was written. */
@@ -460,14 +462,17 @@ function updateRejectionReason(
  * argument:
  *   1. request shape (clientId, appointmentId) — no calls;
  *   2. the execute allow-list, which also refuses the cancel verbs — no calls;
- *   3. applyPayment may not ride along with a reschedule, and sessionTypeId
- *      must be a positive integer — no calls;
+ *   3. applyPayment may not ride along with a reschedule, sessionTypeId
+ *      must be a positive integer, and test must be a boolean — no calls;
  *   4. ownership: the appointment must belong to `clientId` and be inside the
  *      lookup window, else "not found for this client";
  *   5. status: a cancelled appointment is final, and an attendance-final one
  *      takes no status action, no payment, no reschedule and no session type
  *      change;
  *   6. timing: `complete` needs the appointment to have started, in site time.
+ *
+ * `test: true` sends `Test: true`, a dry run: every guard above still runs, so a
+ * dry run is refused exactly where a real call would be.
  */
 export async function updateAppointmentTool(
   clientId: string,
@@ -484,6 +489,7 @@ export async function updateAppointmentTool(
   applyPayment?: boolean,
   execute?: UpdateAppointmentExecute,
   sessionTypeId?: number,
+  test?: boolean,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<UpdateAppointmentResult> {
@@ -531,6 +537,12 @@ export async function updateAppointmentTool(
     return updateRefusal(-1, `sessionTypeId ${JSON.stringify(sessionTypeId)} is not a positive integer`);
   }
 
+  // A non-boolean must never be coerced: a truthy string would read as a dry
+  // run to the caller, and anything sent as Test other than true commits.
+  if (test !== undefined && typeof test !== 'boolean') {
+    return updateRefusal(-1, `test ${JSON.stringify(test)} is not a boolean`);
+  }
+
   const lookup = await lookupAppointmentsForClient(
     client,
     cache,
@@ -563,7 +575,21 @@ export async function updateAppointmentTool(
       Execute: execute,
       SendEmail: sendEmail,
       ApplyPayment: applyPayment,
+      // SANDBOX-UNVERIFIED (issue #30): UpdateAppointmentRequest documents Test
+      // as "validated, but no new appointment data is added". That has not yet
+      // been observed on -99; the live tier's dry-run probe must pass before
+      // this ships. Replace this note with the SANDBOX-OBSERVED result.
+      Test: test,
     });
+
+    if (test === true) {
+      return {
+        success: true,
+        dryRun: true,
+        rejected: [],
+        message: 'Dry run: Mindbody validated the update and saved nothing. Repeat the call without test to apply it.',
+      };
+    }
 
     return {
       success: true,

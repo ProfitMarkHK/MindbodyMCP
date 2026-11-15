@@ -152,7 +152,7 @@ indistinguishable in a CI log.
 | Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
-| Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
+| Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, dry-run probe (`test: true`, issue #30), reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |

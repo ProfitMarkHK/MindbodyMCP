@@ -314,6 +314,7 @@ function wasLoudlySkipped(name: string): boolean {
 
 const ADD_APPOINTMENT_TEST = 'addAppointment books a slot that is then readable back';
 const SESSION_TYPE_CHANGE_TEST = 'updateAppointment changes an arrived appointment\'s session type and restores it';
+const DRY_RUN_TEST = 'updateAppointment test=true validates a notes change and leaves the appointment unchanged';
 
 /**
  * `/appointment/bookableitems` discovery parameters. Up to this many
@@ -1452,6 +1453,43 @@ describe('live tier — appointments', () => {
   // These run in declaration order on the appointment booked above. The comp-paid
   // checkout (section 7) runs after them, and the cancellation cleanup
   // (section 8) runs last of all.
+
+  // Issue #30: the probe that decides whether `test` ships. v6 documents Test on
+  // UpdateAppointmentRequest as "validated, but no new appointment data is
+  // added", but addclient on -99 refuses Test outright, so the spec is not
+  // proof. A dry run that would change the notes is sent; the read-back must
+  // still show the original notes, time, staff and status. If Mindbody refuses
+  // the dry run or the notes change persists, the flag must not ship: record
+  // the observation in docs/mindbody-spec-discrepancies.md instead.
+  itLive(DRY_RUN_TEST, async () => {
+    if (!requireCreatedAppointment(DRY_RUN_TEST)) return;
+
+    const before = await readBackCreatedAppointment();
+    const marker = `livee2e dry run ${Date.now()}`;
+    expect(before.notes ?? '', 'the probe marker must differ from the current notes').not.toBe(marker);
+
+    const dryRun = await callTool('updateAppointment', {
+      clientId: createdClientId,
+      appointmentId: createdAppointmentId,
+      notes: marker,
+      sendEmail: false,
+      test: true,
+    });
+    console.log(`\n LIVE dry run: updateAppointment Test=true answered: ${JSON.stringify(dryRun)}\n`);
+    expect(dryRun.rejected, `this server's own guards refused the dry run: ${dryRun.message}`).toEqual([]);
+    expect(dryRun.success, `Mindbody refused updateappointment with Test: true: ${dryRun.message}`).toBe(true);
+    expect(dryRun.dryRun).toBe(true);
+
+    // The read-back is the assertion; the dry run's own answer is not.
+    const after = await readBackCreatedAppointment();
+    expect(after.notes, `Test: true COMMITTED: appointment ${createdAppointmentId} now has notes "${after.notes}"`)
+      .toBe(before.notes);
+    expect(after.notes ?? '').not.toContain(marker);
+    expect(after.startDateTime).toBe(before.startDateTime);
+    expect(after.endDateTime).toBe(before.endDateTime);
+    expect(after.staffId).toBe(before.staffId);
+    expect(after.status).toBe(before.status);
+  });
 
   itLive('updateAppointment reschedules the booked appointment to a new slot', async () => {
     const name = 'updateAppointment reschedules the booked appointment to a new slot';
