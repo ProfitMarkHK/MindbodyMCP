@@ -12,8 +12,34 @@ permissions:
   contents: read
 
 jobs:
+  # Documentation-only changes skip the jobs below, matching the pre-commit
+  # hook. The skip is a job-level `if`, not a trigger `paths-ignore`, so the
+  # workflow always runs and every job reports a result: a skipped job counts
+  # as passing a required status check, while a workflow that never started
+  # leaves the check pending forever. Docs means *.md and LICENSE only;
+  # docs/openapi.json is code here because Gates 13 and 16 read it.
+  # See "Run everything" in docs/quality-gates.md.
+  changes:
+    name: Detect docs-only change
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-code-changed.sh >> "$GITHUB_OUTPUT"
+
   test-bun:
     name: Test with Bun
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     
@@ -41,6 +67,8 @@ jobs:
 
   test-node:
     name: Test with Node.js
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -70,6 +98,8 @@ jobs:
 
   validate-mcp:
     name: Validate MCP Server
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -103,6 +133,8 @@ jobs:
 
   security:
     name: Security Scan
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     
     steps:
