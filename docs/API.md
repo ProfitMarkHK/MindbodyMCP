@@ -537,7 +537,54 @@ interface CancelEnrollmentVisitsResponse {
 { "clientId": "12345", "visitIds": [100002, 100003] }
 ```
 
-### getClientCompleteInfo
+### getClientPurchases
+
+Returns a client's purchase history with prices. It wraps `GET /client/clientpurchases` and reads every page through `fetchAllPages` on the `Purchases` key. Read-only: it makes no POST.
+
+Use it to:
+- value what a client bought (`ClientService` from `getClientCompleteInfo` has no price field);
+- check whether a client already has a sale on a day before recording one with `checkoutShoppingCart` (pass the same date as `startDate` and `endDate`);
+- read a sale back afterwards by `saleId`. A sale made in the Mindbody web app at an overridden price reads back as plain `price` and `purchasedItems[].unitPrice` (sandbox sale 100170630: a 10 Class Card at 77 instead of 100 reads `price: 77`, `totalAmount: 83.16`). There is no override flag.
+
+The endpoint's own defaults are `StartDate: now` and `EndDate: end of today`, so a request that omits them returns almost nothing. The tool always sends both.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to read | - |
+| `startDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `StartDate` `T00:00:00` | 365 days before today, site zone |
+| `endDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `EndDate` `T23:59:59` | Today, site zone |
+| `saleId` | number | No | Sent as `SaleId`: only the record for that sale | - |
+
+#### Response
+
+```json
+{
+  "purchases": [
+    {
+      "description": "10 Class Card", "price": 77, "amountPaid": 83.16, "discount": 0, "tax": 6.16,
+      "returned": false, "quantity": 1, "accountPayment": false,
+      "sale": {
+        "id": 100170630, "saleDateTime": "2026-10-28T10:15:00", "locationId": 1,
+        "purchasedItems": [
+          { "id": 1192, "isService": true, "description": "10 Class Card", "unitPrice": 77, "quantity": 1,
+            "totalAmount": 83.16, "returned": false, "contractId": 0,
+            "expDate": "2027-10-28T00:00:00", "activeDate": "2026-10-28T00:00:00" }
+        ],
+        "payments": [{ "id": 77001, "amount": 83.16, "method": 1, "type": "Cash", "transactionId": 555 }]
+      }
+    }
+  ],
+  "totalPurchases": 1
+}
+```
+
+- Every key exists on `ClientPurchaseRecord`, `Sale`, `PurchasedItem` or `SalePayment` in `docs/openapi.json`. Nothing is computed, and no per-session value is derived.
+- A record with `AccountPayment: true` is a payment onto the client's account. It is kept and reported as `accountPayment: true`.
+- `sale.saleDateTime` is site-local. A trailing `Z`, which the API appends spuriously, is stripped (D-11).
+- `UniqueClientId` is not exposed: `clientId` reads the same records.
+
 
 Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination (sandbox-verified: `Limit`/`Offset` are ignored silently and no `PaginationResponse` envelope exists), so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
 

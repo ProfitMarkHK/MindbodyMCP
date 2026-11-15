@@ -126,7 +126,7 @@ Or run a local clone:
 
 ## 🛠️ Available Tools
 
-The server provides 50 tools across 6 categories:
+The server provides 51 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
@@ -148,6 +148,7 @@ The server provides 50 tools across 6 categories:
 - `getClientAccountBalances` - View account balances
 - `getClientContracts` - View contracts
 - `getClientFormulaNotes` - Read a client's formula notes, by client and/or appointment (read-only)
+- `getClientPurchases` - A client's purchase history with prices (read-only): price, amount paid, discount, tax, account-payment flag, and the sale's items and payments. Default window: the last 365 days through today in the site timezone; `saleId` reads one sale back
 - `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals. Optional sandbox-verified parameters: `requiredClientData` (subset of collections), `showActiveOnly` (services that can pay now), `startDate` (include expired purchase history)
 
 ### 💰 Sales & Commerce

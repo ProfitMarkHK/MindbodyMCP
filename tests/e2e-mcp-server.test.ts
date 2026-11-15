@@ -97,6 +97,7 @@ const EXPECTED_TOOL_NAMES = [
   'getClientContracts',
   'getClientFormulaNotes',
   'getClientCompleteInfo',
+  'getClientPurchases',
   'getServices',
   'resolveCheckoutService',
   'getPricingMap',
