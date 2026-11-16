@@ -1748,6 +1748,41 @@ describe('live tier — comp-paid checkout', () => {
     );
   });
 
+  // Issue #31: `test: true` must record nothing, and the tool, not Mindbody,
+  // must catch a payment that does not match the cart total. Writes nothing.
+  const DRY_RUN_CHECKOUT_TEST = 'checkoutShoppingCart test: true records no sale and checks payments';
+
+  itLive(DRY_RUN_CHECKOUT_TEST, async () => {
+    const name = DRY_RUN_CHECKOUT_TEST;
+    if (!requireDiscovered(name, ['locationId', 'appointmentServiceId'])) return;
+    if (!createdClientId) {
+      throw new Error('No client was created this run, so there is no one to dry-run a sale for. See the earlier failure.');
+    }
+    const cart = (amount: number) => ({
+      clientId: createdClientId,
+      items: [{ item: { type: 'Service', metadata: { id: discovered.appointmentServiceId } }, quantity: 1 }],
+      payments: [{ type: 'Comp', metadata: { amount } }],
+      inStore: true,
+      sendEmail: false,
+      locationId: discovered.locationId,
+      test: true,
+    });
+    const salesFor = async () => (await callTool('getSales', { clientIds: [createdClientId] })).sales.map((sale: any) => sale.id);
+
+    const before = await salesFor();
+    const amount = discovered.appointmentServicePrice ?? 0;
+    const ok = await callTool('checkoutShoppingCart', cart(amount));
+    expect(ok.success, `dry run failed: ${ok.message}`).toBe(true);
+    expect(ok.dryRun).toBe(true);
+    expect(JSON.stringify(ok).toLowerCase()).not.toContain('saleid');
+
+    const mismatch = await callTool('checkoutShoppingCart', cart(amount + 7));
+    expect(mismatch.success).toBe(false);
+    expect(mismatch.message).toContain('does not match');
+
+    expect(await salesFor()).toEqual(before);
+  });
+
   // ── purchaseContract: runs, funded by account credit ───────────────────────
   // /sale/purchasecontract answers HTTP 400 MissingRequiredFields unless one of
   // CreditCardInfo, StoredCardInfo, UseDirectDebit or UseAccountCredit is

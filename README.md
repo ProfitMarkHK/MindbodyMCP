@@ -162,7 +162,7 @@ The server provides 50 tools across 6 categories:
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
 - `getCustomPaymentMethods` - List the site's custom payment methods with their ids (needed for a `Custom` payment)
 - `getSales` - Read-only sales history (default: month to date, site-local) with a per-sales-rep summary of retail product sales (tips excluded); `productsOnly`, `salesRepIds`, `clientIds` filters; `matchAppointments` adds a best-effort same-day appointment-staff match
-- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
+- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged); `test: true` is a dry run that records no sale and, because Mindbody does not check payments in test mode, checks that the payments sum to the cart total itself
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations

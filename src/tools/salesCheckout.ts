@@ -49,9 +49,13 @@ export async function checkoutShoppingCartTool(
   sendEmail: boolean = true,
   locationId?: number,
   client: IMindbodyClient = mindbodyClient,
-  cache: SimpleCache = classCache
+  cache: SimpleCache = classCache,
+  /** Dry run: sends `Test: true`, so Mindbody validates the cart and records nothing. */
+  test: boolean = false
 ): Promise<{
   success: boolean;
+  /** Present and true only on a dry run: nothing was charged or recorded. */
+  dryRun?: true;
   shoppingCart?: {
     id: string;
     subTotal: number;
@@ -214,9 +218,12 @@ export async function checkoutShoppingCartTool(
       PromotionCode: promotionCode,
       SendEmail: sendEmail,
       LocationId: locationId,
+      ...(test ? { Test: true } : {}),
     });
 
-    return {
+    // `ShoppingCart.SaleId` is never surfaced: on a dry run the sandbox returns
+    // one that does not exist as a sale (issue #31).
+    const result = {
       success: true,
       shoppingCart: response.ShoppingCart ? {
         id: response.ShoppingCart.Id,
@@ -255,12 +262,40 @@ export async function checkoutShoppingCartTool(
       })),
       message: 'Checkout completed successfully',
     };
+    return test ? dryRunResult(result, payments) : result;
   } catch (error: unknown) {
     return {
       success: false,
       message: errorMessage(error, 'Failed to checkout'),
     };
   }
+}
+
+/**
+ * Label a `Test: true` checkout as a dry run and check its payments. Mindbody
+ * does not validate payments in test mode (sandbox, 2026-10-28: Cash 107
+ * against a total of 100 passed with Test, was refused without), so the tool
+ * compares the payment sum with GrandTotal itself, in whole cents, as the
+ * committed call would.
+ */
+function dryRunResult<T extends { shoppingCart?: { grandTotal: number } }>(
+  result: T,
+  payments: Array<{ metadata: { amount: number } }>
+): T & { success: boolean; dryRun: true; message: string } {
+  const paid = payments.reduce((sum, payment) => sum + Number(payment.metadata?.amount ?? 0), 0);
+  const grandTotal = Number(result.shoppingCart?.grandTotal);
+  if (!Number.isFinite(grandTotal)) {
+    return { ...result, success: false, dryRun: true, message: 'Dry run: Mindbody returned no GrandTotal, so the payments could not be checked. Nothing was charged.' };
+  }
+  if (Math.round(paid * 100) !== Math.round(grandTotal * 100)) {
+    return {
+      ...result,
+      success: false,
+      dryRun: true,
+      message: `Dry run: the payment total (${paid}) does not match the calculated total (${grandTotal}); the real checkout would be refused. Nothing was charged.`,
+    };
+  }
+  return { ...result, success: true, dryRun: true, message: `Dry run: cart validated and payments match the calculated total (${grandTotal}). Nothing was charged or recorded.` };
 }
 
 // SANDBOX-OBSERVED (differs from spec): a committed reconciling checkout returns empty CartItem.Appointments/AppointmentIds, so an absent list here does not mean the sale failed to reconcile.

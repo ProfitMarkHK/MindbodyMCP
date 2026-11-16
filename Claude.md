@@ -361,6 +361,7 @@ Process a complete purchase transaction.
 - `promotionCode` (optional): Discount code
 - `sendEmail` (optional): Send receipt (default true)
 - `locationId` (optional): Location ID
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the cart and returns its totals but records no sale; omitted or false, `Test` is never sent. Every guard above still runs and refuses before any request. Mindbody does **not** check payments in test mode (sandbox: Cash 107 against a total of 100 passed), so the tool compares the sum of `payments[].metadata.amount` with `GrandTotal` in whole cents and returns `success: false` with both figures on a mismatch. The result carries `dryRun: true` and never the response's `SaleId`, which names no recorded sale in test mode.
 
 #### `getCustomPaymentMethods`
 List the site's custom payment methods (`GET /sale/custompaymentmethods`). Takes no parameters; every page is fetched.
