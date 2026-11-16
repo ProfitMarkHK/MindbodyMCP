@@ -283,7 +283,7 @@ Processes a shopping cart checkout. A cart item can carry `appointmentIds` to re
 | Parameter | Type | Required | Description | Default |
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Client ID | - |
-| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the item; a `Tip` uses `item.metadata.amount`. | - |
+| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. See "Cart items" below. | - |
 | `payments` | array | Yes | Payment methods: `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`. | - |
 | `inStore` | boolean | No | In-store purchase | false |
 | `promotionCode` | string | No | Promotion code | - |
@@ -291,9 +291,46 @@ Processes a shopping cart checkout. A cart item can carry `appointmentIds` to re
 | `locationId` | number | No | Location ID | - |
 | `test` | boolean | No | Dry run, sent as `Test: true`: Mindbody validates the cart and computes its totals but records no sale. See "Dry run" below. Omitted or false, `Test` is not sent. | false |
 
+#### Cart items
+
+The tool builds each cart item's `Item.Metadata` itself; it does not pass the caller's `metadata` through. The accepted keys are:
+
+| `item.type` | `item.metadata` | Sent as |
+|---|---|---|
+| `Service` | `{ id }`: the pricing option ID | `Item: { Type: 'Service', Metadata: { Id } }` |
+| `Product` | `{ id }`: the product ID | `Item: { Type: 'Product', Metadata: { Id } }` |
+| `Package` | `{ id }`: the package ID | `Item: { Type: 'Package', Metadata: { Id } }` |
+| `Tip` | `{ amount }` | `Item: { Type: 'Tip', Metadata: { Amount } }` |
+
+Any other key (`price`, `name`, a second `id` on a tip, ...) is dropped without error. `docs/openapi.json` types `CheckoutItem.Metadata` as a bare `object` and points to Mindbody's "Cart Item Metadata" page for its contents, so the table above is this tool's contract, not a schema the spec publishes.
+
+Per-item fields beside `item` and `quantity`, all optional. Each maps to a property of `CheckoutItemWrapper` in the spec:
+
+- `appointmentIds` → `AppointmentIds`: existing appointments this item reconciles. See "Guards".
+- `discountAmount` → `DiscountAmount`: amount taken off the item. It must be a non-negative number, or the checkout is refused before any request. Omitted, no `DiscountAmount` key is sent. The spec says it "is ignored for packages". The discount shows only in the cart's `discountTotal` and `grandTotal`: on `-99` (2026-11-16) a 5 discount on a 30 service gave `DiscountTotal` 5 and `GrandTotal` 25, but the line's `DiscountAmount` came back 0. So a result line's `discountAmount` is passed through as reported, and its `total` is `price × quantity` before discount.
+- `appointmentBookingRequests` → `AppointmentBookingRequests`: new appointments to book and pay for with this item. The spec says it "applies only to pricing option items" (`Service`). Each entry is `{ staffId, locationId, sessionTypeId, startDateTime, notes? }`, sent as `StaffId`, `LocationId`, `SessionTypeId`, `StartDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and `Notes`. Mindbody ignores `Notes`: the spec's `CheckoutAppointmentBookingRequest` has no such property, and on `-99` (2026-11-16) an appointment booked with notes came back with `Notes: null`, in the checkout response and on a read-back. Set notes afterwards with `updateAppointment`. Its `EndDateTime`, `Resources` and `ProviderId` are not exposed. Unlike `appointmentIds`, these entries pass no ownership guard: they create appointments rather than pay for existing ones.
+
+The spec's other wrapper fields (`SalesNotes`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds`, `Id`) are not exposed.
+
+#### No per-sale price override
+
+Every item sells at its catalogue price. The REST API has no field that sets a different price for one sale, and `DiscountAmount` only lowers one. A sale that needs another price, including any 0-priced option billed by the hour, must be recorded in the Mindbody web app. A client purchases read (`GET /client/clientpurchases`, the `getClientPurchases` tool where this server has it) can then confirm it.
+
+The evidence, from `Test: true` probes on the `-99` sandbox on 2026-10-28 (issue #32). The sandbox currently refuses user tokens, so none of this could be re-run for this write-up:
+
+- `CheckoutItemWrapper` in `docs/openapi.json` has no price field. Its properties are `Item`, `Quantity`, `DiscountAmount`, `SalesNotes`, `AppointmentIds`, `AppointmentBookingRequests`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds` and `Id`.
+- 68 checkouts placed 22 candidate keys at three levels: inside `Item.Metadata`, on `Item`, and on the cart item. The keys were `Price`, `price`, `UnitPrice`, `SalePrice`, `CustomPrice`, `OverridePrice`, `PriceOverride`, `ItemPrice`, `NewItemPrice`, `NewPrice`, `ManualPrice`, `OnlinePrice`, `PricePaid`, `Total`, `TotalAmount`, `Subtotal`, `SubTotal`, `Cost`, `Rate`, `Value`, `Amount` and `amount`. Every one was ignored without an error.
+- A committed (`Test: false`) checkout carrying several of those keys, with a payment matching the intended price, was refused: `The input payment total (107) does not match the calculated total (100)`.
+- A negative `DiscountAmount` on a 0-priced service left the total at 0.
+- The web app's override is a form field (`newItemPrice`) posted to the classic ASP Point of Sale page, not to the REST API. A sale at an overridden price reads back through `GET /client/clientpurchases` and `GET /sale/sales` as `PurchasedItems[].UnitPrice`, with no override flag. So the API can read an overridden price but cannot write one.
+
+Changing the catalogue price around a sale (`PUT /sale/services`) was rejected: it changes the price for every concurrent sale, and it changes the pricing option rather than overriding one checkout.
+
 #### Guards
 
 Every guard below runs on a dry run exactly as on a real checkout, and refuses before any request.
+
+A `discountAmount` that is negative or not a finite number refuses the checkout.
 
 Every `appointmentIds` entry (across all items) is verified before the sale is sent, all-or-nothing: if any one fails, nothing is charged and no partial cart is built. The check is the same ownership lookup `cancelAppointments` and `updateAppointment` use (`GET /appointment/staffappointments` filtered by `ClientId`, a year back through two years ahead). An appointment that belongs to another client, or is outside that window, is reported as `not found for this client`; the owner is never named. If the site timezone or the lookup fails, the checkout is refused (fail closed). A request with no `appointmentIds` makes no lookup.
 
@@ -324,6 +361,7 @@ The response has `success`, a `shoppingCart` with totals (`subTotal`, `discountT
 | Error | Description | Solution |
 |-------|-------------|----------|
 | `Appointment(s) failed verification (<id>: not found for this client; ...); nothing was charged.` | An `appointmentIds` entry is not this client's. Nothing is charged. | Check the appointment ID and `clientId` |
+| `discountAmount must be a non-negative number (got ...); nothing was charged.` | A negative or non-numeric `discountAmount`. Nothing is sent. | Pass a number of 0 or more; a higher price must be sold in the web app |
 | `Appointment id(s) ... are not positive integers; nothing was charged.` | A malformed ID. Nothing is charged. | Fix the ID |
 | `Could not verify the appointments (site timezone unavailable: ... / appointment lookup failed: ...); nothing was charged.` | The ownership lookup could not run. Nothing is charged. | Retry; check the site record's `TimeZone` |
 | `Dry run: the payment total (<sum>) does not match the calculated total (<GrandTotal>); ...` | `test: true` and the payments do not sum to the cart total. The real checkout would be refused. | Fix the payment amounts |

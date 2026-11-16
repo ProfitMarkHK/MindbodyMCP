@@ -351,8 +351,11 @@ Process a complete purchase transaction.
 
 **Parameters:**
 - `clientId` (required): Client ID
-- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds? }`
-  - `item.type`: `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the service, product or package; a `Tip` uses `item.metadata.amount` instead.
+- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`
+  - `item.type`: `Service`, `Product`, `Package` or `Tip`.
+  - `item.metadata`: `{ id }` for `Service` (pricing option ID), `Product` and `Package`; `{ amount }` for `Tip`. Only that key is sent. Any other key, such as `price` or `name`, is dropped without error.
+  - `discountAmount` (optional, per item): Amount taken off the item, sent as `DiscountAmount`. Must be a non-negative number, or the whole checkout is refused before anything is sent. Omitted, no `DiscountAmount` is sent. Mindbody ignores it for packages. The discount shows in the result's `shoppingCart.discountTotal` and `grandTotal` only; a line's `discountAmount` is as Mindbody reports it (0 on the sandbox) and its `total` is `price × quantity` before discount.
+  - `appointmentBookingRequests` (optional, per item, pricing option items only): New appointments to book and pay for with this item, sent as `AppointmentBookingRequests`. Each entry has `staffId`, `locationId`, `sessionTypeId`, `startDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and optional `notes`. `notes` is sent as `Notes` but **Mindbody ignores it**: the spec does not define it for this object, and the sandbox books the appointment with no notes. Use `updateAppointment` to add notes. No ownership guard applies: these create appointments.
   - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`. Every ID is verified to belong to `clientId` (same lookup as `cancelAppointments`) before anything is sent; if any fails, or the lookup cannot run, the whole checkout is refused and nothing is charged.
 - `payments` (required): Payment methods, each `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`.
   - `Custom`: `metadata` is `{ amount, id }`, where `id` comes from `getCustomPaymentMethods`. A `Custom` payment without a positive integer `id` refuses the whole checkout before anything is sent.
@@ -362,6 +365,8 @@ Process a complete purchase transaction.
 - `sendEmail` (optional): Send receipt (default true)
 - `locationId` (optional): Location ID
 - `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the cart and returns its totals but records no sale; omitted or false, `Test` is never sent. Every guard above still runs and refuses before any request. Mindbody does **not** check payments in test mode (sandbox: Cash 107 against a total of 100 passed), so the tool compares the sum of `payments[].metadata.amount` with `GrandTotal` in whole cents and returns `success: false` with both figures on a mismatch. The result carries `dryRun: true` and never the response's `SaleId`, which names no recorded sale in test mode.
+
+**No per-sale price override.** Each item sells at its catalogue price. The Mindbody REST API has no field that sets a different price for one sale (22 candidate keys were ignored on the sandbox), and `discountAmount` can only lower a price. Record a sale that needs another price, including any 0-priced, hourly-billed option, in the Mindbody web app; a client purchases read can then confirm it. Evidence: [`docs/API.md`](docs/API.md#no-per-sale-price-override).
 
 #### `getCustomPaymentMethods`
 List the site's custom payment methods (`GET /sale/custompaymentmethods`). Takes no parameters; every page is fetched.

@@ -22,6 +22,11 @@ export async function checkoutShoppingCartTool(
     quantity: number;
     /** Existing appointment IDs this item pays for (reconciles). */
     appointmentIds?: number[];
+    /**
+     * Lowers this item's price, sent as `DiscountAmount`. Non-negative; Mindbody
+     * ignores it for packages. There is no field that raises or replaces a price.
+     */
+    discountAmount?: number;
     appointmentBookingRequests?: Array<{
       staffId: number;
       locationId: number;
@@ -67,8 +72,10 @@ export async function checkoutShoppingCartTool(
       name: string;
       price: number;
       quantity: number;
+      /** As Mindbody reports it. The sandbox reports 0 here even on a discounted line. */
       discountAmount: number;
       taxRate?: number;
+      /** price × quantity, before any discount. Discounts appear only in `discountTotal` and `grandTotal`. */
       total: number;
       /** IDs of the appointments this cart item reconciled; absent when the API returned none. */
       appointments?: number[];
@@ -92,6 +99,20 @@ export async function checkoutShoppingCartTool(
     return {
       success: false,
       message: 'A Custom payment needs metadata.id, a positive integer from getCustomPaymentMethods; nothing was charged.',
+    };
+  }
+
+  // `DiscountAmount` can only lower a price (a negative value on a 0-priced
+  // service left the total at 0 on the sandbox), so refuse anything else.
+  const badDiscount = items.filter(
+    (item) =>
+      item.discountAmount !== undefined &&
+      !(typeof item.discountAmount === 'number' && Number.isFinite(item.discountAmount) && item.discountAmount >= 0)
+  );
+  if (badDiscount.length > 0) {
+    return {
+      success: false,
+      message: `discountAmount must be a non-negative number (got ${badDiscount.map((item) => JSON.stringify(item.discountAmount)).join(', ')}); nothing was charged.`,
     };
   }
 
@@ -121,7 +142,10 @@ export async function checkoutShoppingCartTool(
   }
 
   try {
-    // Map items to API format
+    // Map items to API format. `Item.Metadata` is rebuilt here, not passed
+    // through: only `id` (Service, Product, Package) or `amount` (Tip) is sent,
+    // and any other caller key (e.g. `price`) is dropped. The API has no
+    // per-sale price override (issue #32), so there is nothing else to send.
     const cartItems = items.map(item => {
       const baseItem: any = {
         Quantity: item.quantity,
@@ -159,6 +183,10 @@ export async function checkoutShoppingCartTool(
 
       if (item.appointmentIds && item.appointmentIds.length > 0) {
         baseItem.AppointmentIds = item.appointmentIds;
+      }
+
+      if (item.discountAmount !== undefined) {
+        baseItem.DiscountAmount = item.discountAmount;
       }
 
       if (item.appointmentBookingRequests) {
@@ -249,7 +277,10 @@ export async function checkoutShoppingCartTool(
           // value cannot be derived without guessing. The raw rate is passed
           // through instead; `shoppingCart.taxTotal` is the authoritative tax.
           taxRate: item.Item?.TaxRate,
-          total: Number(item.Item?.Price ?? 0) * Number(item.Quantity ?? 0) - Number(item.DiscountAmount ?? 0),
+          // Before discount. On -99 (2026-11-16) a 5 discount on a 30 line came
+          // back as line DiscountAmount 0 with DiscountTotal 5, so subtracting
+          // the line figure reported 30 against a GrandTotal of 25.
+          total: Number(item.Item?.Price ?? 0) * Number(item.Quantity ?? 0),
           ...reconciledAppointmentIds(item.Appointments ?? item.AppointmentIds),
         })),
       } : undefined,

@@ -568,7 +568,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'checkoutShoppingCart',
-        description: 'Process a shopping cart checkout. Commits a real sale unless test is true (dry run).',
+        description:
+          'Process a shopping cart checkout. Commits a real sale unless test is true (dry run). ' +
+          'Each item is sold at its catalogue price: the Mindbody API has no per-sale price override, and ' +
+          'discountAmount can only lower a price. A sale that needs a different price (for example a 0-priced, ' +
+          'hourly-billed option) must be recorded in the Mindbody web app instead; a client purchases read can then confirm it.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -583,7 +587,16 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'object',
                     properties: {
                       type: { type: 'string', enum: ['Service', 'Product', 'Package', 'Tip'] },
-                      metadata: { type: 'object' },
+                      metadata: {
+                        type: 'object',
+                        description:
+                          'Service, Product, Package: { id } (the pricing option, product or package ID). Tip: { amount }. ' +
+                          'Only that key is sent; any other key (price, name, ...) is dropped without error.',
+                        properties: {
+                          id: { type: 'number', description: 'Service, Product or Package ID' },
+                          amount: { type: 'number', description: 'Tip amount (Tip only)' },
+                        },
+                      },
                     },
                   },
                   quantity: { type: 'number' },
@@ -591,6 +604,26 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'array',
                     items: { type: 'number' },
                     description: 'Existing appointment IDs this item pays for (reconciles). Each must belong to clientId, else the whole checkout is refused',
+                  },
+                  discountAmount: {
+                    type: 'number',
+                    minimum: 0,
+                    description: 'Amount taken off this item, sent as DiscountAmount. Non-negative; a negative or non-numeric value refuses the checkout. Mindbody ignores it for packages. It cannot raise a price.',
+                  },
+                  appointmentBookingRequests: {
+                    type: 'array',
+                    description: 'New appointments to book and pay for with this item (pricing option items only). Sent as AppointmentBookingRequests.',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        staffId: { type: 'number' },
+                        locationId: { type: 'number' },
+                        sessionTypeId: { type: 'number' },
+                        startDateTime: { type: 'string', description: 'Site-local yyyy-mm-ddThh:mm:ss' },
+                        notes: { type: 'string', description: 'Ignored by Mindbody: sent as Notes, but the booked appointment has no notes (verified on the sandbox). Add notes afterwards with updateAppointment' },
+                      },
+                      required: ['staffId', 'locationId', 'sessionTypeId', 'startDateTime'],
+                    },
                   },
                 },
               },
