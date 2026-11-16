@@ -1244,7 +1244,8 @@ describe('domain — orders (read and write)', () => {
       taxTotal: 0,
       discountTotal: 20,
       grandTotal: 260,
-      // `price`/`name` come from `Item`; `total` is price × quantity − discount.
+      // `price`/`name` come from `Item`; `total` is price × quantity before
+      // discount (the discount is in `discountTotal`/`grandTotal` only).
       // `appointments` is empty here because this cart reconciled nothing.
       items: [
         {
@@ -1254,7 +1255,7 @@ describe('domain — orders (read and write)', () => {
           quantity: 1,
           discountAmount: 20,
           taxRate: 0,
-          total: 200,
+          total: 220,
           appointments: [],
         },
         {

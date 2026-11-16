@@ -620,7 +620,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                         locationId: { type: 'number' },
                         sessionTypeId: { type: 'number' },
                         startDateTime: { type: 'string', description: 'Site-local yyyy-mm-ddThh:mm:ss' },
-                        notes: { type: 'string', description: 'Sent as Notes, a field the spec does not define for this object' },
+                        notes: { type: 'string', description: 'Ignored by Mindbody: sent as Notes, but the booked appointment has no notes (verified on the sandbox). Add notes afterwards with updateAppointment' },
                       },
                       required: ['staffId', 'locationId', 'sessionTypeId', 'startDateTime'],
                     },

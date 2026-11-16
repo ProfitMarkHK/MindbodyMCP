@@ -72,8 +72,10 @@ export async function checkoutShoppingCartTool(
       name: string;
       price: number;
       quantity: number;
+      /** As Mindbody reports it. The sandbox reports 0 here even on a discounted line. */
       discountAmount: number;
       taxRate?: number;
+      /** price × quantity, before any discount. Discounts appear only in `discountTotal` and `grandTotal`. */
       total: number;
       /** IDs of the appointments this cart item reconciled; absent when the API returned none. */
       appointments?: number[];
@@ -275,7 +277,10 @@ export async function checkoutShoppingCartTool(
           // value cannot be derived without guessing. The raw rate is passed
           // through instead; `shoppingCart.taxTotal` is the authoritative tax.
           taxRate: item.Item?.TaxRate,
-          total: Number(item.Item?.Price ?? 0) * Number(item.Quantity ?? 0) - Number(item.DiscountAmount ?? 0),
+          // Before discount. On -99 (2026-11-16) a 5 discount on a 30 line came
+          // back as line DiscountAmount 0 with DiscountTotal 5, so subtracting
+          // the line figure reported 30 against a GrandTotal of 25.
+          total: Number(item.Item?.Price ?? 0) * Number(item.Quantity ?? 0),
           ...reconciledAppointmentIds(item.Appointments ?? item.AppointmentIds),
         })),
       } : undefined,

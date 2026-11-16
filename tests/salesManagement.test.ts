@@ -406,10 +406,28 @@ describe("checkoutShoppingCartTool (C-22)", () => {
     expect(item.discountAmount).toBe(10);
   });
 
-  it("computes total as price * quantity - discountAmount", async () => {
+  it("computes total as price * quantity, before discount", async () => {
     const client = new RecordingClient(checkoutResponse);
     const result = await checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
-    expect(result.shoppingCart!.items[0].total).toBe(90);
+    expect(result.shoppingCart!.items[0].total).toBe(100);
+  });
+
+  it("does not let a zero line DiscountAmount hide a cart discount (sandbox shape)", async () => {
+    // Observed on -99: 30 line, discountAmount 5 → line DiscountAmount 0, DiscountTotal 5, GrandTotal 25.
+    const client = new RecordingClient({
+      ShoppingCart: {
+        Id: "cart-sbx",
+        SubTotal: 30,
+        TaxTotal: 0,
+        DiscountTotal: 5,
+        GrandTotal: 25,
+        CartItems: [{ Id: 1, Quantity: 1, DiscountAmount: 0, Item: { Id: 1395, Name: "Nutrition", Price: 30 } }],
+      },
+    });
+    const result = await checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
+    expect(result.shoppingCart!.items[0].total).toBe(30);
+    expect(result.shoppingCart!.discountTotal).toBe(5);
+    expect(result.shoppingCart!.grandTotal).toBe(25);
   });
 
   it("passes TaxRate through instead of inventing a line tax", async () => {
