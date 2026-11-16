@@ -194,3 +194,80 @@ describe("getSalesTool", () => {
     });
   });
 });
+
+/**
+ * Issue #36: on the sandbox, /sale/sales reports TotalResults as the number of
+ * sale-payment pairs while Offset counts sales. This stub serves 2 sales per page
+ * whatever Limit asks for (a silent server cap) and reports a chosen total.
+ */
+class PairCountedSalesClient implements IMindbodyClient {
+  readonly cache = new SimpleCache(5);
+  salesCalls = 0;
+
+  constructor(
+    private readonly sales: Array<Record<string, unknown>>,
+    private readonly totalFor: (rows: unknown[]) => number
+  ) {}
+
+  async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    if (url === "/staff/staff") return STAFF as T;
+    if (url !== "/sale/sales") throw new Error(`unexpected GET ${url}`);
+    this.salesCalls += 1;
+    const offset = Number(config?.params?.Offset ?? 0);
+    const rows = this.sales.slice(offset, offset + 2);
+    return {
+      PaginationResponse: { RequestedLimit: Number(config?.params?.Limit), RequestedOffset: offset, PageSize: rows.length, TotalResults: this.totalFor(rows) },
+      Sales: rows,
+    } as T;
+  }
+
+  async post<T>(): Promise<T> {
+    throw new Error("getSales must not write");
+  }
+
+  async request<T>(): Promise<T> {
+    throw new Error("not used");
+  }
+}
+
+const pairSale = (id: number, payments: number) => ({
+  Id: id, SaleDateTime: "2026-11-02T09:00:00", SalesRepId: 7, ClientId: `c${id}`, LocationId: 1,
+  PurchasedItems: [product(100 + id, 10)],
+  Payments: Array.from({ length: payments }, (_, p) => ({ Id: id * 10 + p, Amount: 10 / payments, Method: p + 1, Type: "Cash" })),
+});
+
+const pairs = (sales: Array<{ Payments: unknown[] }>) => sales.reduce((n, s) => n + s.Payments.length, 0);
+
+describe("getSalesTool with a pair-counted TotalResults (issue #36)", () => {
+  const runPaired = (client: PairCountedSalesClient) =>
+    getSalesTool({ startDate: "2026-11-01", endDate: "2026-11-11" }, client, client.cache);
+
+  it("returns all 3 split-payment sales when every page, the empty last one included, reports TotalResults 6", async () => {
+    const sales = [pairSale(1, 2), pairSale(2, 2), pairSale(3, 2)];
+    const client = new PairCountedSalesClient(sales, () => pairs(sales));
+    const result = await runPaired(client);
+
+    expect(result.sales.map((s) => s.id)).toEqual([1, 2, 3]);
+    expect(result.totalSales).toBe(3);
+    expect(result.sales.every((s) => s.payments.length === 2)).toBe(true);
+    // Two full pages of 2 then a short page of 1: the short page ends the walk.
+    expect(client.salesCalls).toBe(2);
+  });
+
+  it("returns all sales when the empty last page reports TotalResults 0, as the sandbox does", async () => {
+    const sales = [pairSale(1, 2), pairSale(2, 2), pairSale(3, 2), pairSale(4, 1)];
+    const client = new PairCountedSalesClient(sales, (rows) => (rows.length ? pairs(sales) : 0));
+    const result = await runPaired(client);
+
+    expect(result.sales.map((s) => s.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("does not stop early when sales without payments make the pair count smaller than the sale count", async () => {
+    // Pairs: 1 + 1 + 0 + 0 + 0 = 2, reached after the first page of 2 sales.
+    const sales = [pairSale(1, 1), pairSale(2, 1), pairSale(3, 0), pairSale(4, 0), pairSale(5, 0)];
+    const client = new PairCountedSalesClient(sales, () => pairs(sales));
+    const result = await runPaired(client);
+
+    expect(result.sales.map((s) => s.id)).toEqual([1, 2, 3, 4, 5]);
+  });
+});

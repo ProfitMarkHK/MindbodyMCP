@@ -1,4 +1,4 @@
-import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
+import { DEFAULT_PAGE_SIZE, fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
 import { Sale } from '../types/mindbody.js';
 import { getStaffNames, nameFor } from '../utils/referenceData.js';
@@ -122,7 +122,11 @@ export async function getSalesTool(
     client,
     '/sale/sales',
     { StartSaleDateTime: `${start}T00:00:00`, EndSaleDateTime: `${end}T23:59:59` },
-    'Sales'
+    'Sales',
+    DEFAULT_PAGE_SIZE,
+    // SANDBOX-OBSERVED: TotalResults counts sale-payment pairs while Offset counts sales,
+    // and the empty last page reports 0 (D-12, issue #36). Trusting it throws or truncates.
+    { ignoreTotalResults: true }
   );
 
   const repFilter = options.salesRepIds?.length ? new Set(options.salesRepIds) : undefined;
