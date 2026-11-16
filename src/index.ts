@@ -22,6 +22,7 @@ dotenv.config();
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
+import { resolveSseAuthToken, withBearerAuth } from './sseAuth.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -1652,6 +1653,10 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   const port = config.port || 3000;
   const host = config.host || '0.0.0.0';
 
+  // Inbound bearer auth (MCP_AUTH_TOKEN). Throws before anything listens when
+  // the bind is off loopback and no token is set; see src/sseAuth.ts.
+  const authToken = resolveSseAuthToken(host, process.env.MCP_AUTH_TOKEN);
+
   // DNS rebinding protection is enabled by default; see
   // resolveDnsRebindingSettings() for the SDK-derived rationale.
   const dnsRebinding = resolveDnsRebindingSettings(port);
@@ -1695,8 +1700,9 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error(`Starting HTTP SSE server on ${host}:${port}`);
   }
 
-  // Handle HTTP requests
-  httpServer.on('request', async (req, res) => {
+  // Handle HTTP requests. withBearerAuth runs first, so an unauthenticated
+  // request is refused before the DNS-rebinding guard or any route below.
+  httpServer.on('request', withBearerAuth(authToken, async (req, res) => {
     // Set CORS headers for all requests
     const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
     
@@ -1817,7 +1823,7 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     // 404 for other paths
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
-  });
+  }));
   
   // Start the HTTP server
   await new Promise<void>((resolve, reject) => {

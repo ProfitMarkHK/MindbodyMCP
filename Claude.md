@@ -737,6 +737,7 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
+# MCP_AUTH_TOKEN=...  # SSE only: bearer token clients must send; required unless MCP_HOST is loopback
 ```
 
 ### Dates and timezones

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- The SSE transport now requires a bearer token, `MCP_AUTH_TOKEN`, from inbound clients. An SSE server bound to anything other than `127.0.0.1`, `::1` or `localhost` (including the default `0.0.0.0`, the systemd unit, Docker and Kubernetes examples) refuses to start until `MCP_AUTH_TOKEN` is set, and its clients must send `Authorization: Bearer <token>`. STDIO is unchanged.
+
 ### Added
 - Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
 - Added `getClientCompleteInfo`, which reads a client's account balance, services, contracts, memberships and arrivals in one `/client/clientcompleteinfo` request. The tool set is now 50.
@@ -43,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, after a live sandbox probe.
 
 ### Security
+- The SSE transport authenticates inbound clients with `MCP_AUTH_TOKEN` (constant-time compare). Every request except `GET /health` and `OPTIONS` without the token gets `401`, before a session is created and before the DNS-rebinding check. Previously anyone who could reach the port could open sessions with the server's Mindbody credentials (#40).
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.
 - `checkoutShoppingCart` verifies that every `appointmentIds` entry belongs to the client, and refuses the whole checkout if any does not.
 - Arrived appointments cannot be cancelled.
