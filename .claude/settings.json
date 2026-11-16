@@ -1,0 +1,10 @@
+{
+  "enabledPlugins": {
+    "ponytail@ponytail": true
+  },
+  "permissions": {
+    "deny": [
+      "mcp__mindbody-prod"
+    ]
+  }
+}
