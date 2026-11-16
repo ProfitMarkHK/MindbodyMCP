@@ -1,4 +1,4 @@
-import { fetchAllPages, mindbodyClient as client } from "../../../src/api/client";
+import { fetchAllPages, mindbodyClient as client } from "../../../src/api/client.js";
 
 // fetchAllPages handed around as a value, so the path is never at a call site.
 export function readAny(path: string) {

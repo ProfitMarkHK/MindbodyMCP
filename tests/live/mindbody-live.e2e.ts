@@ -211,9 +211,6 @@ interface BookingCandidate {
   alternativeStart: string | null;
 }
 
-/** What the raw `/usertoken/issue` probe saw: true issued, false not, null not run. */
-let userTokenIssuedByProbe: boolean | null = null;
-
 /**
  * The contract this run bought, and the id of the ClientContract it created.
  *
@@ -625,17 +622,6 @@ async function rawApiCall(
   }
 }
 
-/** Poll the subprocess's stderr until `predicate` matches, or give up. */
-async function waitForStderr(predicate: (text: string) => boolean, timeoutMs = 15_000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const text = serverStderr.join('');
-    if (predicate(text)) return text;
-    await new Promise((done) => setTimeout(done, 200));
-  }
-  return serverStderr.join('');
-}
-
 /**
  * Tear a connection down promptly.
  *
@@ -822,7 +808,6 @@ describe('live tier — user token flow', () => {
     });
 
     const tokenIssued = typeof response.body?.AccessToken === 'string' && response.body.AccessToken.length > 0;
-    userTokenIssuedByProbe = tokenIssued;
 
     // Never print the token itself. The shape and the status are the finding.
     console.log(

@@ -38,9 +38,8 @@ bun run typecheck
 
 ### Code Quality
 - `bun run typecheck` - Type checking only
-- `bun run lint` - `tsc --noEmit --strict`. **Not a linter** — it is the typechecker run
-  again in strict mode. The project has no real linter; that is a tracked gap (Gate 3).
-- `bun run check` - Run every automated quality gate (tests, typecheck, build). Full
+- `bun run lint` - oxlint (default rules, warnings fail) over `src`, `tests` and `scripts` (Gate 3).
+- `bun run check` - Run every automated quality gate (lint, tests, typecheck, build). Full
   checklist: [`docs/quality-gates.md`](docs/quality-gates.md)
 
 ### Build

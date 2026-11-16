@@ -7,7 +7,7 @@
  * the clock that get() and cleanup() read.
  */
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
-import { SimpleCache } from '../src/cache/index';
+import { SimpleCache } from '../src/cache/index.js';
 
 const T0 = new Date('2026-01-01T00:00:00.000Z');
 const MINUTE = 60 * 1000;

@@ -1,4 +1,4 @@
-import { mindbodyClient as mb } from "../../../src/api/client";
+import { mindbodyClient as mb } from "../../../src/api/client.js";
 
 const CLASSES_PATH = "/class/classes";
 

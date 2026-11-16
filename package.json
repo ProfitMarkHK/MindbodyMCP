@@ -61,7 +61,7 @@
     "test:sse": "bun run tests/test-sse-client.ts",
     "benchmark": "bun run tests/benchmark.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit --strict",
+    "lint": "oxlint --deny-warnings src tests scripts",
     "node:build": "tsc",
     "node:start": "op run -- node dist/index.js",
     "node:start:sse": "op run -- node dist/index.js --transport sse",
@@ -81,6 +81,7 @@
   "devDependencies": {
     "@types/bun": "^1.1.6",
     "@types/node": "^22.8.4",
+    "oxlint": "^1.93.0",
     "rimraf": "^6.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"

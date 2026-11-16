@@ -26,7 +26,7 @@ Paste any error messages here
 
 **Environment:**
  - OS: [e.g. Windows 11]
- - Runtime: [Bun 1.0.0 / Node.js 18.0.0]
+ - Runtime: [Bun 1.0.0 / Node.js 20.0.0]
  - Claude Desktop Version: 
  - Mindbody Site ID: [sandbox/-99 or production]
 

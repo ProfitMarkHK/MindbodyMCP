@@ -1,4 +1,4 @@
-import { fetchAllPages, mindbodyClient as client } from "../../../src/api/client";
+import { fetchAllPages, mindbodyClient as client } from "../../../src/api/client.js";
 // client.get('/class/classes') in a comment is ignored
 /* fetchAllPages(client, '/sale/sales', {}, 'Sales') */
 export async function forms() {

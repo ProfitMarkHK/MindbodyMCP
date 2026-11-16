@@ -258,40 +258,6 @@ function recording(fixtureValue: unknown = fixture(), failUrl?: string, pageCap?
   return new RecordingClient(makeClient(fixtureValue), failUrl, pageCap, fixtureValue as Record<string, unknown>);
 }
 
-/** A recording client that does NOT validate: proves the tool's request shape only. */
-class ParamsOnlyClient implements IMindbodyClient {
-  readonly calls: Array<{ url: string; params: Record<string, unknown> | undefined }> = [];
-
-  constructor(private readonly body: unknown) {}
-
-  async request<T>(config: AxiosRequestConfig): Promise<T> {
-    this.calls.push({
-      url: config.url ?? "",
-      params: stripUndefined(config.params as Record<string, unknown>),
-    });
-    return this.body as T;
-  }
-
-  async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    this.calls.push({ url, params: stripUndefined(config?.params as Record<string, unknown>) });
-    return this.body as T;
-  }
-
-  async post<T>(): Promise<T> {
-    return this.body as T;
-  }
-
-  paramsFor(url: string): Record<string, unknown> | undefined {
-    return this.calls.filter((call) => call.url === url)[0]?.params;
-  }
-}
-
-function stripUndefined(params: Record<string, unknown> | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(params ?? {})) if (value !== undefined) out[key] = value;
-  return out;
-}
-
 // ── C-26 · getSitesTool ───────────────────────────────────────────────────────
 
 describe("getSitesTool — reads only fields the Site model has", () => {

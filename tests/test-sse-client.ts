@@ -292,7 +292,7 @@ async function runTests() {
   try {
     const healthUrl = SSE_URL.replace('/sse', '/health');
     await fetch(healthUrl);
-  } catch (error) {
+  } catch {
     logError('\nServer is not running! Please start the server with:');
     log('  bun run start:sse', colors.yellow);
     log('  or');
