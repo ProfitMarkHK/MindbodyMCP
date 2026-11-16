@@ -22,6 +22,7 @@ dotenv.config();
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
+import { resolveSseAuthToken, withBearerAuth } from './sseAuth.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -44,6 +45,7 @@ import {
   getClientFormulaNotesTool,
   getClientCompleteInfoTool,
   getClientScheduleTool,
+  getClientPurchasesTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -221,13 +223,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'removeClientFromClass',
-        description: 'Cancel a client\'s class booking',
+        description: 'Cancel a client\'s class booking. Not a dry run: sendEmail (default false) can email a real client.',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
             classId: { type: 'number', description: 'Class ID' },
             lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for a class starting within that window' },
+            sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'classId'],
         },
@@ -420,6 +423,23 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         },
       },
       {
+        name: 'getClientPurchases',
+        description:
+          'Get a client\'s purchase history with prices (read-only): description, price, amount paid, discount, tax, ' +
+          'account-payment flag and the nested sale with its items and payments. Default window: the last 365 days through ' +
+          'today in the site timezone. Use a one-day window to check for an existing sale before a checkout, or saleId to read one sale back',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Purchases on or after this site-local date (YYYY-MM-DD). Default: 365 days ago' },
+            endDate: { type: 'string', description: 'Purchases up to the end of this site-local date (YYYY-MM-DD). Default: today' },
+            saleId: { type: 'number', description: 'Only the record for this sale ID' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
         name: 'getClientCompleteInfo',
         description:
           'Get a client\'s whole wallet in one call: account balance, purchased services, contracts, memberships and arrival programs. ' +
@@ -582,7 +602,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'checkoutShoppingCart',
-        description: 'Process a shopping cart checkout',
+        description:
+          'Process a shopping cart checkout. Commits a real sale unless test is true (dry run). ' +
+          'Each item is sold at its catalogue price: the Mindbody API has no per-sale price override, and ' +
+          'discountAmount can only lower a price. A sale that needs a different price (for example a 0-priced, ' +
+          'hourly-billed option) must be recorded in the Mindbody web app instead; a client purchases read can then confirm it.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -597,7 +621,16 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'object',
                     properties: {
                       type: { type: 'string', enum: ['Service', 'Product', 'Package', 'Tip'] },
-                      metadata: { type: 'object' },
+                      metadata: {
+                        type: 'object',
+                        description:
+                          'Service, Product, Package: { id } (the pricing option, product or package ID). Tip: { amount }. ' +
+                          'Only that key is sent; any other key (price, name, ...) is dropped without error.',
+                        properties: {
+                          id: { type: 'number', description: 'Service, Product or Package ID' },
+                          amount: { type: 'number', description: 'Tip amount (Tip only)' },
+                        },
+                      },
                     },
                   },
                   quantity: { type: 'number' },
@@ -605,6 +638,26 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'array',
                     items: { type: 'number' },
                     description: 'Existing appointment IDs this item pays for (reconciles). Each must belong to clientId, else the whole checkout is refused',
+                  },
+                  discountAmount: {
+                    type: 'number',
+                    minimum: 0,
+                    description: 'Amount taken off this item, sent as DiscountAmount. Non-negative; a negative or non-numeric value refuses the checkout. Mindbody ignores it for packages. It cannot raise a price.',
+                  },
+                  appointmentBookingRequests: {
+                    type: 'array',
+                    description: 'New appointments to book and pay for with this item (pricing option items only). Sent as AppointmentBookingRequests.',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        staffId: { type: 'number' },
+                        locationId: { type: 'number' },
+                        sessionTypeId: { type: 'number' },
+                        startDateTime: { type: 'string', description: 'Site-local yyyy-mm-ddThh:mm:ss' },
+                        notes: { type: 'string', description: 'Ignored by Mindbody: sent as Notes, but the booked appointment has no notes (verified on the sandbox). Add notes afterwards with updateAppointment' },
+                      },
+                      required: ['staffId', 'locationId', 'sessionTypeId', 'startDateTime'],
+                    },
                   },
                 },
               },
@@ -634,6 +687,10 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             promotionCode: { type: 'string', description: 'Promotion code' },
             sendEmail: { type: 'boolean', description: 'Send email receipt' },
             locationId: { type: 'number', description: 'Location ID' },
+            test: {
+              type: 'boolean',
+              description: 'Dry run (default false): Mindbody validates the cart and returns its totals but records no sale. Mindbody does not check payments in test mode, so the tool checks that the payment amounts sum to GrandTotal and returns success false if not. The result carries dryRun: true and no sale ID. All other checks still run.',
+            },
           },
           required: ['clientId', 'items', 'payments'],
         },
@@ -765,11 +822,12 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       {
         name: 'updateAppointment',
         description:
-          "Update ONE appointment belonging to ONE client: reschedule, change staff, notes or resources, or apply a " +
+          "Update ONE appointment belonging to ONE client: reschedule, change staff, session type, notes or resources, or apply a " +
           `status action via execute (confirm, unconfirm, arrive, unarrive, complete). Guards, all checked before ` +
           `anything is written: clientId and appointmentId must both be given; the appointment must belong to that ` +
           `client, else "not found for this client"; a cancelled appointment is final and accepts no update; a ` +
-          `completed or no-show one takes no status action, no payment and no reschedule (notes are still fine); ` +
+          `completed or no-show one takes no status action, no payment, no reschedule and no session type change ` +
+          `(notes are still fine); ` +
           `execute complete needs the appointment to have started, in the site's timezone. applyPayment may not be ` +
           `combined with a reschedule. Does not cancel: use cancelAppointments.`,
         inputSchema: {
@@ -778,6 +836,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID who owns the appointment; verified before any write' },
             appointmentId: { type: 'number', description: 'Appointment ID' },
             staffId: { type: 'number', description: 'Staff ID' },
+            sessionTypeId: {
+              type: 'number',
+              description:
+                'New session type (service), a positive integer. Allowed on Booked, Confirmed and Arrived ' +
+                'appointments; refused on Completed, NoShow, Cancelled and LateCancelled. Not a reschedule, so it ' +
+                'may be combined with applyPayment. Mindbody may reset the end time to the new type\'s duration; ' +
+                'the response returns the updated times and sessionTypeId.',
+            },
             startDateTime: { type: 'string', description: 'Start date/time' },
             endDateTime: { type: 'string', description: 'End date/time' },
             resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
@@ -997,7 +1063,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         const removeClassResult = await removeClientFromClassTool(
           args.clientId as string,
           args.classId as number,
-          args.lateCancel as boolean | undefined
+          args.lateCancel as boolean | undefined,
+          undefined,
+          undefined,
+          args.sendEmail as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(removeClassResult, null, 2) }] };
       
@@ -1105,6 +1174,14 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
+      case 'getClientPurchases':
+        const purchasesResult = await getClientPurchasesTool(args.clientId as string, {
+          startDate: typeof args.startDate === 'string' ? args.startDate : undefined,
+          endDate: typeof args.endDate === 'string' ? args.endDate : undefined,
+          saleId: typeof args.saleId === 'number' ? args.saleId : undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(purchasesResult, null, 2) }] };
+
       case 'getClientCompleteInfo':
         const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string, {
           requiredClientData: Array.isArray(args.requiredClientData)
@@ -1215,7 +1292,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.inStore as boolean | undefined,
           args.promotionCode as string | undefined,
           args.sendEmail as boolean | undefined,
-          args.locationId as number | undefined
+          args.locationId as number | undefined,
+          undefined,
+          undefined,
+          args.test === true
         );
         return { content: [{ type: 'text', text: JSON.stringify(checkoutResult, null, 2) }] };
       
@@ -1309,7 +1389,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.executePayment as boolean | undefined,
           args.sendEmail as boolean | undefined,
           args.applyPayment as boolean | undefined,
-          args.execute as UpdateAppointmentExecute | undefined
+          args.execute as UpdateAppointmentExecute | undefined,
+          args.sessionTypeId as number | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(updateAppointmentResult, null, 2) }] };
 
@@ -1594,6 +1675,10 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   const port = config.port || 3000;
   const host = config.host || '0.0.0.0';
 
+  // Inbound bearer auth (MCP_AUTH_TOKEN). Throws before anything listens when
+  // the bind is off loopback and no token is set; see src/sseAuth.ts.
+  const authToken = resolveSseAuthToken(host, process.env.MCP_AUTH_TOKEN);
+
   // DNS rebinding protection is enabled by default; see
   // resolveDnsRebindingSettings() for the SDK-derived rationale.
   const dnsRebinding = resolveDnsRebindingSettings(port);
@@ -1637,8 +1722,9 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error(`Starting HTTP SSE server on ${host}:${port}`);
   }
 
-  // Handle HTTP requests
-  httpServer.on('request', async (req, res) => {
+  // Handle HTTP requests. withBearerAuth runs first, so an unauthenticated
+  // request is refused before the DNS-rebinding guard or any route below.
+  httpServer.on('request', withBearerAuth(authToken, async (req, res) => {
     // Set CORS headers for all requests
     const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
     
@@ -1759,7 +1845,7 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     // 404 for other paths
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
-  });
+  }));
   
   // Start the HTTP server
   await new Promise<void>((resolve, reject) => {

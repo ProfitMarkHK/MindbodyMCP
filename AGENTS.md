@@ -74,7 +74,7 @@ Mindbody API
 - `clientManagement.ts` - Client registration, visits, memberships, balances (barrel; split by aspect into `clientProfile.ts`, `clientAccount.ts`, `clientActivity.ts`)
 - `appointmentManagement.ts` - Appointments, availability, scheduling
 - `enrollmentManagement.ts` - Course/workshop enrollments
-- `salesManagement.ts` - Services, packages, products, purchases
+- `salesManagement.ts` - Services, packages, products, purchases (barrel; split by aspect into `salesCatalogue.ts`, `salesContracts.ts`, `salesCheckout.ts`)
 - `salesHistory.ts` - Read-only sales history (`getSales`) with per-rep and same-day appointment-staff summaries
 - `siteManagement.ts` - Locations, programs, staff, resources, session types
 - `teacherSchedule.ts` - Teacher schedule lookups (specialized tool)

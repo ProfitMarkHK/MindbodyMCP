@@ -8,6 +8,23 @@ The Mindbody MCP Server supports two transport mechanisms:
 - **STDIO** (default): For local development and CLI integration
 - **SSE**: For production deployment and web-based clients
 
+## Client authentication
+
+The SSE transport runs every tool with the server's own Mindbody credentials, so it authenticates inbound clients with a shared bearer token, `MCP_AUTH_TOKEN`.
+
+- Every request except `GET /health` and CORS preflight (`OPTIONS`) must send `Authorization: Bearer <MCP_AUTH_TOKEN>`. Anything else gets `401` with `WWW-Authenticate: Bearer`, before a session is created and before the DNS-rebinding check.
+- **Required off loopback.** If the server binds to anything other than `127.0.0.1`, `::1` or `localhost`, and `MCP_AUTH_TOKEN` is unset or empty, it exits non-zero before listening. There is no opt-out. For an open endpoint, bind to loopback behind your own proxy.
+- On loopback, an unset token is allowed for local development, and the server prints one warning.
+- The token is compared in constant time and never logged or returned.
+
+Generate a token and keep it in the environment file or secret store, never in a unit file or the repository:
+
+```bash
+openssl rand -hex 32
+```
+
+Changing the token needs a restart.
+
 ## Quick Start
 
 ### Local Development with SSE
@@ -26,6 +43,9 @@ bun run src/index.ts --transport sse --port 8080
 
 # Using environment variables
 MCP_TRANSPORT=sse MCP_PORT=3000 bun run start
+
+# Loopback only, no token (local development; prints a warning)
+bun run src/index.ts --transport sse --host 127.0.0.1
 ```
 
 ### Docker Deployment
@@ -41,6 +61,7 @@ docker run -d \
   --name mindbody-mcp-sse \
   -p 3000:3000 \
   -e MCP_TRANSPORT=sse \
+  -e MCP_AUTH_TOKEN=your_token \
   -e MINDBODY_API_KEY=your_key \
   -e MINDBODY_SITE_ID=your_site_id \
   -e MINDBODY_SOURCE_NAME=your_source \
@@ -60,6 +81,7 @@ docker-compose up -d
 | `MCP_TRANSPORT` | Transport type (`stdio` or `sse`) | `stdio` | No |
 | `MCP_PORT` | SSE server port | `3000` | No |
 | `MCP_HOST` | SSE server host | `0.0.0.0` | No |
+| `MCP_AUTH_TOKEN` | Bearer token clients must send | - | **Yes**, unless `MCP_HOST` is `127.0.0.1`, `::1` or `localhost` |
 | `MCP_CORS_ORIGIN` | CORS allowed origins | `*` | No |
 | `MCP_SSL_CERT` | Path to SSL certificate | - | No |
 | `MCP_SSL_KEY` | Path to SSL private key | - | No |
@@ -96,8 +118,9 @@ sudo mkdir -p /opt/mindbody-mcp
 sudo cp -r dist package.json node_modules /opt/mindbody-mcp/
 sudo chown -R mcp-service:mcp-service /opt/mindbody-mcp
 
-# Configure environment
+# Configure environment. The unit binds 0.0.0.0, so MCP_AUTH_TOKEN is required.
 sudo cp .env /opt/mindbody-mcp/.env
+echo "MCP_AUTH_TOKEN=$(openssl rand -hex 32)" | sudo tee -a /opt/mindbody-mcp/.env > /dev/null
 sudo chmod 600 /opt/mindbody-mcp/.env
 
 # Start service
@@ -133,7 +156,7 @@ sudo systemctl reload nginx
 # Create namespace and deploy
 kubectl apply -f deploy/k8s-deployment.yaml
 
-# Update secrets with your credentials
+# Update secrets with your credentials, including MCP_AUTH_TOKEN
 kubectl edit secret mindbody-mcp-secrets -n mindbody-mcp
 
 # Check deployment
@@ -148,7 +171,8 @@ kubectl logs -f deployment/mindbody-mcp-sse -n mindbody-mcp
 ### 4. Docker Compose
 
 ```bash
-# Create .env file with your credentials
+# Create .env file with your credentials and MCP_AUTH_TOKEN
+# (docker-compose refuses to start the service without MCP_AUTH_TOKEN)
 cp .env.example .env
 nano .env
 
@@ -166,9 +190,9 @@ docker-compose up -d --scale mindbody-mcp-sse=3
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/sse` | GET/POST | SSE event stream for MCP communication |
-| `/health` | GET | Health check endpoint |
-| `/info` | GET | Server information and capabilities |
+| `/sse` | GET/POST | SSE event stream for MCP communication (token required) |
+| `/health` | GET | Health check endpoint (no token) |
+| `/info` | GET | Server information and capabilities (token required) |
 | `/metrics` | GET | Prometheus metrics (optional) |
 
 ## Client Connection
@@ -179,9 +203,15 @@ docker-compose up -d --scale mindbody-mcp-sse=3
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
-// Create SSE transport
+// Create SSE transport. requestInit.headers is sent on the stream request
+// and on every message POST.
 const transport = new SSEClientTransport(
-  new URL('https://mcp.yourdomain.com/sse')
+  new URL('https://mcp.yourdomain.com/sse'),
+  {
+    requestInit: {
+      headers: { Authorization: `Bearer ${process.env.MCP_AUTH_TOKEN}` },
+    },
+  }
 );
 
 // Create MCP client
@@ -209,10 +239,15 @@ const result = await client.callTool(
 curl https://mcp.yourdomain.com/health
 
 # Server info
-curl https://mcp.yourdomain.com/info
+curl -H "Authorization: Bearer $MCP_AUTH_TOKEN" https://mcp.yourdomain.com/info
 
 # Test SSE stream (will keep connection open)
-curl -N -H "Accept: text/event-stream" https://mcp.yourdomain.com/sse
+curl -N -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  https://mcp.yourdomain.com/sse
+
+# Without the token: expect 401
+curl -i https://mcp.yourdomain.com/sse
 ```
 
 ## Security Considerations
@@ -308,6 +343,12 @@ The server exposes Prometheus-compatible metrics at `/metrics` endpoint (when en
    - Check nginx timeout settings
    - Verify keep-alive is properly configured
    - Monitor server resources (CPU, memory)
+
+5. **Server exits with "Refusing to start the SSE transport ... without MCP_AUTH_TOKEN"**:
+   - The server binds off loopback and has no token. Set `MCP_AUTH_TOKEN`, or bind to `127.0.0.1`.
+
+6. **Client gets `401 Unauthorized`**:
+   - The client sends no token, the wrong token, or a scheme other than `Bearer`. Send `Authorization: Bearer <MCP_AUTH_TOKEN>`.
 
 ### Debug Mode
 

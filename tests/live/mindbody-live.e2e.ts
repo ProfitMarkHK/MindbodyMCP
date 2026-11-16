@@ -84,6 +84,8 @@ const CALL_TIMEOUT_MS = 60_000;
 const FORMULA_NOTE_CLIENT_SCAN = 40;
 /** Clients getClientSchedule walks before it reports a loud skip (a booking-less site cannot run long). */
 const SCHEDULE_CLIENT_SCAN = 40;
+/** How many clients the read-only purchase history test checks before giving up. */
+const PURCHASE_CLIENT_SCAN = 20;
 const CONNECT_TIMEOUT_MS = 60_000;
 
 /**
@@ -315,6 +317,7 @@ function wasLoudlySkipped(name: string): boolean {
 }
 
 const ADD_APPOINTMENT_TEST = 'addAppointment books a slot that is then readable back';
+const SESSION_TYPE_CHANGE_TEST = 'updateAppointment changes an arrived appointment\'s session type and restores it';
 
 /**
  * `/appointment/bookableitems` discovery parameters. Up to this many
@@ -328,6 +331,9 @@ const BOOKABLE_WINDOW_DAYS = 14;
 
 /** How many distinct staff/session type/location candidates addAppointment may try. */
 const MAX_BOOKING_CANDIDATES = 8;
+
+/** Other session types the session type change test tries before skipping loudly. */
+const MAX_SESSION_TYPE_CHANGE_ATTEMPTS = 6;
 
 /**
  * Mindbody refusals of an addAppointment REQUEST that availability cannot
@@ -1048,6 +1054,59 @@ describe('live tier — clients', () => {
     );
   }, (SCHEDULE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
 
+  itLive('getClientPurchases reads a client\'s purchase history and one sale back by saleId, read-only', async () => {
+    const name = "getClientPurchases reads a client's purchase history and one sale back by saleId, read-only";
+    // Read-only: walk existing clients until one has a purchase in the default
+    // window (365 days through today, site zone). Bounded like the formula notes scan.
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, PURCHASE_CLIENT_SCAN);
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientPurchases', { clientId: String(candidate.id) });
+      expect(Array.isArray(result.purchases)).toBe(true);
+      expect(result.totalPurchases).toBe(result.purchases.length);
+      if (result.purchases.some((p: any) => Number.isInteger(p.sale?.id))) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a purchase in the last 365 days, so the`,
+        'field mapping and saleId read-back are untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    for (const purchase of found.result.purchases) {
+      expect(typeof purchase.accountPayment).toBe('boolean');
+      if (purchase.sale) {
+        // Site-local, no offset: a spurious `Z` is stripped (D-11).
+        expect(purchase.sale.saleDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        expect(purchase.sale.saleDateTime.endsWith('Z')).toBe(false);
+        expect(Array.isArray(purchase.sale.purchasedItems)).toBe(true);
+        expect(Array.isArray(purchase.sale.payments)).toBe(true);
+      }
+    }
+
+    // The duplicate-checkout check and the read-back: a one-day window on the
+    // sale's own date, narrowed by saleId, returns that sale.
+    const target = found.result.purchases.find((p: any) => Number.isInteger(p.sale?.id));
+    const day = target.sale.saleDateTime.slice(0, 10);
+    const one = await callTool('getClientPurchases', {
+      clientId: found.clientId,
+      startDate: day,
+      endDate: day,
+      saleId: target.sale.id,
+    });
+    expect(one.totalPurchases).toBeGreaterThan(0);
+    for (const purchase of one.purchases) expect(purchase.sale?.id).toBe(target.sale.id);
+    console.log(
+      `\n LIVE purchases: client ${found.clientId} has ${found.result.totalPurchases} in the default window; ` +
+        `sale ${target.sale.id} on ${day} reads back ${one.totalPurchases} record(s).\n`
+    );
+  }, (PURCHASE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
+
   itLive('getClientFormulaNotes with neither id is refused', async () => {
     if (!client) throw new Error('MCP client is not connected; the live tier did not start.');
     const result = await client.callTool({ name: 'getClientFormulaNotes', arguments: {} });
@@ -1564,6 +1623,87 @@ describe('live tier — appointments', () => {
     expect(readBack.status).toBe('Arrived');
   });
 
+  // Issue #29: a booking made under the wrong service is corrected before
+  // checkout, usually once the client has arrived. The appointment is changed to
+  // another session type and then RESTORED, so the comp-paid checkout below
+  // still pays for the type it discovered a service for.
+  itLive(SESSION_TYPE_CHANGE_TEST, async () => {
+    if (!requireCreatedAppointment(SESSION_TYPE_CHANGE_TEST)) return;
+    if (!requireDiscovered(SESSION_TYPE_CHANGE_TEST, ['sessionTypeId', 'appointmentSessionTypeIds'])) return;
+
+    const before = await readBackCreatedAppointment();
+    const original: number = before.sessionTypeId ?? discovered.sessionTypeId!;
+
+    // Prefer a type availability already pairs with this staff member; then the
+    // other Appointment types. Mindbody refuses a type the staff cannot teach,
+    // and a refusal writes nothing, so trying the next one is free.
+    const paired = (discovered.bookingCandidates ?? [])
+      .filter((candidate) => candidate.staffId === discovered.staffId)
+      .map((candidate) => candidate.sessionTypeId);
+    const targets = [...new Set([...paired, ...discovered.appointmentSessionTypeIds!])]
+      .filter((id) => id !== original)
+      .slice(0, MAX_SESSION_TYPE_CHANGE_ATTEMPTS);
+
+    const refusals: string[] = [];
+    let changed: any = null;
+    let target: number | null = null;
+    for (const candidate of targets) {
+      const attempt = await callTool('updateAppointment', {
+        clientId: createdClientId,
+        appointmentId: createdAppointmentId,
+        sessionTypeId: candidate,
+        sendEmail: false,
+      });
+      if (attempt.success) {
+        changed = attempt;
+        target = candidate;
+        break;
+      }
+      // A refusal by this server's own guards is a failure: the appointment is
+      // this client's and not yet checked out, so every guard should pass.
+      expect(attempt.rejected, `updateAppointment's own guard refused session type ${candidate}: ${attempt.message}`)
+        .toEqual([]);
+      refusals.push(`session type ${candidate}: ${attempt.message}`);
+    }
+    if (refusals.length > 0) {
+      console.log(
+        `\n LIVE session type change: ${refusals.length} type(s) refused by Mindbody:\n` +
+          refusals.map((line) => `   ${line}`).join('\n') +
+          '\n'
+      );
+    }
+    if (changed === null) {
+      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
+        `reason: Mindbody refused every other session type tried (${targets.join(', ') || 'none available'})`,
+        `for staff ${discovered.staffId}, so there is no type to change appointment ${createdAppointmentId} to.`,
+      ]);
+      return;
+    }
+
+    expect(changed.appointment.sessionTypeId).toBe(target);
+    const afterChange = await readBackCreatedAppointment();
+    expect(afterChange.sessionTypeId, `appointment ${createdAppointmentId} reads back as session type ${afterChange.sessionTypeId}`)
+      .toBe(target);
+    expect(afterChange.status).toBe(before.status);
+    console.log(
+      `\n LIVE session type change: appointment ${createdAppointmentId} (${before.status}) moved from type ` +
+        `${original} to ${target}; end ${before.endDateTime} -> ${afterChange.endDateTime}.\n`
+    );
+
+    const restored = await callTool('updateAppointment', {
+      clientId: createdClientId,
+      appointmentId: createdAppointmentId,
+      sessionTypeId: original,
+      sendEmail: false,
+    });
+    expect(restored.success, `restoring session type ${original} failed: ${restored.message}`).toBe(true);
+    const afterRestore = await readBackCreatedAppointment();
+    expect(afterRestore.sessionTypeId).toBe(original);
+    console.log(
+      `   restored to type ${original}; end ${afterRestore.endDateTime}.\n`
+    );
+  });
+
   // `addClientArrival` (POST /client/addarrival) is deliberately NOT exercised
   // here. It is a client-account check-in that consumes a paid visit, so the
   // -99 sandbox refuses it for a fresh client ("Client requires payment").
@@ -1797,6 +1937,41 @@ describe('live tier — comp-paid checkout', () => {
       `\n LIVE financial write: sale ${result.shoppingCart?.id ?? 'unknown'} paid with custom method ` +
         `${discovered.customPaymentMethodId} committed. NOT reversible.\n`
     );
+  });
+
+  // Issue #31: `test: true` must record nothing, and the tool, not Mindbody,
+  // must catch a payment that does not match the cart total. Writes nothing.
+  const DRY_RUN_CHECKOUT_TEST = 'checkoutShoppingCart test: true records no sale and checks payments';
+
+  itLive(DRY_RUN_CHECKOUT_TEST, async () => {
+    const name = DRY_RUN_CHECKOUT_TEST;
+    if (!requireDiscovered(name, ['locationId', 'appointmentServiceId'])) return;
+    if (!createdClientId) {
+      throw new Error('No client was created this run, so there is no one to dry-run a sale for. See the earlier failure.');
+    }
+    const cart = (amount: number) => ({
+      clientId: createdClientId,
+      items: [{ item: { type: 'Service', metadata: { id: discovered.appointmentServiceId } }, quantity: 1 }],
+      payments: [{ type: 'Comp', metadata: { amount } }],
+      inStore: true,
+      sendEmail: false,
+      locationId: discovered.locationId,
+      test: true,
+    });
+    const salesFor = async () => (await callTool('getSales', { clientIds: [createdClientId] })).sales.map((sale: any) => sale.id);
+
+    const before = await salesFor();
+    const amount = discovered.appointmentServicePrice ?? 0;
+    const ok = await callTool('checkoutShoppingCart', cart(amount));
+    expect(ok.success, `dry run failed: ${ok.message}`).toBe(true);
+    expect(ok.dryRun).toBe(true);
+    expect(JSON.stringify(ok).toLowerCase()).not.toContain('saleid');
+
+    const mismatch = await callTool('checkoutShoppingCart', cart(amount + 7));
+    expect(mismatch.success).toBe(false);
+    expect(mismatch.message).toContain('does not match');
+
+    expect(await salesFor()).toEqual(before);
   });
 
   // ── purchaseContract: runs, funded by account credit ───────────────────────

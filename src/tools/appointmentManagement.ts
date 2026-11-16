@@ -392,6 +392,7 @@ export interface UpdateAppointmentResult {
     startDateTime: string;
     endDateTime: string;
     staffName: string;
+    sessionTypeId?: number;
   };
   rejected: Array<{ id: number; reason: string }>;
   message: string;
@@ -413,6 +414,7 @@ function updateRejectionReason(
     execute?: UpdateAppointmentExecute;
     applyPayment: boolean;
     reschedule: boolean;
+    sessionTypeChange: boolean;
   },
   nowMs: number,
   timeZone: string
@@ -430,6 +432,11 @@ function updateRejectionReason(
     }
     if (request.reschedule) {
       return `appointment status is ${status}; an appointment that has already taken place cannot be rescheduled`;
+    }
+    if (request.sessionTypeChange) {
+      // A completed appointment has been checked out against its current
+      // service; changing the service now would desync it from the sale.
+      return `appointment status is ${status}; the session type of an appointment that has already taken place cannot be changed`;
     }
   }
 
@@ -453,11 +460,13 @@ function updateRejectionReason(
  * argument:
  *   1. request shape (clientId, appointmentId) — no calls;
  *   2. the execute allow-list, which also refuses the cancel verbs — no calls;
- *   3. applyPayment may not ride along with a reschedule — no calls;
+ *   3. applyPayment may not ride along with a reschedule, and sessionTypeId
+ *      must be a positive integer — no calls;
  *   4. ownership: the appointment must belong to `clientId` and be inside the
  *      lookup window, else "not found for this client";
  *   5. status: a cancelled appointment is final, and an attendance-final one
- *      takes no status action, no payment and no reschedule;
+ *      takes no status action, no payment, no reschedule and no session type
+ *      change;
  *   6. timing: `complete` needs the appointment to have started, in site time.
  */
 export async function updateAppointmentTool(
@@ -474,6 +483,7 @@ export async function updateAppointmentTool(
   sendEmail?: boolean,
   applyPayment?: boolean,
   execute?: UpdateAppointmentExecute,
+  sessionTypeId?: number,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<UpdateAppointmentResult> {
@@ -512,6 +522,15 @@ export async function updateAppointmentTool(
     );
   }
 
+  // A session type change is not a reschedule, so it may ride along with
+  // applyPayment. Mindbody may reset the end time to the new type's duration.
+  if (
+    sessionTypeId !== undefined &&
+    (typeof sessionTypeId !== 'number' || !Number.isInteger(sessionTypeId) || sessionTypeId <= 0)
+  ) {
+    return updateRefusal(-1, `sessionTypeId ${JSON.stringify(sessionTypeId)} is not a positive integer`);
+  }
+
   const lookup = await lookupAppointmentsForClient(
     client,
     cache,
@@ -526,7 +545,7 @@ export async function updateAppointmentTool(
 
   const reason = updateRejectionReason(
     owned.row,
-    { execute, applyPayment: applyPayment === true, reschedule },
+    { execute, applyPayment: applyPayment === true, reschedule, sessionTypeChange: sessionTypeId !== undefined },
     Date.now(),
     lookup.timeZone
   );
@@ -536,6 +555,7 @@ export async function updateAppointmentTool(
     const response = await client.post<any>('/appointment/updateappointment', {
       AppointmentId: appointmentId,
       StaffId: staffId,
+      SessionTypeId: sessionTypeId,
       StartDateTime: startDateTime,
       EndDateTime: endDateTime,
       ResourceIds: resourceIds,
@@ -553,6 +573,7 @@ export async function updateAppointmentTool(
         startDateTime: response.Appointment.StartDateTime,
         endDateTime: response.Appointment.EndDateTime,
         staffName: response.Appointment.Staff?.Name || `${response.Appointment.Staff?.FirstName || ''} ${response.Appointment.Staff?.LastName || ''}`.trim() || '',
+        sessionTypeId: response.Appointment.SessionTypeId,
       },
       rejected: [],
       message: 'Appointment updated successfully',

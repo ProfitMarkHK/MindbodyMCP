@@ -9,6 +9,11 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
 // Configuration
 const SSE_URL = process.env.SSE_URL || 'http://localhost:3000/sse';
+// Bearer token the server requires off loopback (MCP_AUTH_TOKEN on the server).
+const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+const AUTH_HEADERS: Record<string, string> = AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+const newTransport = () =>
+  new SSEClientTransport(new URL(SSE_URL), { requestInit: { headers: AUTH_HEADERS } });
 const TEST_TIMEOUT = 30000; // 30 seconds
 
 // Colors for console output
@@ -83,7 +88,7 @@ async function testServerInfo(): Promise<TestResult> {
   
   try {
     const infoUrl = SSE_URL.replace('/sse', '/info');
-    const response = await fetch(infoUrl);
+    const response = await fetch(infoUrl, { headers: AUTH_HEADERS });
     const data = await response.json();
     
     if (response.ok && data.transport?.type === 'sse') {
@@ -107,7 +112,7 @@ async function testSSEConnection(): Promise<TestResult> {
   
   try {
     // Create SSE transport
-    const transport = new SSEClientTransport(new URL(SSE_URL));
+    const transport = newTransport();
     
     // Create MCP client
     const client = new Client(
@@ -148,7 +153,7 @@ async function testListTools(): Promise<TestResult> {
   
   try {
     // Create connection
-    const transport = new SSEClientTransport(new URL(SSE_URL));
+    const transport = newTransport();
     const client = new Client(
       {
         name: 'test-sse-client',
@@ -189,7 +194,7 @@ async function testCallTool(): Promise<TestResult> {
   
   try {
     // Create connection
-    const transport = new SSEClientTransport(new URL(SSE_URL));
+    const transport = newTransport();
     const client = new Client(
       {
         name: 'test-sse-client',
@@ -237,7 +242,7 @@ async function testConcurrentConnections(): Promise<TestResult> {
     
     // Create multiple concurrent connections
     const connectionPromises = Array.from({ length: NUM_CONNECTIONS }, async (_, i) => {
-      const transport = new SSEClientTransport(new URL(SSE_URL));
+      const transport = newTransport();
       const client = new Client(
         {
           name: `test-client-${i}`,

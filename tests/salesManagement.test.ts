@@ -406,10 +406,28 @@ describe("checkoutShoppingCartTool (C-22)", () => {
     expect(item.discountAmount).toBe(10);
   });
 
-  it("computes total as price * quantity - discountAmount", async () => {
+  it("computes total as price * quantity, before discount", async () => {
     const client = new RecordingClient(checkoutResponse);
     const result = await checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
-    expect(result.shoppingCart!.items[0].total).toBe(90);
+    expect(result.shoppingCart!.items[0].total).toBe(100);
+  });
+
+  it("does not let a zero line DiscountAmount hide a cart discount (sandbox shape)", async () => {
+    // Observed on -99: 30 line, discountAmount 5 → line DiscountAmount 0, DiscountTotal 5, GrandTotal 25.
+    const client = new RecordingClient({
+      ShoppingCart: {
+        Id: "cart-sbx",
+        SubTotal: 30,
+        TaxTotal: 0,
+        DiscountTotal: 5,
+        GrandTotal: 25,
+        CartItems: [{ Id: 1, Quantity: 1, DiscountAmount: 0, Item: { Id: 1395, Name: "Nutrition", Price: 30 } }],
+      },
+    });
+    const result = await checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
+    expect(result.shoppingCart!.items[0].total).toBe(30);
+    expect(result.shoppingCart!.discountTotal).toBe(5);
+    expect(result.shoppingCart!.grandTotal).toBe(25);
   });
 
   it("passes TaxRate through instead of inventing a line tax", async () => {
@@ -820,5 +838,152 @@ describe("checkoutShoppingCartTool — Custom payments", () => {
       "c1", items, [{ type: "Cash", metadata: { amount: 1020, id: 13 } }], true, undefined, false, 1, client
     );
     expect(client.bodies[0].data.Payments).toEqual([{ Type: "Cash", Metadata: { Amount: 1020 } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #31 — checkoutShoppingCartTool dry run (`test`)
+// ---------------------------------------------------------------------------
+
+describe("checkoutShoppingCartTool — dry run (test)", () => {
+  const items = [{ item: { type: "Service" as const, metadata: { id: 1395 } }, quantity: 1 }];
+  const pay = (...amounts: number[]) => amounts.map((amount) => ({ type: "Cash" as const, metadata: { amount } }));
+  const dryRun = (client: RecordingClient, payments = pay(98.25), cartItems: any = items, cache?: SimpleCache) =>
+    checkoutShoppingCartTool("c1", cartItems, payments, true, undefined, false, 1, client, cache, true);
+
+  it("sends Test: true", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await dryRun(client);
+    expect(client.bodies[0].data.Test).toBe(true);
+  });
+
+  it("never sends Test when test is omitted or false", async () => {
+    const omitted = new RecordingClient(checkoutResponse);
+    const off = new RecordingClient(checkoutResponse);
+    await checkoutShoppingCartTool("c1", items, pay(98.25), true, undefined, false, 1, omitted);
+    await checkoutShoppingCartTool("c1", items, pay(98.25), true, undefined, false, 1, off, undefined, false);
+    expect("Test" in omitted.bodies[0].data).toBe(false);
+    expect("Test" in off.bodies[0].data).toBe(false);
+  });
+
+  it("a non-test result carries no dryRun flag and the committed message", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await checkoutShoppingCartTool("c1", items, pay(1), true, undefined, false, 1, client);
+    expect(result.success).toBe(true);
+    expect("dryRun" in result).toBe(false);
+    expect(result.message).toBe("Checkout completed successfully");
+  });
+
+  it("matching payments: success, dryRun, the four totals and lines, and no SaleId anywhere", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await dryRun(client, pay(50, 48.25));
+    expect(result.success).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(result.shoppingCart).toMatchObject({ subTotal: 100, discountTotal: 10, taxTotal: 8.25, grandTotal: 98.25 });
+    expect(result.shoppingCart!.items).toHaveLength(1);
+    expect(result.message).toContain("Nothing was charged");
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("555");
+    expect(serialized.toLowerCase()).not.toContain("saleid");
+  });
+
+  it("compares in whole cents, so float sums do not cause a false mismatch", async () => {
+    const response = { ...checkoutResponse, ShoppingCart: { ...checkoutResponse.ShoppingCart, GrandTotal: 0.3 } };
+    const result = await dryRun(new RecordingClient(response), pay(0.1, 0.2));
+    expect(result.success).toBe(true);
+  });
+
+  it("mismatched payments: success false with both figures", async () => {
+    const result = await dryRun(new RecordingClient(checkoutResponse), pay(107));
+    expect(result.success).toBe(false);
+    expect(result.dryRun).toBe(true);
+    expect(result.message).toContain("107");
+    expect(result.message).toContain("98.25");
+  });
+
+  it("fails when the dry run returns no GrandTotal", async () => {
+    const result = await dryRun(new RecordingClient({ ShoppingCart: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("GrandTotal");
+  });
+
+  it("refuses another client's appointment before any request", async () => {
+    const client = new OwnershipClient(checkoutResponse, [OWNED, FOREIGN]);
+    const result = await dryRun(client, pay(98.25), apptItem([8888]), client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("8888: not found for this client");
+    expect(client.bodies).toEqual([]);
+  });
+
+  it("refuses a Custom payment without a valid id before any request", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    const result = await dryRun(client, [{ type: "Custom", metadata: { amount: 98.25 } }] as any);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("getCustomPaymentMethods");
+    expect(client.bodies).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #32 — item metadata keys and discountAmount
+// ---------------------------------------------------------------------------
+
+describe("checkoutShoppingCartTool — item metadata and discountAmount (#32)", () => {
+  const payments = [{ type: "Comp" as const, metadata: { amount: 90 } }];
+  const service = (extra: Record<string, unknown> = {}) => [
+    { item: { type: "Service" as const, metadata: { id: 1395 } }, quantity: 1, ...extra } as any,
+  ];
+  const run = (client: RecordingClient, items: any[]) =>
+    checkoutShoppingCartTool("c1", items, payments, true, undefined, false, 1, client);
+
+  it("drops an unknown metadata key such as price: there is no price override", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, [
+      { item: { type: "Service", metadata: { id: 1395, price: 250, name: "x" } }, quantity: 1 },
+    ]);
+    expect(client.bodies[0].data.Items[0].Item).toEqual({ Type: "Service", Metadata: { Id: 1395 } });
+  });
+
+  it("sends only Amount for a Tip", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, [{ item: { type: "Tip", metadata: { amount: 5, id: 9, price: 1 } }, quantity: 1 }]);
+    expect(client.bodies[0].data.Items[0].Item).toEqual({ Type: "Tip", Metadata: { Amount: 5 } });
+  });
+
+  it("sends discountAmount as DiscountAmount on that cart item", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, service({ discountAmount: 10 }));
+    expect(client.bodies[0].data.Items[0].DiscountAmount).toBe(10);
+  });
+
+  it("sends no DiscountAmount key when discountAmount is omitted", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(client, service());
+    expect(Object.keys(client.bodies[0].data.Items[0])).not.toContain("DiscountAmount");
+  });
+
+  for (const bad of [-1, "10", Number.NaN, null]) {
+    it(`refuses discountAmount ${typeof bad === "string" ? JSON.stringify(bad) : String(bad)} before any request`, async () => {
+      const client = new RecordingClient(checkoutResponse);
+      const result = await run(client, service({ discountAmount: bad }));
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("discountAmount");
+      expect(client.bodies).toHaveLength(0);
+    });
+  }
+
+  it("sends appointmentBookingRequests as AppointmentBookingRequests", async () => {
+    const client = new RecordingClient(checkoutResponse);
+    await run(
+      client,
+      service({
+        appointmentBookingRequests: [
+          { staffId: 7, locationId: 1, sessionTypeId: 3, startDateTime: "2026-12-01T10:00:00", notes: "n" },
+        ],
+      })
+    );
+    expect(client.bodies[0].data.Items[0].AppointmentBookingRequests).toEqual([
+      { StaffId: 7, LocationId: 1, SessionTypeId: 3, StartDateTime: "2026-12-01T10:00:00", Notes: "n" },
+    ]);
   });
 });

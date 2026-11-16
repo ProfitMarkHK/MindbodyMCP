@@ -149,13 +149,14 @@ indistinguishable in a CI log.
 |---|---|---|
 | Configuration | sandbox SiteId, no credential inheritance, STDIO + MCP handshake, host reachability | — |
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
-| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientSchedule` (default window for one client, then walks up to 40 clients from a year back for one with bookings and checks each row's `kind`, ids and flags; loud skip if none has any) | `addClient`, read-back, cleanup |
+| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientPurchases` (walks up to 20 clients for one with a purchase in the default window, then reads that sale back by `saleId` over a one-day window); `getClientSchedule` (default window for one client, then walks up to 40 clients from a year back for one with bookings and checks each row's `kind`, ids and flags; loud skip if none has any) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
+| Dry-run checkout | `getSales` for the run's client, before and after | `checkoutShoppingCart` with `test: true` (Comp, matching and mismatched amounts); expects no new sale and the mismatch refused; leaves nothing |
 | Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
 
 `addClientArrival` (`POST /client/addarrival`) is deliberately **not** in the

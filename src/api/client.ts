@@ -153,7 +153,8 @@ export interface FetchAllPagesOptions {
   /**
    * Treat the endpoint as reporting no TotalResults, so the walk ends on a short
    * page. Only for endpoints observed to report a wrong total while honouring
-   * Offset (e.g. /sale/custompaymentmethods answers TotalResults=0 with rows).
+   * Offset (e.g. /sale/custompaymentmethods answers TotalResults=0 with rows;
+   * /sale/sales counts sale-payment pairs while Offset counts sales).
    */
   ignoreTotalResults?: boolean;
 }
