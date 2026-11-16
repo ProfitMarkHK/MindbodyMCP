@@ -82,7 +82,10 @@ docker-compose up -d
 | `MCP_PORT` | SSE server port | `3000` | No |
 | `MCP_HOST` | SSE server host | `0.0.0.0` | No |
 | `MCP_AUTH_TOKEN` | Bearer token clients must send | - | **Yes**, unless `MCP_HOST` is `127.0.0.1`, `::1` or `localhost` |
-| `MCP_CORS_ORIGIN` | CORS allowed origins | `*` | No |
+| `MCP_CORS_ORIGIN` | Value of `Access-Control-Allow-Origin`: one origin or `*` | `*` | No |
+| `MCP_ALLOWED_HOSTS` | Comma-separated `Host` header values the server accepts | loopback names, with and without the port | **Yes** when remote clients connect |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated `Origin` header values the server accepts | unset (Origin not checked) | No |
+| `MCP_DNS_REBINDING_PROTECTION` | `false`, `0`, `no` or `off` turns the Host/Origin check off | on | No |
 | `MCP_SSL_CERT` | Path to SSL certificate | - | No |
 | `MCP_SSL_KEY` | Path to SSL private key | - | No |
 
@@ -284,15 +287,37 @@ MCP_SSL_CERT=/path/to/cert.pem
 MCP_SSL_KEY=/path/to/key.pem
 ```
 
-### CORS Configuration
+### Host, Origin and CORS
+
+Three settings shape which browsers and hosts can reach the SSE endpoints. They sit beside the bearer token, not in place of it.
+
+**Order of checks.** Every request except `GET /health` and `OPTIONS` is checked for the bearer token first, so a request without it gets `401` whatever its Host. Only an authenticated request reaches the DNS-rebinding check on `GET /sse` and `POST /sse?sessionId=`, which answers `403` on a mismatch.
+
+**`MCP_ALLOWED_HOSTS` (DNS-rebinding protection).** On by default. The `Host` header must match an entry exactly, port included. Unset, the list is `localhost`, `127.0.0.1` and `[::1]`, each bare, with `:3000` and with the listening port, so local development needs no setting. Behind a public hostname, set it to the `Host` your clients send, or every remote request is refused with `403`. The server prints a warning at startup when it binds off loopback with this unset.
 
 ```bash
-# Development (allow all origins)
+MCP_ALLOWED_HOSTS=mcp.yourdomain.com,mcp.yourdomain.com:443
+```
+
+**`MCP_ALLOWED_ORIGINS`.** Unset, `Origin` is not checked; native MCP clients send none. Set, a request that carries an `Origin` must match an entry exactly. A request without `Origin` still passes, so this restricts browsers only.
+
+```bash
+MCP_ALLOWED_ORIGINS=https://app.yourdomain.com
+```
+
+**`MCP_CORS_ORIGIN`.** Sent verbatim as `Access-Control-Allow-Origin` on every response, so it takes one origin or `*`, never a list. It only tells browsers which page may read the responses; it does not refuse anything on the server. Pair it with `MCP_ALLOWED_ORIGINS` to enforce the same origin.
+
+```bash
+# Development (any origin may read responses)
 MCP_CORS_ORIGIN=*
 
-# Production (restrict to specific domains)
-MCP_CORS_ORIGIN=https://app.yourdomain.com,https://admin.yourdomain.com
+# Production (one browser origin)
+MCP_CORS_ORIGIN=https://app.yourdomain.com
 ```
+
+**No credentials mode.** The server never sends `Access-Control-Allow-Credentials`. Authentication is the `Authorization: Bearer` header, which a browser sends without credentials mode, and the server reads no cookies. A browser client must therefore send the token explicitly; it is not attached by the browser.
+
+**`MCP_DNS_REBINDING_PROTECTION=false`** turns off the Host and Origin checks. Use it only behind a proxy that already pins the Host; the bearer token still applies.
 
 ### Network Security
 
@@ -346,7 +371,8 @@ The server exposes Prometheus-compatible metrics at `/metrics` endpoint (when en
    - Check firewall rules: `sudo ufw status`
 
 2. **CORS errors**:
-   - Update `MCP_CORS_ORIGIN` to include client domain
+   - Set `MCP_CORS_ORIGIN` to the client's origin (one origin or `*`)
+   - A `403 Invalid Host header` means `MCP_ALLOWED_HOSTS` lacks the Host the client sends; `403 Invalid Origin header` means `MCP_ALLOWED_ORIGINS` lacks its Origin
    - Ensure nginx is properly forwarding headers
 
 3. **SSL certificate errors**:

@@ -384,6 +384,30 @@ describe('SSE server with MCP_AUTH_TOKEN set', () => {
     expect(preflight.headers['content-type']).toBeUndefined();
   });
 
+  it('sends CORS headers but never Access-Control-Allow-Credentials (bearer auth, no cookies)', async () => {
+    const preflight = await call({ method: 'OPTIONS', path: '/sse', headers: { Origin: 'https://client.example' } });
+    expect(preflight.headers['access-control-allow-origin']).toBe('*');
+    expect(preflight.headers['access-control-allow-headers']).toContain('Authorization');
+
+    const stream = await call({ path: '/sse', headers: auth });
+    expect(stream.status).toBe(200);
+    expect(stream.headers['access-control-allow-origin']).toBe('*');
+
+    const sessionId = sessionIdFrom(stream.body);
+    expect(sessionId).toBeDefined();
+    const message = await call({
+      method: 'POST',
+      path: `/sse?sessionId=${sessionId}`,
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    expect(message.headers['access-control-allow-origin']).toBe('*');
+
+    for (const res of [preflight, stream, message]) {
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    }
+  });
+
   it('/info needs the token', async () => {
     expect((await call({ path: '/info' })).status).toBe(401);
     const info = await call({ path: '/info', headers: auth });

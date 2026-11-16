@@ -195,7 +195,6 @@ export function createSseRequestHandler(options: SseRequestHandlerOptions): SseR
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     setCorsHeaders(res);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
 
     const transport = new SSEServerTransport(SSE_PATH, res, {
@@ -256,7 +255,6 @@ export function createSseRequestHandler(options: SseRequestHandlerOptions): SseR
         'Access-Control-Allow-Origin': corsOrigin,
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID',
-        'Access-Control-Allow-Credentials': 'true',
         'Access-Control-Max-Age': '86400',
       });
       res.end();
