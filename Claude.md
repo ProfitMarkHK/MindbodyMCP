@@ -92,7 +92,12 @@ bun run test:sse
 
 # Run performance benchmarks
 bun run benchmark
+
+# Report which docs/openapi.json paths the tools call (offline, informational)
+bun run spec:coverage            # add -- --min <percent> to exit 1 below a floor
 ```
+
+`spec:coverage` reuses Gate 13's scanner (`tests/support/api-call-scanner.ts`) and maps each tool registered in `src/index.ts` to the spec paths it reaches. It is not part of `bun run check`. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Adding a New Tool
 
