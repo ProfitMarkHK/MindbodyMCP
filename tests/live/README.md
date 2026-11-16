@@ -446,7 +446,7 @@ With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 29 skip, 0 fail`.
 - `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, one custom-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
 - **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
 
-- **`getClientSchedule` has not yet run against the sandbox (2026-11-15).** It was added while `-99` refused every user token (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which fails every authenticated live test, existing ones included. Run `-t "getClientSchedule"` once the sandbox staff user is restored.
+- **`getClientSchedule` passed (2026-11-16).** Client 100015484 had one booking since 2025-11-16, an appointment, and its row mapped with the right `kind`, ids and flags. Its default 30-day window was empty. The test was added on 2026-11-15 while `-99` refused every user token (`403 StaffMemberNotFound`); token issue works again.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.
