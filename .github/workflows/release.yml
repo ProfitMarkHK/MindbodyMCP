@@ -22,7 +22,7 @@ jobs:
     name: Preflight checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Secret scan
         run: bash scripts/secret-scan.sh
@@ -55,7 +55,7 @@ jobs:
     needs: preflight
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for secrets
         run: bash scripts/secret-scan.sh
@@ -82,7 +82,7 @@ jobs:
     needs: preflight
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for secrets
         run: bash scripts/secret-scan.sh
@@ -115,7 +115,7 @@ jobs:
     needs: preflight
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for secrets
         run: bash scripts/secret-scan.sh
@@ -144,7 +144,7 @@ jobs:
     needs: preflight
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for secrets
         run: bash scripts/secret-scan.sh
