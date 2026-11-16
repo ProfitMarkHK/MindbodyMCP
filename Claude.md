@@ -194,7 +194,7 @@ Cancel a client's class booking.
 **Parameters:**
 - `clientId` (required): Client ID
 - `classId` (required): Class ID
-- `lateCancel` (optional): Mark as late cancellation. Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused)
+- `lateCancel` (optional): Mark as late cancellation. Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused). When a rule keys on `serviceId`, the client's schedule for that day is also read to find the visit's pricing option
 
 #### `getWaitlistEntries`
 View waitlist entries for classes.
@@ -266,6 +266,8 @@ A client's bookings in a window, one flat row per booking, for working out which
 **Parameters:**
 - `clientId` (required): Client ID
 - `startDate`, `endDate` (optional): YYYY-MM-DD, sent unchanged. Default: today through 30 days ahead in the site's zone (`DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS`)
+
+`productId` (the visit's pricing option) and `sessionTypeId` (from the class) are also returned; late-cancel rules match on them.
 
 **`kind`**, checked in this order:
 1. `waitlist`: `WaitlistInfo.WaitlistId` is set. Not a seat; `waitlistEntryId` is the entry
@@ -521,7 +523,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 **Parameters:**
 - `clientId` (required): Client ID who owns every appointment
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
-- `lateCancel` (optional): Record as late cancellations (default false). Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window)
+- `lateCancel` (optional): Record as late cancellations (default false). Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window). Appointment rules key on `programId`/`sessionTypeId`: an appointment has no pricing-option id, so a `serviceId` rule ahead of the match refuses
 - `sendEmail` (optional): Email the client about the cancellation (default false)
 
 **Guards.** All are checked before any cancellation is sent:
@@ -541,17 +543,17 @@ Cancel one booking for one client and choose late or normal. A resolver: it find
 **Parameters:**
 - `clientId` (required)
 - Exactly one locator: `classId`, `appointmentId`, `visitId`, or `startDateTime` (site-local `YYYY-MM-DDTHH:MM[:SS]`, optionally narrowed by `classScheduleId`)
-- `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset (before any read); `false` forces a normal cancel
+- `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when no window applies (before any read when nothing is configured); `false` forces a normal cancel
 - `sendEmail` (optional, default false). Refused for a drop-in class, because `removeClientFromClass` sends no `SendEmail`
 - `observeBalance` (optional, default false): read the paying service's `Remaining` and the client's `AccountBalance` before and after the write, and return `impact`
 
 **Resolution.** Reads `getClientSchedule` over the locator's day for `startDateTime`, otherwise today through 30 days (a booking further out is not found). Matched rows that are waitlist entries, signed in, already late-cancelled or cancelled, or already started are not cancellable. Exactly one cancellable match proceeds. None, or more than one, is refused with `candidates` and no write; the message names why each matched row was not cancellable. Routing: `appointment` → `cancelAppointments`, `enrollment` → `cancelEnrollmentVisits` (`visitId`), `class` → `removeClientFromClass` (`classId`), `waitlist` refused.
 
-**Decision.** With `lateCancel` omitted: late when the start is within `MINDBODY_LATE_CANCEL_WINDOW_HOURS` of now (site zone), normal otherwise, and normal when the variable is unset. Per-service windows are #21.
+**Decision.** The booking's window is the first matching `MINDBODY_LATE_CANCEL_WINDOW_RULES` entry, else `MINDBODY_LATE_CANCEL_WINDOW_HOURS` (see "Late-cancel windows" under Configuration); an appointment's program and session type cost one `GET /appointment/staffappointments`, only when rules are set. With `lateCancel` omitted: late when the start is within that window of now (site zone), normal otherwise, and normal when no window applies. Refused, with no write, when a rule cannot be decided or the rules are invalid (for `true` and omitted alike).
 
 **Failures.** The POST is never retried. If it fails, the schedule is re-read once: `outcome: 'cancelled'` when the booking is gone or released, `still-booked` when it is still there, `unknown` when the re-read fails. The re-read is returned as `reconcile`.
 
-**Returns:** `{ success, outcome: 'cancelled'|'still-booked'|'unknown'|'refused', mode?: 'late'|'normal', booking?, candidates?, decision?: { mode, requested, windowHours, hoursUntilStart, reason }, receipt?: { tool, endpoint, request, response, error, sentAt, toolResult }, reconcile?: { readAt, booking, error }, impact?, message }`. `receipt.request` is the exact POST body (including `LateCancel`, and `Execute` for appointments); it is `undefined` when the delegate refused before writing. See `docs/API.md` for the field reference.
+**Returns:** `{ success, outcome: 'cancelled'|'still-booked'|'unknown'|'refused', mode?: 'late'|'normal', booking?, candidates?, decision?: { mode, requested, windowHours, windowSource, hoursUntilStart, reason }, receipt?: { tool, endpoint, request, response, error, sentAt, toolResult }, reconcile?: { readAt, booking, error }, impact?, message }`. `receipt.request` is the exact POST body (including `LateCancel`, and `Execute` for appointments); it is `undefined` when the delegate refused before writing. See `docs/API.md` for the field reference.
 
 **Observed forfeit.** With `observeBalance: true`, `impact` is `{ observed, reason?, serviceId, serviceName, remainingBefore, remainingAfter, consumed, accountBalanceBefore, accountBalanceAfter, accountBalanceDelta, readAtBefore, readAtAfter, caveats }`. The paying service is the visit's `ServiceId`, or the appointment's `ClientServiceId` (one `GET /appointment/staffappointments`); `Remaining` and `AccountBalance` come from one `GET /client/clientcompleteinfo` before and one after, so it adds two GETs (three for an appointment). `consumed` is before minus after. It is never a fee: the API has no fee ledger, so `caveats` always says a fee may be posted outside the read window. `observed` is false, with `reason`, when there is no service id, the service is not found, it has no `Remaining` (unlimited), or a read fails; a failed read never fails the cancel. Code: `src/tools/cancelImpact.ts`.
 
@@ -632,7 +634,7 @@ Cancel 1 to 3 future enrollment sessions for one client, by visit ID, via `POST 
 **Parameters:**
 - `clientId` (required): owner of every visit
 - `visitIds` (required): 1 to 3 visit IDs (`MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST`), no duplicates
-- `lateCancel` (optional, default false; bounded by `MINDBODY_LATE_CANCEL_WINDOW_HOURS` as in `cancelAppointments`), `sendEmail` (optional, default false)
+- `lateCancel` (optional, default false; bounded by the late-cancel window as in `cancelAppointments`; rules match the visit's `ProductId`, program and session type), `sendEmail` (optional, default false)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call; 1 to 3 IDs; no duplicates.
@@ -746,7 +748,15 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
+# MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24}]'  # Per-service windows, first match wins
 ```
+
+### Late-cancel windows
+The v6 API does not expose a site's late-cancel windows, so the operator states them. `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is the default. `MINDBODY_LATE_CANCEL_WINDOW_RULES` is an optional JSON array checked first, in order; first match wins.
+- A rule is `{ serviceId?, programId?, sessionTypeId?, hours }`: at least one id, every named id must match, ids positive integers, `hours` positive. Unknown keys are errors.
+- `serviceId` is the pricing option (`Visit.ProductId`), not the client's purchase (`Visit.ServiceId`). Appointments carry no pricing-option id, so their rules key on `programId`/`sessionTypeId`.
+- Fail closed: a rule that names an id the booking does not reveal refuses rather than being skipped; no match and no default refuses; malformed rules refuse every `lateCancel: true` before any lookup, naming the entry. `lateCancel: false` is never affected.
+- With no rules set, behaviour and messages are exactly the single-window ones. Refusals and `cancelClientBooking`'s `decision.windowSource` name the rule that applied. Details: `docs/API.md`, "Per-service windows". Code: `src/utils/lateCancel.ts`.
 
 ### Dates and timezones
 Mindbody takes and returns every date and time as the site's local time with no UTC offset (`2026-10-18T08:00:00`). Pass dates and times the same way; the server does the zone arithmetic.

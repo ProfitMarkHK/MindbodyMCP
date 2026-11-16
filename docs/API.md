@@ -240,6 +240,34 @@ A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbo
 - Unset, empty, non-numeric or not positive: a `lateCancel: true` request is refused before any lookup or write, with `late cancel refused: the site's late-cancel window is unknown. Set MINDBODY_LATE_CANCEL_WINDOW_HOURS ...` (id `-1`).
 - `lateCancel: false` (the default) is unaffected.
 
+##### Per-service windows (`MINDBODY_LATE_CANCEL_WINDOW_RULES`)
+
+Mindbody sets the window per pricing option, so one number can be wrong both ways: too large records an on-time cancel as late, too small refuses a genuine late cancel. `MINDBODY_LATE_CANCEL_WINDOW_RULES` is an optional JSON array of rules, checked in order before `MINDBODY_LATE_CANCEL_WINDOW_HOURS`; the first match wins and the default is the fallback.
+
+```bash
+MINDBODY_LATE_CANCEL_WINDOW_HOURS=24
+MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24},{"sessionTypeId":7,"hours":12}]'
+```
+
+- A rule is `{ serviceId?, programId?, sessionTypeId?, hours }`. It names at least one id, and every id it names must equal the booking's (AND). Ids are positive integers, `hours` a positive number. No other keys are accepted, so a typo such as `serviceID` is an error rather than a rule that never matches.
+- `serviceId` is the pricing option's id: `Visit.ProductId` ("the ID of the pricing option"), the same as `ClientService.ProductId`. It is not `Visit.ServiceId`, which is the client's own purchase and differs per client.
+- Where each id comes from:
+
+  | Booking | `serviceId` | `programId` | `sessionTypeId` |
+  |---|---|---|---|
+  | Enrollment session (`cancelEnrollmentVisits`) | the visit's `ProductId` | class `ClassDescription.Program.Id` | class `ClassDescription.SessionType.Id` |
+  | Drop-in class (`removeClientFromClass`) | the client's visit for that class, read from `GET /client/clientschedule` for that day **only when some rule keys on `serviceId`** | class `ClassDescription.Program.Id` | class `ClassDescription.SessionType.Id` |
+  | Appointment (`cancelAppointments`) | never known: the spec's `Appointment` has only `ClientServiceId` (the client's pass) | `ProgramId` | `SessionTypeId` |
+
+- **Fail closed.** If a rule names an id that the booking's lookup did not reveal (for example a `serviceId` rule ahead of an appointment), the tool cannot tell whether the rule applies, so it refuses rather than trying the next rule: `late cancel refused: cannot tell whether MINDBODY_LATE_CANCEL_WINDOW_RULES[i] (...) applies, because the booking's serviceId is not known; ...`. Put `programId`/`sessionTypeId` rules for appointments before any `serviceId` rule. A rule whose known id differs is skipped even if its other ids are unknown.
+- No rule matches and `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset: refused, naming both variables. With rules set but no default, that is decided per booking, after the lookup and before any write.
+- Invalid JSON, a non-array, a non-object entry, a missing or non-positive `hours`, a non-integer id, an unknown key, or a rule with no id: every `lateCancel: true` is refused before any lookup or write, with `late cancel refused: MINDBODY_LATE_CANCEL_WINDOW_RULES is invalid: rule <i> <entry> ...` naming the entry.
+- A rule's refusal names it: `late cancel refused: it starts more than 2 hour(s) from now, outside the late-cancel window of MINDBODY_LATE_CANCEL_WINDOW_RULES[0] (serviceId 10); ...`. The default window keeps its original text.
+- Unset or empty: no rules, and behaviour, reads and messages are exactly the single-window behaviour above.
+- `lateCancel: false` never reads either variable.
+
+Code: `lateCancelConfig`, `resolveLateCancelWindow` and `lateCancelRefusalFor` in `src/utils/lateCancel.ts`.
+
 `cancelEnrollmentVisits` applies the same bound to enrollment sessions, and so does `removeClientFromClass` (drop-in classes). With `lateCancel: true` the latter, before any write: refuses if the window is unset or invalid (no lookup, no write); resolves the site timezone (refuses if it cannot); looks the class up with `GET /class/classes` filtered by `ClassIds`, from now through two years ahead in the site's zone; and refuses if the class is not found (including one that has already started), is returned more than once, or starts more than the window from now. It returns `{ success: false, message }` with the same refusal texts as above. `lateCancel: false` (the default) makes no extra read.
 
 #### Response
@@ -268,7 +296,10 @@ interface CancelAppointmentsResponse {
 | `appointment status is <Status>, which cannot be cancelled` | Already Cancelled, LateCancelled, Completed, NoShow or Arrived. Nothing is cancelled. For `Arrived` the message adds how to proceed. | Completed means checked out; it cannot be cancelled here. For Arrived, un-arrive it (`updateAppointment` with `execute: "unarrive"`) or cancel it in Mindbody directly |
 | `duplicate appointment id in request` | The same ID appears twice | Remove the duplicate |
 | `late cancel refused: it starts more than N hour(s) from now, ...` | `lateCancel: true` on an appointment outside `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. Nothing is cancelled. | Cancel without `lateCancel` |
-| `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |
+| `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid and no rules. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |
+| `late cancel refused: MINDBODY_LATE_CANCEL_WINDOW_RULES is invalid: ...` (id `-1`) | `lateCancel: true` with malformed rules; the message names the entry. Nothing is looked up or cancelled. | Fix the rule |
+| `late cancel refused: cannot tell whether MINDBODY_LATE_CANCEL_WINDOW_RULES[i] ... applies` | A rule ahead of the match names an id the appointment does not carry (always `serviceId`). Nothing is cancelled. | Order appointment rules first, or cancel without `lateCancel` |
+| `late cancel refused: the booking ... matches no rule ...` | Rules set, no rule matches, no default. Nothing is cancelled. | Add a rule or `MINDBODY_LATE_CANCEL_WINDOW_HOURS` |
 | `at most 3 appointments may be cancelled per request` | More than 3 IDs. Nothing is cancelled. | Split into several calls |
 | `appointment lookup failed` | Verification lookup failed. Nothing is cancelled. | Retry |
 | `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`; set `MINDBODY_SITE_TIMEZONE` only if the record has none, and unset it if it disagrees with the record |
@@ -294,10 +325,10 @@ Cancels one booking for one client and chooses late or normal. It resolves and d
 
 #### Steps
 
-1. Validate: exactly one locator, positive integer ids, `startDateTime` format. `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset is refused here with the shared `late cancel refused: the site's late-cancel window is unknown ...` text, before any read.
+1. Validate: exactly one locator, positive integer ids, `startDateTime` format. `lateCancel: true` with neither `MINDBODY_LATE_CANCEL_WINDOW_HOURS` nor rules set is refused here with the shared `late cancel refused: the site's late-cancel window is unknown ...` text, before any read. Invalid `MINDBODY_LATE_CANCEL_WINDOW_RULES` refuses `lateCancel: true` **and omitted** here too, naming the entry; only `false` proceeds.
 2. Resolve the site timezone (refuse if it cannot) and read `getClientScheduleTool`: the locator's day for `startDateTime`, otherwise today through 30 days.
 3. Match the locator. Drop rows that are waitlist entries, signed in, late-cancelled, appointments already `Cancelled`/`LateCancelled`, or already started. One row left proceeds; zero or several refuse with `candidates`.
-4. Decide the mode (table below), then call the delegate with a client wrapper that records the POST body and result. The wrapper passes every call through unchanged.
+4. Resolve the booking's window: the default when no rules are set (no extra read), otherwise the first matching rule (see *Per-service windows*). An appointment's `ProgramId`/`SessionTypeId` are read with one `GET /appointment/staffappointments`, only when rules are set. Decide the mode (table below), then call the delegate with a client wrapper that records the POST body and result. The wrapper passes every call through unchanged.
 5. If the POST failed, re-read the schedule once over the same window and report the outcome.
 
 | Kind | Delegate | POST |
@@ -307,11 +338,13 @@ Cancels one booking for one client and chooses late or normal. It resolves and d
 | `class` | `removeClientFromClass` | `/class/removeclientfromclass` `{ ClientId, ClassId, LateCancel }` |
 | `waitlist` | refused | none |
 
-| `lateCancel` | Window set, start inside | Window set, start outside | Window unset |
-|---|---|---|---|
-| omitted | late | normal | normal |
-| `true` | late | refused, no POST | refused before any read |
-| `false` | normal | normal | normal |
+| `lateCancel` | Window applies, start inside | Window applies, start outside | No window applies (default unset, no rule matches) | A rule cannot be decided |
+|---|---|---|---|---|
+| omitted | late | normal | normal | refused, no POST |
+| `true` | late | refused, no POST | refused (before any read when nothing is configured) | refused, no POST |
+| `false` | normal | normal | normal | normal |
+
+`decision.windowHours` and `decision.windowSource` say which window applied: `MINDBODY_LATE_CANCEL_WINDOW_HOURS` or `MINDBODY_LATE_CANCEL_WINDOW_RULES[i] (...)`.
 
 #### Outcomes
 
@@ -333,7 +366,7 @@ interface CancelClientBookingResult {
   mode?: 'late' | 'normal';           // undefined only when refused before resolution
   booking?: ClientBooking;            // the resolved getClientSchedule row
   candidates?: ClientBooking[];       // on a refused resolution
-  decision?: { mode; requested?: boolean; windowHours?: number; hoursUntilStart: number; reason: string };
+  decision?: { mode; requested?: boolean; windowHours?: number; windowSource?: string; hoursUntilStart: number; reason: string };
   receipt?: {
     tool: 'cancelAppointments' | 'cancelEnrollmentVisits' | 'removeClientFromClass';
     endpoint?: string;                // undefined when the delegate refused before writing
@@ -602,10 +635,12 @@ interface GetClientScheduleResponse {
     staffName?: string;          // undefined when the staff catalogue lacks the id
     locationId?: number;
     locationName?: string;       // undefined when the location catalogue lacks the id
-    serviceId?: number;
+    serviceId?: number;          // Visit.ServiceId: the client's purchase that pays
     serviceName?: string;
+    productId?: number;          // Visit.ProductId: the pricing option; what a late-cancel rule's serviceId matches
     programId?: number;          // from the class; undefined on appointments
     programName?: string;
+    sessionTypeId?: number;      // class ClassDescription.SessionType.Id; undefined on appointments
     signedIn: boolean;
     lateCancelled: boolean;
     missed: boolean;             // the sandbox sets it on future unattended enrollment visits too

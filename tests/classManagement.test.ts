@@ -15,7 +15,7 @@ import {
   removeClientFromClassTool,
 } from "../src/tools/classManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
-import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
+import { LATE_CANCEL_RULES_ENV, LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import { epochMsToSiteLocal, resetSiteTimeWarningForTests } from "../src/utils/siteTime.js";
 
 const spec = JSON.parse(
@@ -374,6 +374,8 @@ class RecordingClient implements IMindbodyClient {
   readonly cache = new SimpleCache(5);
   siteZone: string | null = SITE_TZ;
   classes: any[] = [];
+  /** Rows for GET /client/clientschedule, read only when a serviceId rule is configured. */
+  visits: any[] = [];
   private readonly validator = new SpecValidatingClient(spec, {});
 
   async request<T>(): Promise<T> {
@@ -392,6 +394,7 @@ class RecordingClient implements IMindbodyClient {
       const wanted: number[] = config?.params?.ClassIds ?? [];
       return page("Classes", this.classes.filter((cls) => wanted.includes(cls.Id)));
     }
+    if (url === "/client/clientschedule") return page("Visits", this.visits);
     throw new Error(`unexpected GET ${url}`);
   }
 
@@ -485,5 +488,79 @@ describe("removeClientFromClassTool — lateCancel window", () => {
     expect(client.posts).toEqual([
       { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: false } },
     ]);
+  });
+});
+
+describe("removeClientFromClassTool — per-service late-cancel rules (issue #21)", () => {
+  const ISSUE_RULES = JSON.stringify([{ serviceId: 10, hours: 2 }, { programId: 3, hours: 24 }]);
+  const programClass = (hours: number, programId: number) => ({
+    ...classStartingIn(hours),
+    ClassDescription: { Program: { Id: programId }, SessionType: { Id: 7 } },
+  });
+  const visitFor = (productId: number) => ({ Id: 9001, ClassId: 501, ServiceId: 777, ProductId: productId });
+
+  beforeEach(() => {
+    resetSiteTimeWarningForTests();
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = ISSUE_RULES;
+  });
+  afterEach(() => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+    delete process.env[LATE_CANCEL_RULES_ENV];
+  });
+
+  it("refuses a ServiceId 10 visit at 10 hours out as outside its 2-hour window, with no POST", async () => {
+    const client = new RecordingClient();
+    client.classes = [programClass(10, 3)];
+    client.visits = [visitFor(10)];
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("more than 2 hour(s)");
+    expect(result.message).toContain(`${LATE_CANCEL_RULES_ENV}[0] (serviceId 10)`);
+    expect(client.posts).toEqual([]);
+    const [schedule] = client.gets.filter((get) => get.url === "/client/clientschedule");
+    expect(schedule.params.ClientId).toBe("c1");
+  });
+
+  it("allows a ProgramId 3 class at 10 hours out under its 24-hour rule", async () => {
+    const client = new RecordingClient();
+    client.classes = [programClass(10, 3)];
+    client.visits = [visitFor(11)];
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.posts[0].data.LateCancel).toBe(true);
+  });
+
+  it("refuses when the paying pricing option cannot be found for a leading serviceId rule", async () => {
+    const client = new RecordingClient();
+    client.classes = [programClass(10, 3)];
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("serviceId is not known");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("does not read the client schedule when no rule keys on serviceId", async () => {
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 2 }]);
+    const client = new RecordingClient();
+    client.classes = [programClass(10, 4)];
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.gets.some((get) => get.url === "/client/clientschedule")).toBe(false);
+  });
+
+  it("refuses every lateCancel with no call on malformed rules; lateCancel: false still cancels", async () => {
+    process.env[LATE_CANCEL_RULES_ENV] = "not json";
+    const client = new RecordingClient();
+    client.classes = [programClass(10, 3)];
+    const refused = await removeClientFromClassTool("c1", 501, true, client, client.cache);
+    expect(refused.success).toBe(false);
+    expect(refused.message).toContain(`${LATE_CANCEL_RULES_ENV} is invalid: not valid JSON`);
+    expect(client.gets).toEqual([]);
+    expect(client.posts).toEqual([]);
+
+    const plain = await removeClientFromClassTool("c1", 501, false, client, client.cache);
+    expect(plain.success).toBe(true);
+    expect(client.posts[0].data.LateCancel).toBe(false);
   });
 });

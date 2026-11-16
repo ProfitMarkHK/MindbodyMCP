@@ -5,7 +5,7 @@ import type { AxiosRequestConfig } from "axios";
 import type { IMindbodyClient } from "../src/api/client.js";
 import { SimpleCache } from "../src/cache/index.js";
 import { cancelClientBookingTool, type CancelClientBookingRequest } from "../src/tools/cancelBooking.js";
-import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
+import { LATE_CANCEL_RULES_ENV, LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import { epochMsToSiteLocal } from "../src/utils/siteTime.js";
 import { SpecValidatingClient } from "./spec-validating-client.js";
 
@@ -502,5 +502,98 @@ describe("cancelClientBookingTool: observeBalance impact", () => {
     expect(result.impact).toMatchObject({ observed: false, serviceId: undefined });
     expect(result.impact!.reason).toContain("no ServiceId");
     expect(result.impact!.remainingBefore).toBeUndefined();
+  });
+});
+
+describe("cancelClientBookingTool: per-service late-cancel rules (issue #21)", () => {
+  const ISSUE_RULES = JSON.stringify([{ serviceId: 10, hours: 2 }, { programId: 3, hours: 24 }]);
+  /** A drop-in (program 3) paid by pricing option `productId`. */
+  function paidDropIn(client: StubClient, hoursOut: number, productId: number) {
+    dropIn(client, hoursOut);
+    Object.assign(client.visits.at(-1), { ServiceId: 9000 + productId, ProductId: productId });
+  }
+
+  beforeEach(() => {
+    process.env[LATE_CANCEL_RULES_ENV] = ISSUE_RULES;
+  });
+  afterEach(() => delete process.env[LATE_CANCEL_RULES_ENV]);
+
+  it("refuses lateCancel true for ServiceId 10 at 10 hours out, naming the 2-hour rule, with no POST", async () => {
+    const client = new StubClient();
+    paidDropIn(client, 10, 10);
+    const result = await run(client, { classId: 201, lateCancel: true });
+    expect(client.posts).toEqual([]);
+    expect(result).toMatchObject({ success: false, outcome: "refused", decision: { windowHours: 2, windowSource: `${LATE_CANCEL_RULES_ENV}[0] (serviceId 10)` } });
+    expect(result.message).toContain("more than 2 hour(s)");
+  });
+
+  it("decides normal for ServiceId 10 at 10 hours out when lateCancel is omitted", async () => {
+    const client = new StubClient();
+    paidDropIn(client, 10, 10);
+    const result = await run(client, { classId: 201 });
+    expect(client.posts[0].body.LateCancel).toBe(false);
+    expect(result).toMatchObject({ success: true, mode: "normal" });
+    expect(result.decision!.reason).toContain(`outside the 2h late-cancel window of ${LATE_CANCEL_RULES_ENV}[0]`);
+  });
+
+  it("late-cancels a ProgramId 3 class at 10 hours out under the 24-hour rule, and the delegate agrees", async () => {
+    const client = new StubClient();
+    paidDropIn(client, 10, 11);
+    const result = await run(client, { classId: 201, lateCancel: true });
+    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: true } }]);
+    expect(result).toMatchObject({ success: true, mode: "late", decision: { windowHours: 24, windowSource: `${LATE_CANCEL_RULES_ENV}[1] (programId 3)` } });
+  });
+
+  it("uses an appointment's ProgramId from its row, with the default as fallback", async () => {
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 5, hours: 2 }]);
+    const client = new StubClient();
+    appointment(client, 10);
+    client.appointments[0].ProgramId = 5;
+    const late = await run(client, { appointmentId: 8001 });
+    expect(late).toMatchObject({ success: true, mode: "normal", decision: { windowHours: 2 } });
+
+    const other = new StubClient();
+    appointment(other, 10);
+    other.appointments[0].ProgramId = 6;
+    const fallback = await run(other, { appointmentId: 8001 });
+    expect(fallback).toMatchObject({ success: true, mode: "late", decision: { windowHours: 24, windowSource: LATE_CANCEL_WINDOW_ENV } });
+  });
+
+  it("refuses an omitted lateCancel when a rule cannot be decided, rather than guessing", async () => {
+    const client = new StubClient();
+    dropIn(client, 10); // no ProductId on the visit, and rule 0 keys on serviceId
+    const result = await run(client, { classId: 201 });
+    expect(client.posts).toEqual([]);
+    expect(result).toMatchObject({ success: false, outcome: "refused" });
+    expect(result.message).toContain("serviceId is not known");
+    expect(result.message).toContain("pass lateCancel explicitly");
+  });
+
+  it("cancels normally when no rule matches, no default is set and lateCancel is omitted", async () => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 99, hours: 2 }]);
+    const client = new StubClient();
+    dropIn(client, 3);
+    const result = await run(client, { classId: 201 });
+    expect(client.posts[0].body.LateCancel).toBe(false);
+    expect(result).toMatchObject({ success: true, mode: "normal", decision: { windowHours: undefined } });
+    expect(result.decision!.reason).toContain("no rule in MINDBODY_LATE_CANCEL_WINDOW_RULES matches");
+  });
+
+  it("refuses true and omitted before any read on malformed rules; false still cancels", async () => {
+    process.env[LATE_CANCEL_RULES_ENV] = '[{"serviceId":10,"hours":2},{"programId":"3","hours":24}]';
+    for (const lateCancel of [true, undefined]) {
+      const client = new StubClient();
+      paidDropIn(client, 10, 11);
+      const result = await run(client, { classId: 201, lateCancel });
+      expect(client.gets).toEqual([]);
+      expect(client.posts).toEqual([]);
+      expect(result.message).toContain('rule 1 {"programId":"3","hours":24}');
+    }
+    const client = new StubClient();
+    paidDropIn(client, 10, 11);
+    const plain = await run(client, { classId: 201, lateCancel: false });
+    expect(plain).toMatchObject({ success: true, mode: "normal" });
+    expect(client.posts[0].body.LateCancel).toBe(false);
   });
 });
