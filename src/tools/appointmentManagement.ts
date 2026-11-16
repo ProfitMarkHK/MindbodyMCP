@@ -575,10 +575,7 @@ export async function updateAppointmentTool(
       Execute: execute,
       SendEmail: sendEmail,
       ApplyPayment: applyPayment,
-      // SANDBOX-UNVERIFIED (issue #30): UpdateAppointmentRequest documents Test
-      // as "validated, but no new appointment data is added". That has not yet
-      // been observed on -99; the live tier's dry-run probe must pass before
-      // this ships. Replace this note with the SANDBOX-OBSERVED result.
+      // SANDBOX-OBSERVED (matches spec, 2026-11-16, issue #30): updateappointment on -99 accepts Test: true with a changed Notes value and saves nothing; a re-read shows the original notes, times, staff and status. Unlike addclient, which refuses Test.
       Test: test,
     });
 

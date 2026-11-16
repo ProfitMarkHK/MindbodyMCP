@@ -187,7 +187,7 @@ interface UpdateAppointmentResponse {
 
 `test: true` sends the same request with `Test: true`. `UpdateAppointmentRequest` documents it as "validated, but no new appointment data is added". The guards are unchanged, so a dry run is refused exactly where a real call would be, and a refused dry run sends no POST. A successful dry run returns `success: true`, `dryRun: true`, no `appointment`, and a message that says nothing was saved. A Mindbody refusal is `success: false` with no `dryRun`.
 
-The spec is not proof: `POST /client/addclient` on `-99` refuses `Test: true` outright. The live tier probes this endpoint (`updateAppointment test=true validates a notes change and leaves the appointment unchanged`): it sends a dry run that would change the notes, then re-reads the appointment and requires the original notes, times, staff and status. **Not yet observed on the sandbox** (issue #30); until that probe passes, do not rely on a dry run leaving the appointment untouched.
+The spec is not proof: `POST /client/addclient` on `-99` refuses `Test: true` outright. The live tier probes this endpoint (`updateAppointment test=true validates a notes change and leaves the appointment unchanged`): it sends a dry run that would change the notes, then re-reads the appointment and requires the original notes, times, staff and status. **Observed on `-99` on 2026-11-16:** Mindbody accepted the dry run and the re-read showed the original notes unchanged.
 
 #### Session type changes
 

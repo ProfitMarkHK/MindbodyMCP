@@ -1466,7 +1466,10 @@ describe('live tier — appointments', () => {
 
     const before = await readBackCreatedAppointment();
     const marker = `livee2e dry run ${Date.now()}`;
-    expect(before.notes ?? '', 'the probe marker must differ from the current notes').not.toBe(marker);
+    // The booking wrote notes carrying the run token. Seeing them here proves the
+    // read-back returns notes at all; otherwise "unchanged" would be vacuous.
+    expect(before.notes, 'the read-back must carry the booking notes for the probe to mean anything')
+      .toContain(RUN_TOKEN);
 
     const dryRun = await callTool('updateAppointment', {
       clientId: createdClientId,
@@ -1475,7 +1478,10 @@ describe('live tier — appointments', () => {
       sendEmail: false,
       test: true,
     });
-    console.log(`\n LIVE dry run: updateAppointment Test=true answered: ${JSON.stringify(dryRun)}\n`);
+    console.log(
+      `\n LIVE dry run: notes before "${before.notes}"; updateAppointment Test=true with notes "${marker}" ` +
+        `answered: ${JSON.stringify(dryRun)}\n`
+    );
     expect(dryRun.rejected, `this server's own guards refused the dry run: ${dryRun.message}`).toEqual([]);
     expect(dryRun.success, `Mindbody refused updateappointment with Test: true: ${dryRun.message}`).toBe(true);
     expect(dryRun.dryRun).toBe(true);
@@ -1489,6 +1495,7 @@ describe('live tier — appointments', () => {
     expect(after.endDateTime).toBe(before.endDateTime);
     expect(after.staffId).toBe(before.staffId);
     expect(after.status).toBe(before.status);
+    console.log(` LIVE dry run: notes after "${after.notes}" — unchanged.\n`);
   });
 
   itLive('updateAppointment reschedules the booked appointment to a new slot', async () => {

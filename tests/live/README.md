@@ -426,18 +426,20 @@ the suite; none is hardcoded as an id.
 
 ## Status
 
-**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-10-28:
+**Runs end to end against the authenticated `-99` sandbox.** A default run books, dry-runs a notes change, reschedules, arrives, changes the session type, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-11-16 (branch for issue #30, stacked on #29):
 
 ```
- 29 pass
- 0 skip
+ 35 pass
  0 fail
-Ran 29 tests across 1 file.
+Ran 35 tests across 1 file.
 ```
 
-With `SKIP_LIVE_E2E=1` the same file reports `0 pass, 29 skip, 0 fail`.
+- **The dry-run probe passed (2026-11-16, issue #30).** `updateAppointment` with `test: true` and new notes answered `dryRun: true`; the re-read showed the booking's notes (`live-e2e <run token>`), times, staff and status unchanged.
+- **One loud skip on 2026-11-16:** the session type change test (issue #29). Mindbody answered every one of the six other session types tried (41, 42, 43, 114, 115, 116) with `Something went wrong. Please try again. (Code: Unknown)`, so there was no type to change to. It is a skip, not a failure.
 
-- **No skips and no loud skips.** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
+The tallies below this point are from the 2026-10-28 run (29 tests), kept for the field evidence they record.
+
+- **No skips and no loud skips (2026-10-28).** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
 - **The contract purchase passed.** It walked the 11 contracts at location 1, was refused `356` ("Contract 356 cannot be purchased at location 1"), accepted `347` (Corporate Monthly Membership) and returned `ClientContractId` 16045. `getClientContracts` read it back as `Id` 16045 with `AutopayStatus: "Active"`.
 - **The custom-payment checkout passed (2026-10-28).** `getCustomPaymentMethods` returned `23` "paypal" and `24` "Groupon Voucher" (the response reports `TotalResults: 0` beside them, which the tool ignores). The checkout sold service `1395` paid `{ Type: 'Custom', Metadata: { Amount, Id: 23 } }` and Mindbody committed the sale.
 - **The comp-paid checkout passed.** It sold the appointment's pricing option (service `1395`, price 30) against the booked appointment with `Payments: [{ Type: 'Comp' }]`. Mindbody committed the sale, and the appointment read back as `Completed`. The response's reconciled-appointment arrays were empty, so the `LIVE NOTE (loud)` about the unverified link prints on every run.
