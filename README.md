@@ -330,7 +330,12 @@ bun run benchmark
 
 # Type checking
 bun run typecheck
+
+# Which docs/openapi.json paths the tools call, grouped by API tag (offline)
+bun run spec:coverage
 ```
+
+`spec:coverage` is informational and exits 0; pass `-- --min <percent>` (or set `SPEC_COVERAGE_MIN`) to make it exit 1 below that share of spec paths. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Quality gates
 
