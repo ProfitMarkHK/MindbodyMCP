@@ -18,7 +18,7 @@ Date: 2026-10-17. Sandbox site: `-99`. Read-only audit; no source files were cha
 | UNVERIFIED | 0 |
 | **Total call sites** | **46** |
 
-Distinct findings: **30 code bugs** (section C), **11 spec issues to raise with Mindbody** (section D), **4 unverified items** (section E). No call site is wholly unverified, but four individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
+Distinct findings: **30 code bugs** (section C), **12 spec issues to raise with Mindbody** (section D), **4 unverified items** (section E). No call site is wholly unverified, but four individual findings could not be confirmed against the sandbox and are marked as such in C and D. A call site can carry both a code bug and a spec bug; the table in section B shows the primary verdict and notes the secondary one.
 
 One finding has since been fixed and verified live, and is kept here for provenance rather than deleted: **C-23** (`purchaseContract` reading a `ClientContract` object the response does not contain). Doing so also closed **E-3**, which existed only because the runtime shape could not be probed.
 
@@ -464,6 +464,14 @@ Each entry: endpoint, what the spec says (JSON pointer), what the sandbox does, 
 - **Sandbox (2026-11-11, `-99`, America/Los_Angeles, 127 sales):** every `SaleDateTime` ends in `Z` (`2026-11-01T08:52:07Z`), and `SaleDate` is the date at midnight with `Z` (`2026-11-01T00:00:00Z`). The date part of `SaleDateTime` equals `SaleDate` on every row, including rows at 03–07 `Z`; a true UTC value would put LA evening sales on the next day. So the value is site-local and the `Z` is spurious. The date filter compares against `SaleDate` (midnight): a window `T00:00:00`–`T00:59:59` returns the whole day, and `T12:00:00`–`T23:59:59` returns nothing.
 - **Impact:** `getSales` strips the `Z` from `saleDateTime` and sends `T00:00:00`–`T23:59:59` so each requested day is matched in full. Time-of-day filtering is not possible.
 - **Write-up:** "GET /public/v6/sale/sales returns SaleDate and SaleDateTime with a trailing `Z` although both are site-local times, and StartSaleDateTime/EndSaleDateTime filter on the sale date only, ignoring the time component. Please drop the `Z` or document the zone, and document the date-only filter."
+
+### D-12. `GET /sale/sales`: `TotalResults` counts sale-payment pairs while `Offset` counts sales
+
+- **Spec:** `PaginationResponse.TotalResults` is the "Total number of results in dataset"; the same schema uses "results" for `PageSize`, a row count. `Offset`/`Limit` index the `Sales` list.
+- **Sandbox (2026-10-29, `-99`, read-only counts, issue #36):** `TotalResults` equals the sum of `Payments.length` over the sales in the window, not the number of sales. 2026-10-01 to 10-29: 2,554 sales, 2,568 pairs, the total equals the pair count on every day. 2026-10-16: 130 sales, 138 pairs, `TotalResults: 138`; walking the day once per `PaymentMethodId` returned the same 130 sales, so nothing is missing. The empty page past the last sale reports `TotalResults: 0`, while every non-empty page in the same walk reports the full count. Whether a sale with no payments counts, and what production does, are not verified.
+- **Impact:** `getSales` reads the endpoint with `fetchAllPages` `ignoreTotalResults`, so the walk ends on the first short page (`Offset` advancing by sales received) and the reported total is never compared with the sales. Trusting it, a split-payment window either throws (an empty page "before" the pair total is reached, if the last page repeats the total) or works only because of the sandbox's `0` on the last page; and if payment-less sales make the pair count smaller than the sale count, the walk stops at the pair count and truncates silently. `tests/salesHistory.test.ts` ("pair-counted TotalResults") reproduces all three. `totalSales` is the number of sales returned.
+- **Not yet raised.** Raise once confirmed on production.
+- **Write-up:** "GET /public/v6/sale/sales reports PaginationResponse.TotalResults as the number of sale-payment pairs (a sale paid by two methods counts twice), while Offset and Limit count sales, and the empty page past the end reports TotalResults 0. Which unit is intended? With PaymentMethodId set, does it count matching sales or matching payments? Does a sale with no payments count? Please make TotalResults count Sales rows, or document the unit."
 
 ### F-2. Missing staff usertoken degrades client reads to a silent empty 200
 
