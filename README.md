@@ -133,7 +133,7 @@ The server provides 50 tools across 6 categories:
 - `getClassDescriptions` - List class types
 - `getClassSchedules` - View recurring schedules
 - `addClientToClass` - Book clients into classes
-- `removeClientFromClass` - Cancel bookings
+- `removeClientFromClass` - Cancel bookings. Optional `sendEmail` (default `false`) asks Mindbody to email the client, as `cancelAppointments` and `cancelEnrollmentVisits` do
 - `getWaitlistEntries` - Manage waitlists. **At least one of `classScheduleIds`, `classIds` or `clientIds` is required**: the API rejects a request with none of them. Entries carry no queue position — the endpoint has no such field
 - `substituteClassTeacher` - Handle substitutions. Takes the **incoming** teacher's staff id as `substituteTeacherId`; the original teacher is implied by the class. The response shape is unverified against the sandbox (the endpoint has no `Test` flag)
 - `getClassVisits` - Attendance and sign-in status for a class. Returns client ids, not client names: the endpoint returns no client object

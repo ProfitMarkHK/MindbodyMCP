@@ -242,6 +242,8 @@ A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbo
 
 `cancelEnrollmentVisits` applies the same bound to enrollment sessions, and so does `removeClientFromClass` (drop-in classes). With `lateCancel: true` the latter, before any write: refuses if the window is unset or invalid (no lookup, no write); resolves the site timezone (refuses if it cannot); looks the class up with `GET /class/classes` filtered by `ClassIds`, from now through two years ahead in the site's zone; and refuses if the class is not found (including one that has already started), is returned more than once, or starts more than the window from now. It returns `{ success: false, message }` with the same refusal texts as above. `lateCancel: false` (the default) makes no extra read.
 
+`removeClientFromClass` also takes `sendEmail` (default `false`), sent as `SendEmail` on `POST /class/removeclientfromclass`. As above, it is not a dry run: `true` can email a real client. A late cancel that the window refuses makes no POST, so no email is sent.
+
 #### Response
 
 ```typescript

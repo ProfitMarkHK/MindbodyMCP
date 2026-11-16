@@ -198,6 +198,7 @@ Cancel a client's class booking.
 - `clientId` (required): Client ID
 - `classId` (required): Class ID
 - `lateCancel` (optional): Mark as late cancellation. Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused)
+- `sendEmail` (optional): Email the client about the cancellation (default false), sent as `SendEmail`. Not a dry run: `true` can email a real client. A refused late cancel sends nothing, so no email
 
 #### `getWaitlistEntries`
 View waitlist entries for classes.

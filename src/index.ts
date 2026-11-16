@@ -220,13 +220,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'removeClientFromClass',
-        description: 'Cancel a client\'s class booking',
+        description: 'Cancel a client\'s class booking. Not a dry run: sendEmail (default false) can email a real client.',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
             classId: { type: 'number', description: 'Class ID' },
             lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for a class starting within that window' },
+            sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'classId'],
         },
@@ -1020,7 +1021,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         const removeClassResult = await removeClientFromClassTool(
           args.clientId as string,
           args.classId as number,
-          args.lateCancel as boolean | undefined
+          args.lateCancel as boolean | undefined,
+          undefined,
+          undefined,
+          args.sendEmail as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(removeClassResult, null, 2) }] };
       
