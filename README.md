@@ -143,6 +143,7 @@ The server provides 51 tools across 6 categories:
 - `addClient` - Register new clients
 - `updateClient` - Update client information
 - `getClientVisits` - View attendance history
+- `getClientSchedule` - A client's bookings as flat rows, each with a `kind` (`waitlist`, `appointment`, `enrollment` or `class`) and the ids the cancel tools take. Read-only; it does not decide whether a cancellation would be late. Default window: today through 30 days ahead
 - `getClientMemberships` - Check active memberships
 - `addClientArrival` - Check-in clients
 - `getClientAccountBalances` - View account balances

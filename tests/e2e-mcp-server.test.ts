@@ -91,6 +91,7 @@ const EXPECTED_TOOL_NAMES = [
   'addClient',
   'updateClient',
   'getClientVisits',
+  'getClientSchedule',
   'getClientMemberships',
   'addClientArrival',
   'getClientAccountBalances',
@@ -2222,6 +2223,37 @@ describe('pagination — multi-page walks through the real server', () => {
     const [classes] = stub.requestsTo('/public/v6/class/classes', 'GET');
     expect(classes.queryAll['ClassIds[]'].map(Number).sort()).toEqual([101, 25202, 25203, 25204, 25205]);
     expect(classes.query).toMatchObject({ StartDateTime: `${today}T00:00:00`, EndDateTime: `${end}T23:59:59`, Limit: '200', Offset: '0' });
+  });
+
+  itE2E('getClientSchedule returns every booking in the window, flat, with its kind', async () => {
+    stub.resetLog();
+
+    const today = siteDateString(new Date(), STUB_FIXTURES.siteTimeZone);
+    const end = addDays(today, 30);
+    const result = await client.callTool({
+      name: 'getClientSchedule',
+      arguments: { clientId: STUB_FIXTURES.clientId, startDate: today, endDate: end },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const payload = resultJson(result);
+    const kinds = Object.fromEntries(payload.bookings.map((b: any) => [b.visitId, b.kind]));
+    expect(kinds).toMatchObject({
+      [ENROLLMENT_FIXTURES.futureVisitA]: 'enrollment',
+      [ENROLLMENT_FIXTURES.lateCancelledVisit]: 'enrollment',
+      [ENROLLMENT_FIXTURES.waitlistedVisit]: 'waitlist',
+      [ENROLLMENT_FIXTURES.dropInVisit]: 'class',
+    });
+    expect(payload.totalBookings).toBe(payload.bookings.length);
+
+    const [schedule] = stub.requestsTo(CLIENT_SCHEDULE_PATH, 'GET');
+    expect(schedule.query).toMatchObject({
+      ClientId: STUB_FIXTURES.clientId,
+      StartDate: today,
+      EndDate: end,
+      IncludeWaitlistEntries: 'true',
+    });
+    expect(stub.requests.filter((r) => r.method === 'POST' && !r.path.endsWith('/usertoken/issue'))).toEqual([]);
   });
 });
 
