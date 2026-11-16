@@ -82,6 +82,8 @@ const BUN_BINARY = process.execPath;
 const CALL_TIMEOUT_MS = 60_000;
 /** How many clients the read-only formula note test checks before giving up. */
 const FORMULA_NOTE_CLIENT_SCAN = 40;
+/** How many clients the read-only purchase history test checks before giving up. */
+const PURCHASE_CLIENT_SCAN = 20;
 const CONNECT_TIMEOUT_MS = 60_000;
 
 /**
@@ -996,6 +998,59 @@ describe('live tier — clients', () => {
         `(first note id ${found.result.formulaNotes[0].id}).\n`
     );
   }, FORMULA_NOTE_CLIENT_SCAN * CALL_TIMEOUT_MS);
+
+  itLive('getClientPurchases reads a client\'s purchase history and one sale back by saleId, read-only', async () => {
+    const name = "getClientPurchases reads a client's purchase history and one sale back by saleId, read-only";
+    // Read-only: walk existing clients until one has a purchase in the default
+    // window (365 days through today, site zone). Bounded like the formula notes scan.
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, PURCHASE_CLIENT_SCAN);
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientPurchases', { clientId: String(candidate.id) });
+      expect(Array.isArray(result.purchases)).toBe(true);
+      expect(result.totalPurchases).toBe(result.purchases.length);
+      if (result.purchases.some((p: any) => Number.isInteger(p.sale?.id))) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a purchase in the last 365 days, so the`,
+        'field mapping and saleId read-back are untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    for (const purchase of found.result.purchases) {
+      expect(typeof purchase.accountPayment).toBe('boolean');
+      if (purchase.sale) {
+        // Site-local, no offset: a spurious `Z` is stripped (D-11).
+        expect(purchase.sale.saleDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        expect(purchase.sale.saleDateTime.endsWith('Z')).toBe(false);
+        expect(Array.isArray(purchase.sale.purchasedItems)).toBe(true);
+        expect(Array.isArray(purchase.sale.payments)).toBe(true);
+      }
+    }
+
+    // The duplicate-checkout check and the read-back: a one-day window on the
+    // sale's own date, narrowed by saleId, returns that sale.
+    const target = found.result.purchases.find((p: any) => Number.isInteger(p.sale?.id));
+    const day = target.sale.saleDateTime.slice(0, 10);
+    const one = await callTool('getClientPurchases', {
+      clientId: found.clientId,
+      startDate: day,
+      endDate: day,
+      saleId: target.sale.id,
+    });
+    expect(one.totalPurchases).toBeGreaterThan(0);
+    for (const purchase of one.purchases) expect(purchase.sale?.id).toBe(target.sale.id);
+    console.log(
+      `\n LIVE purchases: client ${found.clientId} has ${found.result.totalPurchases} in the default window; ` +
+        `sale ${target.sale.id} on ${day} reads back ${one.totalPurchases} record(s).\n`
+    );
+  }, (PURCHASE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
 
   itLive('getClientFormulaNotes with neither id is refused', async () => {
     if (!client) throw new Error('MCP client is not connected; the live tier did not start.');

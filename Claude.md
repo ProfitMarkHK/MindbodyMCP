@@ -157,7 +157,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (50 tools)
+## Available Tools (51 tools)
 
 ### 📅 Class Management
 
@@ -303,6 +303,16 @@ Read a client's formula notes (`GET /client/clientformulanotes`, every page fetc
 - `appointmentId` (optional): Only notes tied to this appointment
 
 **Returns:** `{ formulaNotes: [{ id, clientId, appointmentId, entryDate, note, siteId, siteName, staffName }], totalFormulaNotes }`. Notes are cross-regional, so a note's `clientId` is the client's ID at the site the note came from and can differ from the requested one. `staffName` is set only for notes tied to an appointment.
+
+#### `getClientPurchases`
+A client's purchase history with prices (`GET /client/clientpurchases`, every page fetched, list key `Purchases`). Read-only. Use it to value what a client bought, to check for an existing sale before a `checkoutShoppingCart` (a one-day window), or to read a sale back afterwards by `saleId`, including a web-app sale at an overridden price (it reads back as plain `price`/`unitPrice`; there is no override flag).
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, site-local, sent as `StartDate` `T00:00:00` and `EndDate` `T23:59:59`. Both are always sent, because the endpoint's own defaults (`now` through end of today) return almost nothing. Default: 365 days back through today in the site's zone.
+- `saleId` (optional): Only the record for this sale
+
+**Returns:** `{ purchases: [{ description, price, amountPaid, discount, tax, returned, quantity, accountPayment, sale: { id, saleDateTime, locationId, purchasedItems: [{ id, isService, description, unitPrice, quantity, totalAmount, returned, contractId, expDate, activeDate }], payments: [{ id, amount, method, type, transactionId }] } }], totalPurchases }`. An `AccountPayment: true` record (a payment onto the account) is kept and reported as `accountPayment: true`. `saleDateTime` is site-local with the API's spurious `Z` stripped (D-11). No per-session value is computed.
 
 #### `getClientCompleteInfo`
 A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.

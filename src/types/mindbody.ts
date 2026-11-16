@@ -459,3 +459,31 @@ export interface Sale {
   PurchasedItems?: PurchasedItem[];
   Payments?: SalePayment[];
 }
+
+/** `PurchasedItem` fields that `GET /client/clientpurchases` reads beyond the `Sale` subset above. */
+export interface ClientPurchaseItem extends PurchasedItem {
+  ContractId?: number;
+  ExpDate?: string;
+  ActiveDate?: string;
+}
+
+/** `SalePayment` with the `TransactionId` that `GET /client/clientpurchases` reads. */
+export interface ClientPurchasePayment extends SalePayment {
+  TransactionId?: number;
+}
+
+/** `ClientPurchaseRecord` from `GET /client/clientpurchases` (list key `Purchases`). */
+export interface ClientPurchaseRecord {
+  Sale?: Omit<Sale, 'PurchasedItems' | 'Payments'> & {
+    PurchasedItems?: ClientPurchaseItem[];
+    Payments?: ClientPurchasePayment[];
+  };
+  Description?: string;
+  AccountPayment?: boolean;
+  Price?: number;
+  AmountPaid?: number;
+  Discount?: number;
+  Tax?: number;
+  Returned?: boolean;
+  Quantity?: number;
+}

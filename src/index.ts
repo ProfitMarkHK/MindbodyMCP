@@ -43,6 +43,7 @@ import {
   getClientContractsTool,
   getClientFormulaNotesTool,
   getClientCompleteInfoTool,
+  getClientPurchasesTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -404,6 +405,23 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID' },
             appointmentId: { type: 'number', description: 'Only notes tied to this appointment' },
           },
+        },
+      },
+      {
+        name: 'getClientPurchases',
+        description:
+          'Get a client\'s purchase history with prices (read-only): description, price, amount paid, discount, tax, ' +
+          'account-payment flag and the nested sale with its items and payments. Default window: the last 365 days through ' +
+          'today in the site timezone. Use a one-day window to check for an existing sale before a checkout, or saleId to read one sale back',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Purchases on or after this site-local date (YYYY-MM-DD). Default: 365 days ago' },
+            endDate: { type: 'string', description: 'Purchases up to the end of this site-local date (YYYY-MM-DD). Default: today' },
+            saleId: { type: 'number', description: 'Only the record for this sale ID' },
+          },
+          required: ['clientId'],
         },
       },
       {
@@ -1124,6 +1142,14 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
+      case 'getClientPurchases':
+        const purchasesResult = await getClientPurchasesTool(args.clientId as string, {
+          startDate: typeof args.startDate === 'string' ? args.startDate : undefined,
+          endDate: typeof args.endDate === 'string' ? args.endDate : undefined,
+          saleId: typeof args.saleId === 'number' ? args.saleId : undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(purchasesResult, null, 2) }] };
+
       case 'getClientCompleteInfo':
         const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string, {
           requiredClientData: Array.isArray(args.requiredClientData)

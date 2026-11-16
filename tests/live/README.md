@@ -149,7 +149,7 @@ indistinguishable in a CI log.
 |---|---|---|
 | Configuration | sandbox SiteId, no credential inheritance, STDIO + MCP handshake, host reachability | — |
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
-| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal) | `addClient`, read-back, cleanup |
+| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientPurchases` (walks up to 20 clients for one with a purchase in the default window, then reads that sale back by `saleId` over a one-day window) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
