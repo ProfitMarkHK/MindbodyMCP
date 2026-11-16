@@ -501,7 +501,7 @@ Book a new appointment.
 - `notes` (optional): Appointment notes
 
 #### `updateAppointment`
-Update an existing appointment: reschedule, change staff or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
+Update an existing appointment: reschedule, change staff, session type or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
 
 **Parameters:**
 - `clientId` (required): Client ID who owns the appointment. Ownership is verified before anything is written.
@@ -509,6 +509,7 @@ Update an existing appointment: reschedule, change staff or notes, or apply a st
 - `startDateTime` (optional): New start date/time (reschedule)
 - `endDateTime` (optional): New end date/time
 - `staffId` (optional): Change staff
+- `sessionTypeId` (optional): Change the session type (service), sent as `SessionTypeId`. A positive integer; anything else is refused before any request. Allowed on `Booked`, `Confirmed` and `Arrived` appointments (the usual case: a wrong service corrected before checkout). Mindbody may reset the end time to the new type's duration; the result returns `startDateTime`, `endDateTime` and `sessionTypeId` from the response. A Mindbody error, such as staff not set up for the new type, is returned unchanged as `success: false`.
 - `resourceIds` (optional): Resource IDs
 - `notes` (optional): Update notes
 - `execute` (optional): Status action: `confirm`, `unconfirm`, `arrive`, `unarrive` or `complete`. `cancel` and `latecancel` are refused with no API call.
@@ -519,9 +520,9 @@ Update an existing appointment: reschedule, change staff or notes, or apply a st
 **Guards.** All are checked before any write, and none can be skipped by omitting an argument:
 - `clientId` must be a non-empty string and `appointmentId` a positive integer.
 - Ownership: the appointment must belong to `clientId`, checked with the same `GET /appointment/staffappointments` lookup `cancelAppointments` uses. Someone else's appointment, or one outside the lookup window (a year back through two years ahead, so a finished appointment can still be annotated), is reported as "not found for this client".
-- Status: a `Cancelled` or `LateCancelled` appointment is final and accepts no update at all. A `Completed` or `NoShow` one accepts no status action, no `applyPayment` and no reschedule — but notes, staff and resources are still fine, because staff do annotate a finished appointment.
+- Status: a `Cancelled` or `LateCancelled` appointment is final and accepts no update at all. A `Completed` or `NoShow` one accepts no status action, no `applyPayment`, no reschedule and no `sessionTypeId` change (it has been checked out, so a new service would desync the sale) — but notes, staff and resources are still fine, because staff do annotate a finished appointment.
 - Timing: `execute: complete` needs the appointment to have started, compared in the site's timezone. `arrive`/`unarrive` are deliberately *not* time-gated: arrival is recorded against a booked appointment, including one booked for a later day. If the site timezone cannot be resolved, nothing is looked up or written.
-- `applyPayment` is refused in the same call as a reschedule. It applies a service chosen against the appointment's current time, so move first, pay second; no MCP path reverses a sale.
+- `applyPayment` is refused in the same call as a reschedule. It applies a service chosen against the appointment's current time, so move first, pay second; no MCP path reverses a sale. A `sessionTypeId` change is not a reschedule, so it may be combined with `applyPayment`.
 
 **Returns:** `{ success, appointment?, rejected: [{ id, reason }], message }`
 

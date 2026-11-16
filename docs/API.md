@@ -132,7 +132,7 @@ interface StaffAppointmentsResponse {
 
 ### updateAppointment
 
-Updates an existing appointment: reschedule it (new `startDateTime`), change staff or notes, or apply one status action with `execute`. It does not cancel. Use `cancelAppointments`.
+Updates an existing appointment: reschedule it (new `startDateTime`), change staff, session type or notes, or apply one status action with `execute`. It does not cancel. Use `cancelAppointments`.
 
 Ownership, status and timing are verified before anything is written, and none of the guards can be skipped by omitting an argument. An appointment that fails a guard is reported in `rejected` and nothing is sent.
 
@@ -145,6 +145,7 @@ Ownership, status and timing are verified before anything is written, and none o
 | `startDateTime` | string | No | New start date/time (reschedule) | - |
 | `endDateTime` | string | No | New end date/time | - |
 | `staffId` | number | No | Change staff | - |
+| `sessionTypeId` | number | No | Change the session type (service), sent as `SessionTypeId`. A positive integer. Allowed on `Booked`, `Confirmed` and `Arrived`; refused on `Completed`, `NoShow`, `Cancelled` and `LateCancelled`. Not a reschedule, so it may be combined with `applyPayment`. | - |
 | `resourceIds` | number[] | No | Resource IDs | - |
 | `notes` | string | No | Notes | - |
 | `execute` | string | No | One of `confirm`, `unconfirm`, `arrive`, `unarrive`, `complete`. `cancel` and `latecancel` are refused client-side with no API call. `complete` additionally requires the appointment to have started. | - |
@@ -156,10 +157,10 @@ Ownership, status and timing are verified before anything is written, and none o
 
 | Guard | Rule |
 |-------|------|
-| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer. No API call is made if either fails. |
+| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer, and `sessionTypeId`, when given, a positive integer. No API call is made if any fails. |
 | Ownership | The appointment must belong to `clientId`, looked up with `GET /appointment/staffappointments`. Someone else's appointment — or one outside the window, one year back through two years ahead — is reported as `not found for this client`, which never names the real owner. |
 | Terminal status | A `Cancelled` or `LateCancelled` appointment is final: no update of any kind is accepted. |
-| Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment` and no reschedule. Notes, staff and resources are still accepted. |
+| Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment`, no reschedule and no `sessionTypeId` change: a completed appointment has been checked out, so changing its service would desync it from the sale. Notes, staff and resources are still accepted. |
 | Timing | `execute: complete` requires the appointment to have started, compared in the site's timezone. `arrive` and `unarrive` are not time-gated, because arrival is recorded against a booked appointment. |
 | Timezone | If the site timezone cannot be resolved, nothing is looked up and nothing is written. |
 
@@ -174,10 +175,23 @@ interface UpdateAppointmentResponse {
     startDateTime: string;
     endDateTime: string;
     staffName: string;
+    sessionTypeId?: number; // as Mindbody returns it after the update
   };
   message: string;
 }
 ```
+
+#### Session type changes
+
+The use case is a booking made under the wrong service (for example "Extensions – Application" when the client had "Extensions – Removal"), corrected before checkout so the sale uses the right pricing option. The appointment is usually already `Arrived`. Cancelling and rebooking is not an alternative: an `Arrived` appointment cannot be cancelled here (see "Arrived appointments"), and a rebooked appointment loses its history.
+
+| Status | Session type change |
+|---|---|
+| `Booked`, `Confirmed`, `Arrived` | allowed |
+| `Completed`, `NoShow` | refused: the appointment has been checked out or has taken place |
+| `Cancelled`, `LateCancelled` | refused: final for every update |
+
+Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check. If the staff member is not set up for the new session type, Mindbody's error is returned unchanged as `success: false`.
 
 #### Examples
 
@@ -187,6 +201,10 @@ interface UpdateAppointmentResponse {
 
 ```json
 { "appointmentId": 987654, "execute": "arrive" }
+```
+
+```json
+{ "clientId": "100015", "appointmentId": 987654, "sessionTypeId": 88 }
 ```
 
 #### Error Handling
