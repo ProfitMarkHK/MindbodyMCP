@@ -292,6 +292,11 @@ and not needed" from "forgotten":
     with STDIO, one tool call, with and without `MCP_AUTH_TOKEN`), and
     `tests/sse-auth.test.ts` covers the bearer check. `bun run test:sse` remains
     a manual script for a server that is already listening.
+  - **Streamable HTTP transport.** `tests/http-server.test.ts` covers the server
+    in-process: the `/health` and `/mcp` routes, the Cloudflare Access JWT check
+    (issuer, audience, expiry, RS256), the loopback-only rule for
+    `MCP_ALLOW_UNAUTHENTICATED`, `MCP_ALLOWED_HOSTS`, and the SIGTERM drain. It
+    does not spawn the real process or exercise a live Access application.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)

@@ -23,6 +23,7 @@ import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
 import { resolveSseAuthToken } from './sseAuth.js';
 import { createSseRequestHandler, resolveDnsRebindingSettings } from './sseServer.js';
+import { startHttpServer, createAccessJwtVerifier } from './httpServer.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -101,12 +102,18 @@ const USAGE = `Mindbody MCP Server v2.0
 Usage: mindbody-mcp [options]
 
 Options:
-  -t, --transport <stdio|sse>  Transport to serve (default: stdio)
-  -p, --port <number>          Port for the SSE transport (default: 3000)
-      --host <hostname>        Host to bind for SSE (default: 0.0.0.0)
-      --ssl-cert <path>        TLS certificate; requires --ssl-key
-      --ssl-key <path>         TLS private key; requires --ssl-cert
+  -t, --transport <stdio|sse|http>  Transport to serve (default: stdio)
+  -p, --port <number>          Port for the sse/http transport (default: 3000)
+      --host <hostname>        Host to bind for sse/http (default: 0.0.0.0)
+      --ssl-cert <path>        TLS certificate (sse only); requires --ssl-key
+      --ssl-key <path>         TLS private key (sse only); requires --ssl-cert
   -h, --help                   Show this help and exit
+
+Transports:
+  stdio  Local MCP clients over stdin/stdout (default).
+  sse    Server-Sent Events at /sse, guarded by a bearer token (MCP_AUTH_TOKEN).
+  http   Streamable HTTP at /mcp, guarded by a Cloudflare Access JWT
+         (CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD).
 
 See README.md for full setup and tool documentation.`;
 
@@ -1557,10 +1564,12 @@ function createMcpServer(): Server {
   return server;
 }
 
-// Parse command-line arguments
-function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string, sslCert?: string, sslKey?: string } {
+type TransportKind = 'stdio' | 'sse' | 'http';
+
+// Parse command-line arguments, falling back to environment variables.
+function parseArgs(): { transport: TransportKind, port?: number, host?: string, sslCert?: string, sslKey?: string } {
   const args = process.argv.slice(2);
-  let transport: 'stdio' | 'sse' = 'stdio';
+  let rawTransport: string | undefined;
   let port: number | undefined;
   let host: string | undefined;
   let sslCert: string | undefined;
@@ -1569,10 +1578,7 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--transport' || arg === '-t') {
-      const value = args[++i];
-      if (value === 'sse' || value === 'stdio') {
-        transport = value;
-      }
+      rawTransport = args[++i];
     } else if (arg === '--port' || arg === '-p') {
       port = parseInt(args[++i], 10);
     } else if (arg === '--host') {
@@ -1585,24 +1591,25 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
     }
   }
 
-  // Check environment variables as fallback
-  if (!transport && process.env.MCP_TRANSPORT) {
-    transport = process.env.MCP_TRANSPORT.toLowerCase() as 'stdio' | 'sse';
-  }
-  if (!port && process.env.MCP_PORT) {
-    port = parseInt(process.env.MCP_PORT, 10);
-  }
-  if (!host && process.env.MCP_HOST) {
-    host = process.env.MCP_HOST;
-  }
-  if (!sslCert && process.env.MCP_SSL_CERT) {
-    sslCert = process.env.MCP_SSL_CERT;
-  }
-  if (!sslKey && process.env.MCP_SSL_KEY) {
-    sslKey = process.env.MCP_SSL_KEY;
+  // MCP_TRANSPORT was declared but never read: `transport` was always truthy,
+  // so the old `if (!transport && process.env.MCP_TRANSPORT)` could not fire.
+  rawTransport = (rawTransport ?? process.env.MCP_TRANSPORT ?? 'stdio').toLowerCase();
+  if (rawTransport !== 'stdio' && rawTransport !== 'sse' && rawTransport !== 'http') {
+    console.error(`Unknown transport "${rawTransport}"; expected stdio, sse or http.`);
+    process.exit(1);
   }
 
-  return { transport, port, host, sslCert, sslKey };
+  // PORT is what Railway (and most PaaS hosts) route to, so it wins for the
+  // HTTP transport. SSE keeps its existing MCP_PORT behaviour.
+  const envPort = rawTransport === 'http'
+    ? process.env.PORT || process.env.MCP_PORT
+    : process.env.MCP_PORT;
+  port ??= parseInt(envPort || '', 10) || undefined;
+  host ??= process.env.MCP_HOST;
+  sslCert ??= process.env.MCP_SSL_CERT;
+  sslKey ??= process.env.MCP_SSL_KEY;
+
+  return { transport: rawTransport, port, host, sslCert, sslKey };
 }
 
 // Start SSE server
@@ -1693,6 +1700,37 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
+// Start Streamable HTTP server (stateless, hosted use).
+async function startHttp(config: { port?: number, host?: string }) {
+  const env = process.env;
+  const parseList = (value: string | undefined) =>
+    value?.split(',').map((s) => s.trim()).filter(Boolean);
+
+  // Half-configured auth must not quietly fall through to "no auth" or "no access".
+  if (Boolean(env.CF_ACCESS_TEAM_DOMAIN) !== Boolean(env.CF_ACCESS_AUD)) {
+    console.error('Set both CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD, or neither.');
+    process.exit(1);
+  }
+  const allowUnauthenticated = env.MCP_ALLOW_UNAUTHENTICATED?.toLowerCase() === 'true';
+
+  try {
+    await startHttpServer({
+      createServer: createMcpServer,
+      port: config.port || 3000,
+      host: config.host || (allowUnauthenticated ? '127.0.0.1' : '0.0.0.0'),
+      verifyAccessJwt: env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD
+        ? createAccessJwtVerifier({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud: env.CF_ACCESS_AUD })
+        : undefined,
+      allowUnauthenticated,
+      allowedHosts: parseList(env.MCP_ALLOWED_HOSTS),
+      version: env.MCP_SERVER_VERSION || '2.0.0',
+    });
+  } catch (error) {
+    console.error(errorMessage(error));
+    process.exit(1);
+  }
+}
+
 // Start STDIO server
 async function startStdioServer() {
   // STDIO is a single-client transport, so one Server instance is correct here.
@@ -1709,7 +1747,9 @@ async function main() {
   console.error('Starting Mindbody MCP Server v2.0');
   console.error(`Transport: ${config.transport.toUpperCase()}`);
   
-  if (config.transport === 'sse') {
+  if (config.transport === 'http') {
+    await startHttp(config);
+  } else if (config.transport === 'sse') {
     await startSSEServer(config);
   } else {
     await startStdioServer();

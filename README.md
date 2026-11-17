@@ -16,7 +16,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 - **Multi-Location Support** - Manage multiple studio locations seamlessly
 - **High Performance** - Built on Bun runtime with intelligent caching
 - **Type-Safe** - Full TypeScript support with comprehensive types
-- **Dual Transport Support** - STDIO for local development, SSE for production deployment
+- **Multiple Transports** - STDIO for local development, SSE for self-hosted production, Streamable HTTP for managed hosting
 
 ## 🚀 Quick Start
 
@@ -236,7 +236,7 @@ bun run build  # or npm run build
 
 ### 1Password setup
 
-The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+The `dev`, `dev:sse`, `dev:http`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
 2. Set four environment variables in your shell to references to your item's fields, not the values. Use your own vault and item:
@@ -268,9 +268,11 @@ MindbodyMCP/
 └── CLAUDE.md             # Detailed documentation
 ```
 
-## 🌐 SSE Deployment (Production)
+## 🌐 Remote Deployment (SSE and Streamable HTTP)
 
-The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
+The server supports two remote transports: SSE (Server-Sent Events) for self-hosted deployment, and Streamable HTTP for managed hosting such as Railway. Both are additions to the default STDIO transport; neither replaces the other.
+
+### SSE transport
 
 **Client authentication.** Every SSE tool call runs with the server's Mindbody credentials, so the SSE transport requires a shared bearer token, `MCP_AUTH_TOKEN`. Clients send `Authorization: Bearer <token>` on every request except `GET /health`; anything else gets `401`. When the server binds to anything other than `127.0.0.1`, `::1` or `localhost` (the default host is `0.0.0.0`), it refuses to start without the token. On loopback the token may be left unset for local development, with a warning. STDIO needs no token.
 
@@ -278,7 +280,7 @@ The server supports SSE (Server-Sent Events) transport for production deployment
 export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
 ```
 
-### Quick Start with SSE
+#### Quick Start with SSE
 
 The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
 
@@ -293,18 +295,18 @@ MCP_TRANSPORT=sse bun start
 bun run src/index.ts --transport sse --port 8080
 ```
 
-### Docker Deployment
+#### Docker Deployment
 
 ```bash
 # Using Docker Compose
 docker-compose up -d
 
-# Or manually
+# Or manually (the image defaults to --transport http, so name the transport)
 docker build -t mindbody-mcp .
-docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse -e MCP_AUTH_TOKEN mindbody-mcp
+docker run -d -p 3000:3000 -e MCP_AUTH_TOKEN mindbody-mcp --transport sse
 ```
 
-### Production Configuration
+#### Production Configuration
 
 Configure via environment variables:
 - `MCP_TRANSPORT=sse` - Enable SSE transport
@@ -320,13 +322,29 @@ Configure via environment variables:
 
 The bearer token is checked first: a request without it gets `401` before the Host/Origin check, which answers `403`. The server sends no `Access-Control-Allow-Credentials` header, because it authenticates with the `Authorization` header and reads no cookies. See [Host, Origin and CORS](docs/SSE_DEPLOYMENT.md#host-origin-and-cors).
 
-### Endpoints
+#### SSE Endpoints
 
 - `/health` - Health check endpoint (no token needed)
 - `/info` - Server information (token required)
 - `/sse` - SSE event stream for MCP communication (token required)
 
 For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOYMENT.md).
+
+### Streamable HTTP transport
+
+For managed hosting, `--transport http` serves the SDK's stateless Streamable HTTP transport at `/mcp` plus `/health`. Being stateless it has no session to route and sends nothing while idle, which is what lets a host scale the service to zero.
+
+**Authentication is a Cloudflare Access JWT, not a bearer token.** Every client acts as the studio's one Mindbody login, so the server refuses to start without `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`; Cloudflare performs the Google Workspace sign-in and the MCP OAuth flow, and the server verifies the forwarded `Cf-Access-Jwt-Assertion` header (RS256, issuer, audience and expiry). `MCP_ALLOW_UNAUTHENTICATED=true` serves unauthenticated on a loopback host only.
+
+```bash
+# Local, unauthenticated, loopback only
+MCP_ALLOW_UNAUTHENTICATED=true bun run src/index.ts --transport http
+
+# Local, authenticated through Cloudflare Access
+bun run dev:http
+```
+
+Deploying to Railway — including the cost model, the Access setup and the parts that were not verified — is documented in [docs/RAILWAY.md](docs/RAILWAY.md).
 
 ## 🧪 Testing
 
