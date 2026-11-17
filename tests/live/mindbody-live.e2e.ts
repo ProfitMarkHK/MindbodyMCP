@@ -1692,15 +1692,40 @@ describe('live tier — appointments', () => {
     const before = await readBackCreatedAppointment();
     const original: number = before.sessionTypeId ?? discovered.sessionTypeId!;
 
-    // Prefer a type availability already pairs with this staff member; then the
-    // other Appointment types. Mindbody refuses a type the staff cannot teach,
-    // and a refusal writes nothing, so trying the next one is free.
-    const paired = (discovered.bookingCandidates ?? [])
-      .filter((candidate) => candidate.staffId === discovered.staffId)
-      .map((candidate) => candidate.sessionTypeId);
-    const targets = [...new Set([...paired, ...discovered.appointmentSessionTypeIds!])]
+    // Try only the types this staff member offers. Mindbody answers a type the
+    // staff cannot take with a generic "Something went wrong (Code: Unknown)",
+    // so blind guessing over the site's Appointment types reads as an outage
+    // (PR #56). `/appointment/bookableitems` filtered by the staff member is the
+    // one read that says which types they offer; same-length types come first.
+    const zone = siteZone();
+    const startDate = siteLocalDate(zone, BOOKABLE_START_OFFSET_DAYS);
+    const endDate = siteLocalDate(zone, BOOKABLE_START_OFFSET_DAYS + BOOKABLE_WINDOW_DAYS);
+    const allTypes = discovered.appointmentSessionTypeIds!;
+    const offered = new Set<number>();
+    for (let i = 0; i < allTypes.length; i += BOOKABLE_SESSION_TYPE_LIMIT) {
+      const offeredItems = await callTool('getBookableItems', {
+        sessionTypeIds: allTypes.slice(i, i + BOOKABLE_SESSION_TYPE_LIMIT),
+        staffIds: [discovered.staffId],
+        startDate,
+        endDate,
+      });
+      for (const item of offeredItems.bookableItems ?? []) {
+        if (item.staffId === discovered.staffId && typeof item.sessionTypeId === 'number') offered.add(item.sessionTypeId);
+      }
+    }
+    const minutes = (id: number) => discovered.sessionTypeMinutes?.get(id);
+    const targets = [...offered]
       .filter((id) => id !== original)
+      .sort((a, b) => Number(minutes(b) === minutes(original)) - Number(minutes(a) === minutes(original)))
       .slice(0, MAX_SESSION_TYPE_CHANGE_ATTEMPTS);
+    if (targets.length === 0) {
+      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
+        `reason: staff ${discovered.staffId} offers no Appointment session type other than ${original}`,
+        `(bookable items ${startDate} to ${endDate}), so there is no type to change appointment ${createdAppointmentId} to.`,
+      ]);
+      return;
+    }
+    console.log(`\n LIVE session type change: staff ${discovered.staffId} offers types ${[...offered].join(', ')}.\n`);
 
     const refusals: string[] = [];
     let changed: any = null;
@@ -1730,13 +1755,9 @@ describe('live tier — appointments', () => {
           '\n'
       );
     }
-    if (changed === null) {
-      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
-        `reason: Mindbody refused every other session type tried (${targets.join(', ') || 'none available'})`,
-        `for staff ${discovered.staffId}, so there is no type to change appointment ${createdAppointmentId} to.`,
-      ]);
-      return;
-    }
+    // Every target is a type this staff member offers, so refusing all of them is a failure.
+    expect(changed, `Mindbody refused every session type staff ${discovered.staffId} offers (${targets.join(', ')})`)
+      .not.toBeNull();
 
     expect(changed.appointment.sessionTypeId).toBe(target);
     const afterChange = await readBackCreatedAppointment();
