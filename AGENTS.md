@@ -44,7 +44,7 @@ bun run typecheck
   checklist: [`docs/quality-gates.md`](docs/quality-gates.md)
 
 ### Build
-- `bun run build` - Compile to `dist/` (required before publishing)
+- `bun run build` - Compile to `dist/` (not needed to run: Bun runs `src/` directly. Used by the optional Node.js path and before publishing)
 
 ## Architecture
 
