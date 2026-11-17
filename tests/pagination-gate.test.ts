@@ -8,16 +8,16 @@
  *
  * How it works: docs/openapi.json is loaded and every GET path is classified as
  * paginated or not. Every TypeScript file (.ts and .tsx) under each scan root is
- * then parsed with the TypeScript compiler (one Program per root, using that
- * root's own tsconfig so `@/` imports resolve) and every call is classified by
- * the TYPE of its receiver, not by the identifier it happens to be bound to:
+ * then parsed with oxc-parser (no TypeScript compiler API; relative imports are
+ * followed across files) and every call is classified by the declared type of
+ * its receiver, not by the identifier it happens to be bound to:
  *
  *   - `fetchAllPages(<client>, <path>, …)`, however it is imported or aliased
  *     (`import { fetchAllPages as pageAll }`, `paging.fetchAllPages(…)`);
  *   - `<receiver>.get(<path>, …)`, `<receiver>?.get(…)`, `<receiver>['get'](…)`
  *     and `(<receiver>.get as any)(…)`, on any receiver whose type is not a
- *     known benign one. The path is resolved by type, so a hoisted
- *     `const PATH = '/class/classes'` counts as the literal it is;
+ *     known benign one. The path is resolved through `const` bindings (imported
+ *     too), so a hoisted `const PATH = '/class/classes'` counts as the literal it is;
  *   - the global `fetch(<url>)` (scripts) and a bare `axios(…)`: a Mindbody URL
  *     or '/…' path is a call site like a `.get`; the public spec document
  *     (`/swagger/doc`) is not a site read; a URL that is not a literal fails;
@@ -31,8 +31,11 @@
  *
  * Benign receivers (BENIGN_RECEIVER_TYPES in that module) are the types whose `.get` is a keyed
  * lookup, never an HTTP read: `Map`, `URLSearchParams`, `Headers` and this repo's
- * own TTL caches. Fail-closed: a receiver typed `any`, an axios object, or any
- * type not on that list is treated as a possible Mindbody client. So a path-keyed
+ * own TTL caches. The type is read from the code's declarations (annotation,
+ * `new X`, declared return type, `??`/`||`, `Promise.all` destructuring, `this.x`;
+ * see tests/support/source-index.ts). Fail-closed: a receiver typed `any`, an
+ * axios object, a type not on that list, or a receiver whose type the scanner
+ * cannot resolve is treated as a possible Mindbody client. So a path-keyed
  * `routeTable.get('/class/classes')` on a `Map` is ignored on purpose, while the
  * same call on a renamed client, an aliased import or `this.mindbody` is not.
  * Two structural exemptions, both located by parsing rather than by line number:
@@ -60,7 +63,6 @@ import {
   type CallSite,
   type SpecGet,
   type Unresolved,
-  createProgram,
   listFiles,
   listSourceFiles,
   loadSpecGets,
@@ -72,8 +74,7 @@ import {
 } from "./support/api-call-scanner.js";
 
 /**
- * Every directory the scan covers, with the tsconfig its imports resolve under
- * and `minSites`, the number of API GET call sites it holds today. Add a root
+ * Every directory the scan covers, with `minSites`, the number of API GET call sites it holds today. Add a root
  * here, never an exemption.
  *
  * `minSites` is a per-root floor, not an exact count: adding endpoints raises the
@@ -96,8 +97,8 @@ import {
  * ROOT_FLOOR_SLACK), so it cannot quietly drift 10 sites behind, as 58 did.
  */
 const SCAN_ROOTS = [
-  { dir: join(ROOT, "src"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 45 },
-  { dir: join(ROOT, "scripts"), tsconfig: join(ROOT, "tsconfig.json"), minSites: 0 }, // .ts only; .sh is rule 6
+  { dir: join(ROOT, "src"), minSites: 45 },
+  { dir: join(ROOT, "scripts"), minSites: 0 }, // .ts only; .sh is rule 6
 ];
 /** How far above its floor a root may sit before the floor counts as stale and must be raised. */
 const ROOT_FLOOR_SLACK = 5;
@@ -134,7 +135,7 @@ function scan() {
   const fileCounts: number[] = [];
   for (const root of SCAN_ROOTS) {
     const files = listSourceFiles(root.dir);
-    const found = scanFiles(files, root.tsconfig);
+    const found = scanFiles(files);
     fileCounts.push(files.length);
     sites.push(...found.sites);
     unresolved.push(...found.unresolved);
@@ -249,11 +250,10 @@ describe("Gate 13 — scanner self-test", () => {
   // The scanner run over tests/fixtures/gate13/ (outside every scan root, so the
   // real gate never sees them). A regression in the scanner shows up here, not
   // only as a silently lower site count.
-  const fixtureProgram = createProgram(listSourceFiles(FIXTURE_DIR), join(ROOT, "tsconfig.json"));
   const scanFixture = (name: string) => {
     const found: CallSite[] = [];
     const bad: Unresolved[] = [];
-    scanFile(fixtureProgram, join(FIXTURE_DIR, name), found, bad);
+    scanFile(join(FIXTURE_DIR, name), found, bad);
     return { found, bad, tally: classify(specGets, found, bad) };
   };
   const lines = (items: { line: number }[]) => items.map((i) => i.line).sort((a, b) => a - b);
@@ -306,6 +306,11 @@ describe("Gate 13 — scanner self-test", () => {
     expect([found, bad]).toEqual([[], []]);
   });
 
+  it("reads a benign receiver's type from its declarations: return types, Promise.all, ??, ||, this, URL", () => {
+    const { found, bad } = scanFixture("ok-declared-types.ts");
+    expect([found, bad]).toEqual([[], []]);
+  });
+
   it("exempts the transport: the body of fetchAllPages and of class MindbodyApiClient, found by parsing", () => {
     const { found, bad } = scanFixture("ok-exempt-wrapper.ts");
     expect(found.map((s) => [s.kind, s.path])).toEqual([["get", "/site/activationcode"]]); // the wrapper's caller is still scanned
@@ -338,7 +343,7 @@ describe("Gate 13 — scanner self-test", () => {
     require("fs").writeFileSync(join(dir, "types.d.ts"), "declare const y: number;\n");
     try {
       expect(listSourceFiles(dir)).toEqual([tmp]); // .tsx is listed, .d.ts is not
-      const { sites: found } = scanFiles([tmp], join(ROOT, "tsconfig.json"));
+      const { sites: found } = scanFiles([tmp]);
       expect(found.map((s) => s.path)).toEqual(["/class/classes"]);
     } finally {
       require("fs").rmSync(dir, { recursive: true, force: true });

@@ -2,9 +2,11 @@
  * The Mindbody API call-site scanner shared by Gate 13 (tests/pagination-gate.test.ts)
  * and the spec coverage report (tests/support/spec-coverage.ts, `bun run spec:coverage`).
  *
- * It parses TypeScript with the compiler and classifies every call by the TYPE of
- * its receiver, so a renamed client, an aliased import or a hoisted path constant
- * is read for what it is. The rules built on top of it (what is a violation, what
+ * It parses TypeScript with oxc-parser (./source-index, no TypeScript compiler API)
+ * and classifies every call by the declared type of its receiver, read from the
+ * code's own declarations, so a renamed client, an aliased import or a hoisted path
+ * constant is read for what it is. A receiver whose type it cannot resolve is
+ * treated as a possible Mindbody client (fail-closed). The rules built on top of it (what is a violation, what
  * counts as covered) live with each consumer; this module only finds call sites.
  * See the header of tests/pagination-gate.test.ts for every form it recognises.
  *
@@ -12,8 +14,8 @@
  * own `item.get` reads of the spec would otherwise be flagged by the scan it implements.
  */
 import { readdirSync, readFileSync } from "fs";
-import { dirname, join, relative, resolve, sep } from "path";
-import ts from "typescript";
+import { join, relative, resolve, sep } from "path";
+import { type Node, type Source, constString, kindOf, lineOf, load, lookup, memberName, unwrap, walk } from "./source-index.js";
 
 export const ROOT = resolve(__dirname, "../..");
 export const SPEC_PATH = join(ROOT, "docs/openapi.json");
@@ -22,7 +24,7 @@ export const relPosix = (from: string, to: string) => relative(from, to).split(s
 
 /**
  * Receiver types whose `.get` is a keyed lookup, never a Mindbody HTTP read.
- * Matched on the type's symbol name. A type missing from this list is flagged,
+ * Matched on the declared type name (annotation, `new X`, declared return type). A type missing from this list is flagged,
  * not ignored (fail-closed): add a cache or collection type here only when its
  * `.get` provably cannot reach the network.
  */
@@ -93,60 +95,22 @@ export function listFiles(dir: string, accept: (name: string) => boolean): strin
 
 export const listSourceFiles = (dir: string) => listFiles(dir, (name) => /\.tsx?$/.test(name) && !name.endsWith(".d.ts"));
 
-/** A Program over `files` under the options of `tsconfig`; diagnostics are never read, only types. */
-export function createProgram(files: string[], tsconfig: string): ts.Program {
-  const config = ts.readConfigFile(tsconfig, ts.sys.readFile);
-  const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(tsconfig), undefined, tsconfig);
-  return ts.createProgram(files, {
-    ...options,
-    noEmit: true,
-    incremental: false,
-    composite: false,
-    declaration: false,
-    declarationMap: false,
-    sourceMap: false,
-    rootDir: undefined,
-    outDir: undefined,
-    allowJs: false,
-    types: [],
-  });
-}
-
-/** Strip parentheses, casts, `!` and `satisfies`, so `(client.get as any)(…)` reads as `client.get(…)`. */
-function unwrap(node: ts.Expression): ts.Expression {
-  while (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isSatisfiesExpression(node)
-  ) {
-    node = node.expression;
-  }
-  return node;
-}
-
 const HTTP_METHODS = new Set(["get", "request"]);
 
 /** `recv.get`, `recv?.get` and `recv['get']`, cast or parenthesised; null for anything else. */
-function memberOf(expr: ts.Expression): { name: string; receiver: ts.Expression; node: ts.Expression; at: ts.Node } | null {
+function memberOf(expr: Node): { name: string; receiver: Node; node: Node; at: Node } | null {
   const node = unwrap(expr);
-  if (ts.isPropertyAccessExpression(node)) return { name: node.name.text, receiver: node.expression, node, at: node.name };
-  if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
-    return { name: node.argumentExpression.text, receiver: node.expression, node, at: node.argumentExpression };
-  }
-  return null;
+  const name = memberName(node);
+  return name === null ? null : { name, receiver: node.object, node, at: node.property };
 }
 
 /** [fetchAllPages body, class MindbodyApiClient body] of this file: the transport, exempt from rule 5. */
-function exemptRanges(sf: ts.SourceFile): ts.Node[] {
-  const out: ts.Node[] = [];
-  const walk = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "fetchAllPages" && node.body) out.push(node.body);
-    else if (ts.isClassDeclaration(node) && node.name?.text === "MindbodyApiClient") out.push(node);
-    ts.forEachChild(node, walk);
-  };
-  walk(sf);
+function exemptRanges(src: Source): Node[] {
+  const out: Node[] = [];
+  walk(src.program, (node) => {
+    if (node.type === "FunctionDeclaration" && node.id?.name === "fetchAllPages" && node.body) out.push(node.body);
+    else if (node.type === "ClassDeclaration" && node.id?.name === "MindbodyApiClient") out.push(node);
+  });
   return out;
 }
 
@@ -156,75 +120,51 @@ export interface WriteSink {
   unresolved: Unresolved[];
 }
 
-export function scanFile(
-  program: ts.Program,
-  file: string,
-  sites: CallSite[],
-  unresolved: Unresolved[],
-  writes?: WriteSink
-): void {
-  const checker = program.getTypeChecker();
-  const sf = program.getSourceFile(file);
-  if (!sf) throw new Error(`Gate 13: ${file} is not part of the TypeScript program`);
+/** Is this receiver of a declared Map/cache-like type whose `.get` is never an HTTP read? Unknown is not benign. */
+export function isBenignReceiver(src: Source, receiver: Node): boolean {
+  const kinds = kindOf(src, receiver);
+  return !!kinds && kinds.length > 0 && kinds.every((k) => BENIGN_RECEIVER_TYPES.has(k.name));
+}
+
+export function scanFile(file: string, sites: CallSite[], unresolved: Unresolved[], writes?: WriteSink): void {
+  const src = load(file);
   const rel = relPosix(ROOT, file);
-  const exempt = exemptRanges(sf);
-  const isExempt = (node: ts.Node) => exempt.some((r) => node.pos >= r.pos && node.end <= r.end);
-  const lineOf = (node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-  const flag = (node: ts.Node, reason: string) => unresolved.push({ file: rel, line: lineOf(node), reason });
-  const site = (kind: CallKind, node: ts.Node, path: string): CallSite => ({
-    kind,
-    file: rel,
-    line: lineOf(node),
-    path,
-    pos: node.getStart(sf),
-  });
-
-  /** Type-directed: is this receiver a Map/cache-like type whose `.get` is never an HTTP read? */
-  const isBenign = (receiver: ts.Expression) => {
-    const type = checker.getNonNullableType(checker.getTypeAtLocation(receiver));
-    const parts = type.isUnion() ? type.types : [type];
-    return parts.every((t) => BENIGN_RECEIVER_TYPES.has((t.getSymbol() ?? t.aliasSymbol)?.name ?? ""));
-  };
-
-  /** The literal a path argument resolves to: a literal, or a const/`as const` whose type is one. */
-  const pathOf = (arg: ts.Expression | undefined): string | null => {
-    if (!arg) return null;
-    const node = unwrap(arg);
-    if (ts.isStringLiteralLike(node)) return node.text;
-    const type = checker.getTypeAtLocation(node);
-    return type.isStringLiteral() ? type.value : null;
-  };
+  const exempt = exemptRanges(src);
+  const isExempt = (node: Node) => exempt.some((r) => node.start >= r.start && node.end <= r.end);
+  const line = (node: Node) => lineOf(src, node.start);
+  const flag = (node: Node, reason: string) => unresolved.push({ file: rel, line: line(node), reason });
+  const site = (kind: CallKind, node: Node, path: string): CallSite => ({ kind, file: rel, line: line(node), path, pos: node.start });
+  const pathOf = (arg: Node | undefined) => (arg ? constString(src, arg) : null);
 
   /** `fetchAllPages`, `paging.fetchAllPages`, or an import alias of it. */
-  const isPager = (expr: ts.Expression) => {
+  const isPager = (expr: Node) => {
     const node = unwrap(expr);
-    if (ts.isPropertyAccessExpression(node)) return node.name.text === "fetchAllPages";
-    if (!ts.isIdentifier(node)) return false;
-    if (node.text === "fetchAllPages") return true;
-    const decl = checker.getSymbolAtLocation(node)?.declarations?.[0];
-    return !!decl && ts.isImportSpecifier(decl) && (decl.propertyName ?? decl.name).text === "fetchAllPages";
+    if (node.type === "MemberExpression") return !node.computed && node.property.name === "fetchAllPages";
+    if (node.type !== "Identifier") return false;
+    if (node.name === "fetchAllPages") return true;
+    const binding = lookup(src, node.name, node);
+    const spec = binding?.kind === "import" ? binding.decl : null;
+    return spec?.type === "ImportSpecifier" && (spec.imported.name ?? spec.imported.value) === "fetchAllPages";
   };
 
-  const handled = new Set<ts.Node>(); // callees, so the value-reference rules do not re-flag them
+  const handled = new Set<Node>(); // callees, so the value-reference rules do not re-flag them
 
-  const visit = (node: ts.Node): void => {
-    if (ts.isJSDoc(node)) return;
-
-    if (ts.isCallExpression(node)) {
-      const callee = unwrap(node.expression);
-      const member = memberOf(node.expression);
-      if (isPager(node.expression)) {
+  walk(src.program, (node) => {
+    if (node.type === "CallExpression") {
+      const callee = unwrap(node.callee);
+      const member = memberOf(node.callee);
+      const args = node.arguments;
+      if (isPager(node.callee)) {
         handled.add(callee);
-        if (ts.isPropertyAccessExpression(callee)) handled.add(callee.name);
-        const path = node.arguments.length < 2 ? null : pathOf(node.arguments[1]);
-        if (node.arguments.length < 2) flag(callee, "fetchAllPages call with no path argument");
+        const path = args.length < 2 ? null : pathOf(args[1]);
+        if (args.length < 2) flag(callee, "fetchAllPages call with no path argument");
         else if (path === null || !path.startsWith("/")) flag(callee, "fetchAllPages path is not a string literal starting with '/'");
         else sites.push(site("fetchAllPages", callee, path));
-      } else if (ts.isIdentifier(callee) && (callee.text === "fetch" || callee.text === "axios")) {
+      } else if (callee.type === "Identifier" && (callee.name === "fetch" || callee.name === "axios")) {
         // The global fetch (scripts) and a bare axios(config): read the URL like a .get path.
         handled.add(callee);
-        const url = callee.text === "fetch" ? pathOf(node.arguments[0]) : null;
-        if (url === null) flag(callee, `${callee.text}() with a URL the scanner cannot resolve to a literal`);
+        const url = callee.name === "fetch" ? pathOf(args[0]) : null;
+        if (url === null) flag(callee, `${callee.name}() with a URL the scanner cannot resolve to a literal`);
         else {
           // A Mindbody URL or a '/…' path; any other host is not a Mindbody read. The public spec document is not a site read.
           const path = /^(?:https?:\/\/[^/]*mindbodyonline\.com(?:\/public\/v\d+)?)?(\/[^?#]*)/.exec(url)?.[1];
@@ -232,37 +172,33 @@ export function scanFile(
         }
       } else if (member && HTTP_METHODS.has(member.name)) {
         handled.add(member.node);
-        if (!isExempt(node) && !isBenign(member.receiver)) {
-          const path = member.name === "get" ? pathOf(node.arguments[0]) : null;
+        if (!isExempt(node) && !isBenignReceiver(src, member.receiver)) {
+          const path = member.name === "get" ? pathOf(args[0]) : null;
           if (path !== null && path.startsWith("/")) sites.push(site("get", member.at, path));
           else flag(member.at, `.${member.name}() on a receiver that is not a Map or cache, with no literal '/…' path the scanner can check`);
         }
-      } else if (writes && member && member.name === "post" && !isExempt(node) && !isBenign(member.receiver)) {
-        const path = pathOf(node.arguments[0]);
+      } else if (writes && member && member.name === "post" && !isExempt(node) && !isBenignReceiver(src, member.receiver)) {
+        const path = pathOf(args[0]);
         if (path !== null && path.startsWith("/")) writes.sites.push(site("post", member.at, path));
-        else writes.unresolved.push({ file: rel, line: lineOf(member.at), reason: ".post() with no literal '/…' path" });
+        else writes.unresolved.push({ file: rel, line: line(member.at), reason: ".post() with no literal '/…' path" });
       }
-    } else if (ts.isIdentifier(node) && !handled.has(node) && isPager(node)) {
-      const parent = node.parent;
-      const declaration = ts.isFunctionDeclaration(parent) && parent.name === node;
-      if (!declaration && !ts.isImportSpecifier(parent) && !ts.isExportSpecifier(parent) && !ts.isPropertyAccessExpression(parent)) {
-        flag(node, "fetchAllPages used as a value, not called");
-      }
-    } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    } else if (node.type === "Identifier" && !handled.has(node) && isPager(node)) {
+      const parent = src.parent.get(node);
+      const declaration = parent?.type === "FunctionDeclaration" && parent.id === node;
+      const specifier = parent?.type === "ImportSpecifier" || parent?.type === "ExportSpecifier";
+      if (!declaration && !specifier && parent?.type !== "MemberExpression") flag(node, "fetchAllPages used as a value, not called");
+    } else if (node.type === "MemberExpression") {
       const member = memberOf(node);
-      if (member && HTTP_METHODS.has(member.name) && !handled.has(node) && !isExempt(node) && !isBenign(member.receiver)) {
+      if (member && HTTP_METHODS.has(member.name) && !handled.has(node) && !isExempt(node) && !isBenignReceiver(src, member.receiver)) {
         flag(member.at, `.${member.name} taken as a value (alias, bind or call) escapes the scan`);
       }
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
+  });
 }
 
-export function scanFiles(files: string[], tsconfig: string): { sites: CallSite[]; unresolved: Unresolved[] } {
+export function scanFiles(files: string[]): { sites: CallSite[]; unresolved: Unresolved[] } {
   const sites: CallSite[] = [];
   const unresolved: Unresolved[] = [];
-  const program = createProgram(files, tsconfig);
-  for (const file of files) scanFile(program, file, sites, unresolved);
+  for (const file of files) scanFile(file, sites, unresolved);
   return { sites, unresolved };
 }

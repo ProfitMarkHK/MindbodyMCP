@@ -559,8 +559,10 @@ and not needed" from "forgotten":
   `/public/v{version}` stripped, lowercased) as paginated or not, then parses every
   `.ts` and `.tsx` file under `src/` and `scripts/` (the roots
   are listed in `SCAN_ROOTS`; `node_modules` is outside them) with
-  the TypeScript compiler, one program per root under that root's own tsconfig
-  (so `@/` imports resolve). Comments
+  oxc-parser ([`tests/support/source-index.ts`](../tests/support/source-index.ts)).
+  It does not use the TypeScript compiler API, so it is independent of the installed
+  `typescript` version; relative imports and re-exports are followed across files
+  (`.js` specifiers map to `.ts`, as nodenext writes them). Comments
   are not code, so a commented-out call is not counted. Rule 4 also asserts that
   every root has files to parse, so a root silently dropped from the scan cannot
   pass.
@@ -571,15 +573,21 @@ and not needed" from "forgotten":
   however it is written: `api.get(p)`, `mb.get(p)` after
   `import { mindbodyClient as mb }`, `this.mindbody.get(p)`, `client?.get(p)`,
   `client['get'](p)`, `(client.get as any)(p)`, or a receiver on the line below.
-  A call is ignored only when the receiver's **type** is on the benign list
+  A call is ignored only when the receiver's **declared type** is on the benign list
   (`BENIGN_RECEIVER_TYPES` in [`tests/support/api-call-scanner.ts`](../tests/support/api-call-scanner.ts): `Map`, `ReadonlyMap`, `WeakMap`,
   `URLSearchParams`, `Headers`, and this repo's `SimpleCache` / `SimpleTtlCache` /
   `TtlCache`), because those `.get` calls are keyed lookups, never an HTTP read.
-  Anything else, including an `any`-typed receiver or axios itself, is treated as
-  a possible Mindbody client. That is fail-closed: a new cache type must be added
-  to the list to be ignored, a visible one-line change. The path argument is
-  resolved by type too, so a hoisted `const CLASSES_PATH = '/class/classes'`
-  counts as the literal it is. The known false positive, a path-keyed
+  The type is read from the code's own declarations, not inferred: a type
+  annotation, `new X(…)`, a call to a function with a declared return type
+  (`Promise<…>` unwrapped), `a ?? b` / `a || b` / `c ? a : b`, `Promise.all`
+  destructuring, `this` / `this.field`, a field of an annotated interface or type
+  literal, and `url.searchParams` on a `URL`. Anything else, including an
+  `any`-typed receiver, axios itself, or a receiver whose type the scanner cannot
+  resolve, is treated as a possible Mindbody client. That is fail-closed: a new
+  cache type must be added to the list to be ignored, a visible one-line change,
+  and a benign receiver the scanner cannot type fails rule 5 until it is annotated.
+  The path argument is resolved through `const` bindings, imported ones included,
+  so a hoisted `const CLASSES_PATH = '/class/classes'` counts as the literal it is. The known false positive, a path-keyed
   `routeTable.get('/class/classes')` on a `Map`, is excluded deliberately by that
   type rule; the same call on a renamed Mindbody client is a call site.
 
