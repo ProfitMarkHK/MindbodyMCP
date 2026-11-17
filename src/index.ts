@@ -910,7 +910,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           'lateCancel true: refused outside the window or when it is unset. The write goes through cancelAppointments, ' +
           'cancelEnrollmentVisits or removeClientFromClass by kind, so all their guards apply; waitlist entries are refused. ' +
           'Never retried: if the POST fails the schedule is re-read once and outcome is cancelled, still-booked or unknown. ' +
-          'Returns { success, outcome, mode, booking, decision, receipt: { tool, endpoint, request (exact body), response, error }, message }.',
+          'observeBalance true: the paying service\'s Remaining and the account balance are read before and after the write ' +
+          '(two GETs, three for an appointment) and returned as impact { observed, reason, serviceId, remainingBefore, remainingAfter, ' +
+          'consumed, accountBalanceBefore, accountBalanceAfter, accountBalanceDelta, readAtBefore, readAtAfter, caveats }. ' +
+          'It is the observed forfeit, never a fee: the API exposes no fee ledger. ' +
+          'Returns { success, outcome, mode, booking, decision, receipt: { tool, endpoint, request (exact body), response, error }, impact?, message }.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -922,6 +926,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             classScheduleId: { type: 'number', description: 'Narrows a startDateTime match to one class schedule' },
             lateCancel: { type: 'boolean', description: 'Omit to let the resolver decide; true forces late (refused outside the window); false forces normal' },
             sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
+            observeBalance: { type: 'boolean', description: 'Read the paying service\'s Remaining and the account balance before and after, and return impact (default false)' },
           },
           required: ['clientId'],
         },
@@ -1448,6 +1453,7 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           classScheduleId: args.classScheduleId as number | undefined,
           lateCancel: args.lateCancel as boolean | undefined,
           sendEmail: args.sendEmail as boolean | undefined,
+          observeBalance: args.observeBalance as boolean | undefined,
         });
         return { content: [{ type: 'text', text: JSON.stringify(cancelBookingResult, null, 2) }] };
       

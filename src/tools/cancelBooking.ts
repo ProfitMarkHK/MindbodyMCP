@@ -18,8 +18,10 @@
  * exact body. The POST is never retried. When it fails, the schedule is read
  * once more and the outcome says whether the booking is gone.
  *
- * Issue #26 (forfeit reporting) extends the result, not the write path: add a
- * sibling block next to `receipt`, keep the existing fields.
+ * `observeBalance: true` adds `impact` next to `receipt` (issue #26): the
+ * paying service's `Remaining` and the account balance, read before and after
+ * the write (`src/tools/cancelImpact.ts`). It never changes the write path or
+ * the outcome: a failed read only makes `impact.observed` false.
  */
 import type { AxiosRequestConfig } from 'axios';
 import { mindbodyClient, type IMindbodyClient } from '../api/client.js';
@@ -28,6 +30,7 @@ import { errorMessage } from '../utils/errors.js';
 import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
 import { getSiteTimeZone, siteDateString, siteDateStringPlusDays, siteLocalToEpochMs } from '../utils/siteTime.js';
 import { cancelAppointmentsTool } from './appointmentManagement.js';
+import { buildImpact, readSnapshot, resolvePayingService, type CancelImpact } from './cancelImpact.js';
 import { removeClientFromClassTool } from './classManagement.js';
 import { DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS, getClientScheduleTool, type ClientBooking } from './clientSchedule.js';
 import { cancelEnrollmentVisitsTool } from './enrollmentManagement.js';
@@ -49,6 +52,8 @@ export interface CancelClientBookingRequest {
   sendEmail?: boolean;
   /** Omitted: the resolver decides. `true`: refused outside the window. `false`: normal cancel. */
   lateCancel?: boolean;
+  /** Read the paying service's Remaining and the account balance before and after the write. Default false. */
+  observeBalance?: boolean;
 }
 
 /** How late vs normal was chosen. */
@@ -101,6 +106,8 @@ export interface CancelClientBookingResult {
   decision?: CancelDecision;
   receipt?: CancelReceipt;
   reconcile?: CancelReconcile;
+  /** Only with `observeBalance: true`, once the write was attempted or refused by the delegate. */
+  impact?: CancelImpact;
   message: string;
 }
 
@@ -332,6 +339,11 @@ export async function cancelClientBookingTool(
   const late = mode === 'late';
   const sendEmail = req.sendEmail ?? false;
 
+  // Before the write: which service pays, and its count. Reads never block the cancel.
+  const observe = req.observeBalance === true;
+  const serviceRef = observe ? await resolvePayingService(booking, req.clientId, client, cache) : undefined;
+  const before = serviceRef ? await readSnapshot(req.clientId, serviceRef.serviceId, client, cache) : undefined;
+
   const recorder = recordingClient(client);
   let tool: CancelDelegate;
   let toolResult: any;
@@ -356,7 +368,10 @@ export async function cancelClientBookingTool(
     sentAt: post?.sentAt,
     toolResult,
   };
-  const common = { mode, booking, decision, receipt };
+  // After the write: read again only when a POST was sent and the before read worked.
+  const after = before && post && !before.error ? await readSnapshot(req.clientId, serviceRef!.serviceId, client, cache) : undefined;
+  const impact = before ? buildImpact(serviceRef!, before, after) : undefined;
+  const common = { mode, booking, decision, receipt, ...(impact ? { impact } : {}) };
   const what = `${late ? 'late' : 'normal'} cancel of ${describe(booking)} via ${tool}`;
 
   if (!post) {

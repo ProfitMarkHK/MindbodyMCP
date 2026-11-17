@@ -154,7 +154,7 @@ indistinguishable in a CI log.
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
-| Booking-cancel resolver | `cancelClientBooking` refusals for two locators and an unmatched one (no write) | books the run's client into a future class (`addClientToClass`, `requirePayment: false`), then `cancelClientBooking` with `lateCancel: false` and a schedule read-back; loud skip if no class can be booked |
+| Booking-cancel resolver | `cancelClientBooking` refusals for two locators and an unmatched one (no write) | books the run's client into a future class (`addClientToClass`, `requirePayment: false`), then `cancelClientBooking` with `lateCancel: false` and a schedule read-back; a second booking cancelled the same way with `observeBalance: true`, asserting the `impact` reads are timestamped; loud skip if no class can be booked |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
 | Dry-run checkout | `getSales` for the run's client, before and after | `checkoutShoppingCart` with `test: true` (Comp, matching and mismatched amounts); expects no new sale and the mismatch refused; leaves nothing |
@@ -428,7 +428,7 @@ the suite; none is hardcoded as an id.
 
 ## Status
 
-**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-11-16:
+**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-11-16, on master:
 
 ```
  36 pass
@@ -437,6 +437,8 @@ Ran 36 tests across 1 file.
 ```
 
 With `SKIP_LIVE_E2E=1` every test in the file skips.
+
+On the #26 branch (`observeBalance`, one more test), the same day: 37 pass, 0 fail.
 
 - **No skips and no loud skips.** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
 - **The contract purchase passed.** It walked the 11 contracts at location 1, was refused `356` ("Contract 356 cannot be purchased at location 1"), accepted `347` (Corporate Monthly Membership) and returned `ClientContractId` 16045. `getClientContracts` read it back as `Id` 16045 with `AutopayStatus: "Active"`.
@@ -448,6 +450,8 @@ With `SKIP_LIVE_E2E=1` every test in the file skips.
 
 - **`cancelClientBooking` passed (2026-11-16).** It booked the run's client into class 18223, cancelled it through the resolver (routed to `removeClientFromClass`, normal mode) and read the schedule back with the seat gone. Its refusal checks sent no write.
 - **`getClientSchedule` passed (2026-11-16).** Client 100015484 read back 1 booking (an appointment) over the past year, and 0 in the default window.
+- **`cancelClientBooking` with `observeBalance` passed (2026-11-16, #26 branch).** A second unpaid booking of class 18223 was normal-cancelled. With `observeBalance: true` the impact reads landed and were timestamped. The result was `observed: false` ("the visit carries no ServiceId"), because an unpaid booking has no paying service, and the balance delta was 0. The `observed: true` path (a pass's `Remaining` before and after) is covered by unit tests only: proving it live would consume a paid session.
+- **The sandbox refused every user token on 2026-11-15** (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which failed every authenticated live test. Restored by 2026-11-16.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.

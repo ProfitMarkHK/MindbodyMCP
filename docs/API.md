@@ -310,6 +310,7 @@ Cancels one booking for one client and chooses late or normal. It resolves and d
 | `classScheduleId` | number | No | Narrows a `startDateTime` match; only with `startDateTime` | - |
 | `lateCancel` | boolean | No | Omitted: decided from the window. `true`: refused outside it. `false`: normal | omitted |
 | `sendEmail` | boolean | No | Email the client. Passed to whichever tool does the write | false |
+| `observeBalance` | boolean | No | Read the paying service's `Remaining` and the account balance before and after the write, and return `impact` | false |
 
 #### Steps
 
@@ -363,11 +364,44 @@ interface CancelClientBookingResult {
     toolResult: unknown;              // the delegate's own return value
   };
   reconcile?: { readAt: string; booking: ClientBooking | null; error?: string }; // after a failed POST
+  impact?: CancelImpact;              // only with observeBalance: true
   message: string;
 }
 ```
 
-The receipt is the record; nothing is persisted. Forfeit reporting (#26) is planned as a sibling block next to `receipt`, so existing fields stay as they are.
+The receipt is the record; nothing is persisted.
+
+#### Observed forfeit (`observeBalance`)
+
+The API cannot report a late-cancel fee: `docs/openapi.json` has no fee field, and `AccountBalance` is one aggregate with no ledger. What it can show is whether a pre-paid session was consumed. With `observeBalance: true` (code: `src/tools/cancelImpact.ts`):
+
+1. Resolve the paying client service: the visit's `ServiceId` for a class or enrollment session; for an appointment, its `ClientServiceId` from one `GET /appointment/staffappointments`.
+2. Before the write: one `GET /client/clientcompleteinfo` with `RequiredClientData: [Services, Memberships]`. It gives that service's `Remaining` (looked up by id in `ClientServices` and `ClientMemberships`) and `Client.AccountBalance`.
+3. After the write, only when a POST was sent and the before read worked: the same GET again.
+
+So it adds two GETs for a class or enrollment session and three for an appointment. Omitted or `false`, it adds none. The reads never change the write or `outcome`: a failed read after a successful cancel leaves `success: true` and sets `impact.observed: false` with the error.
+
+```typescript
+interface CancelImpact {
+  observed: boolean;             // true only when Remaining was read before and after
+  reason?: string;               // why not: no ServiceId / ClientServiceId, service not found, no Remaining, read error
+  serviceId?: number;            // the client service (purchased pricing option)
+  serviceName?: string;
+  remainingBefore?: number;
+  remainingAfter?: number;
+  consumed?: number;             // remainingBefore - remainingAfter; negative means a session was returned
+  accountBalanceBefore?: number; // Client.AccountBalance, not attributed to this cancel
+  accountBalanceAfter?: number;
+  accountBalanceDelta?: number;  // after - before
+  readAtBefore: string;          // ISO instants
+  readAtAfter?: string;          // undefined when no after read was made
+  caveats: string[];             // always: no fee ledger, out-of-window fees, unlimited plans, booking-time draws
+}
+```
+
+Every number is a value read from the API or the difference of two. The service is never guessed: a visit with no `ServiceId`, or a service that is not on the account or matches two different rows, gives `observed: false`. An unlimited plan has no `Remaining`, so it gives `observed: false` too. The account balance is still read in those cases. `estimatedValue` from the issue is not reported yet: it needs the purchase record, which is the purchase-history ticket's work.
+
+`consumed` is what the counts show, not what the policy says. If a site draws the session when the class is booked, a normal cancel returns it (`consumed: -1`) and a late cancel keeps it (`consumed: 0`). A fee posted after `readAtAfter` does not show, so a zero `accountBalanceDelta` does not mean no charge.
 
 #### Example
 

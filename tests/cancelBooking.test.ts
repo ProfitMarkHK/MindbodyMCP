@@ -51,6 +51,9 @@ class StubClient implements IMindbodyClient {
   scheduleFailsAfter = Infinity;
   postFailure?: Error;
   onPost?: (body: any) => void;
+  /** Served by GET /client/clientcompleteinfo. */
+  wallet: { AccountBalance?: number; ClientServices: any[]; ClientMemberships: any[] } = { AccountBalance: 0, ClientServices: [], ClientMemberships: [] };
+  walletFailsAfter = Infinity;
   private readonly validator = new SpecValidatingClient(spec, {});
 
   schedulePageOneReads() {
@@ -82,6 +85,11 @@ class StubClient implements IMindbodyClient {
     if (url === "/appointment/staffappointments") {
       const wanted: number[] = (params.AppointmentIds ?? []).map(Number);
       return page("Appointments", this.appointments.filter((a) => wanted.includes(a.Id)));
+    }
+    if (url === "/client/clientcompleteinfo") {
+      if (this.gets.filter((g) => g.url === url).length > this.walletFailsAfter) throw new Error("complete info read timed out");
+      const { AccountBalance, ClientServices, ClientMemberships } = structuredClone(this.wallet);
+      return { Client: { Id: CLIENT, FirstName: "Jane", LastName: "Doe", AccountBalance }, ClientServices, ClientMemberships } as T;
     }
     if (url === "/site/locations") return page("Locations", []);
     if (url === "/staff/staff") return page("StaffMembers", []);
@@ -349,5 +357,150 @@ describe("cancelClientBookingTool: failed POST", () => {
     const result = await run(client, { classId: 201 });
     expect(client.posts).toHaveLength(1);
     expect(result).toMatchObject({ success: false, outcome: "unknown", reconcile: { booking: null, error: expect.stringContaining("timed out") } });
+  });
+});
+
+describe("cancelClientBookingTool: observeBalance impact", () => {
+  const TEN_PACK = 7700;
+  const pack = (remaining: number | undefined) => ({ Id: TEN_PACK, Name: "10 Class Pack", Count: 10, Remaining: remaining, Current: true });
+  const completeInfoReads = (client: StubClient) => client.gets.filter((g) => g.url === "/client/clientcompleteinfo").length;
+
+  /** A drop-in class paid by the 10-pack; `onWrite` changes the wallet as the cancel lands. */
+  function paidDropIn(hoursOut: number, onWrite: (wallet: StubClient["wallet"]) => void = () => {}) {
+    const client = new StubClient();
+    dropIn(client, hoursOut);
+    client.visits[0].ServiceId = TEN_PACK;
+    client.visits[0].ServiceName = "10 Class Pack";
+    client.wallet.ClientServices = [pack(4)];
+    client.onPost = () => onWrite(client.wallet);
+    return client;
+  }
+
+  it("reports consumed 1 with the service id and name for a late cancel against a 10-pack with 4 left", async () => {
+    const client = paidDropIn(3, (w) => { w.ClientServices[0].Remaining = 3; });
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result).toMatchObject({ success: true, outcome: "cancelled", mode: "late" });
+    expect(result.impact).toMatchObject({
+      observed: true, serviceId: TEN_PACK, serviceName: "10 Class Pack", remainingBefore: 4, remainingAfter: 3, consumed: 1,
+    });
+  });
+
+  it("reports consumed 0 for a normal cancel of the same booking", async () => {
+    const client = paidDropIn(72);
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result).toMatchObject({ success: true, mode: "normal" });
+    expect(result.impact).toMatchObject({ observed: true, remainingBefore: 4, remainingAfter: 4, consumed: 0 });
+  });
+
+  it("reports observed false naming the missing count for an unlimited membership", async () => {
+    const client = new StubClient();
+    dropIn(client, 3);
+    client.visits[0].ServiceId = 9100;
+    client.wallet.ClientMemberships = [{ Id: 9100, Name: "Unlimited Monthly", Count: 0, Current: true }];
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result.success).toBe(true);
+    expect(result.impact).toMatchObject({ observed: false, serviceId: 9100, serviceName: "Unlimited Monthly" });
+    expect(result.impact!.reason).toContain("no Remaining count");
+    expect(result.impact!.consumed).toBeUndefined();
+  });
+
+  it("resolves an appointment's ClientServiceId and observes its count", async () => {
+    const client = new StubClient();
+    appointment(client, 2);
+    client.appointments[0].ClientServiceId = 4400;
+    client.wallet.ClientServices = [{ Id: 4400, Name: "Massage 5-pack", Count: 5, Remaining: 2, Current: true }];
+    client.onPost = () => { client.wallet.ClientServices[0].Remaining = 1; };
+    const result = await run(client, { appointmentId: 8001, observeBalance: true });
+
+    expect(result.impact).toMatchObject({ observed: true, serviceId: 4400, remainingBefore: 2, remainingAfter: 1, consumed: 1 });
+  });
+
+  it("reports observed false when the appointment has no ClientServiceId", async () => {
+    const client = new StubClient();
+    appointment(client, 2);
+    const result = await run(client, { appointmentId: 8001, observeBalance: true });
+
+    expect(result.success).toBe(true);
+    expect(result.impact).toMatchObject({ observed: false, serviceId: undefined });
+    expect(result.impact!.reason).toContain("no ClientServiceId");
+  });
+
+  it("reports consumed 0 and the balance delta for a fee-only policy without claiming no charge", async () => {
+    const client = paidDropIn(3, (w) => { w.AccountBalance = -15; });
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result.impact).toMatchObject({
+      observed: true, consumed: 0, accountBalanceBefore: 0, accountBalanceAfter: -15, accountBalanceDelta: -15,
+    });
+    expect(result.impact!.caveats.some((c) => c.includes("outside the read window"))).toBe(true);
+    expect(JSON.stringify(result).toLowerCase()).not.toContain("no charge was");
+    expect(result.message.toLowerCase()).not.toContain("charge");
+  });
+
+  it("keeps success true and reports the read error when the after read fails", async () => {
+    const client = paidDropIn(3);
+    client.walletFailsAfter = 1;
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result).toMatchObject({ success: true, outcome: "cancelled" });
+    expect(result.impact).toMatchObject({ observed: false, remainingBefore: 4 });
+    expect(result.impact!.reason).toContain("complete info read timed out");
+  });
+
+  it("adds zero GETs when observeBalance is false or omitted", async () => {
+    for (const observeBalance of [undefined, false]) {
+      const baseline = paidDropIn(3);
+      await run(baseline, { classId: 201 });
+      const client = paidDropIn(3);
+      const result = await run(client, { classId: 201, observeBalance });
+
+      expect(client.gets.map((g) => g.url)).toEqual(baseline.gets.map((g) => g.url));
+      expect(completeInfoReads(client)).toBe(0);
+      expect(result.impact).toBeUndefined();
+    }
+  });
+
+  it("adds at most four GETs and timestamps each read when observeBalance is true", async () => {
+    for (const setup of [() => paidDropIn(3), () => { const c = new StubClient(); appointment(c, 2); c.appointments[0].ClientServiceId = 4400; return c; }]) {
+      const baseline = setup();
+      await run(baseline, {});
+      const plain = setup();
+      const req = plain.appointments.length > 0 ? { appointmentId: 8001 } : { classId: 201 };
+      await run(plain, req);
+      const observed = setup();
+      const started = new Date().toISOString();
+      const result = await run(observed, { ...req, observeBalance: true });
+
+      const extra = observed.gets.length - plain.gets.length;
+      expect(extra).toBeGreaterThan(0);
+      expect(extra).toBeLessThanOrEqual(4);
+      expect(completeInfoReads(observed)).toBe(2);
+      expect(result.impact!.readAtBefore >= started).toBe(true);
+      expect(result.impact!.readAtAfter! >= result.impact!.readAtBefore).toBe(true);
+    }
+  });
+
+  it("reports only read values: no fee or estimate field is fabricated", async () => {
+    const client = paidDropIn(3, (w) => { w.ClientServices[0].Remaining = 3; w.AccountBalance = -10; });
+    const result = await run(client, { classId: 201, observeBalance: true });
+    const numbers = Object.entries(result.impact!).filter(([, v]) => typeof v === "number").map(([k]) => k).sort();
+
+    expect(numbers).toEqual([
+      "accountBalanceAfter", "accountBalanceBefore", "accountBalanceDelta", "consumed", "remainingAfter", "remainingBefore", "serviceId",
+    ]);
+  });
+
+  it("refuses to guess when the visit has no ServiceId", async () => {
+    const client = new StubClient();
+    dropIn(client, 3);
+    client.wallet.ClientServices = [pack(4), { ...pack(2), Id: 7701, Name: "5 Class Pack" }];
+    const result = await run(client, { classId: 201, observeBalance: true });
+
+    expect(result.impact).toMatchObject({ observed: false, serviceId: undefined });
+    expect(result.impact!.reason).toContain("no ServiceId");
+    expect(result.impact!.remainingBefore).toBeUndefined();
   });
 });

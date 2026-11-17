@@ -1129,6 +1129,7 @@ const RESOLVER_CLASS_CANDIDATES = 5;
  */
 const CLASS_BOOKING_REFUSALS_TO_SKIP_PAST: RegExp[] = [];
 const CANCEL_RESOLVER_TEST = 'cancelClientBooking resolves a class booking by classId and normal-cancels it';
+const CANCEL_IMPACT_TEST = 'cancelClientBooking with observeBalance reads the wallet before and after a normal cancel';
 
 describe('live tier — booking-cancel resolver', () => {
   itLive('cancelClientBooking refuses a bad locator and an unmatched one without writing', async () => {
@@ -1142,36 +1143,38 @@ describe('live tier — booking-cancel resolver', () => {
     expect(unmatched.receipt).toBeUndefined();
   });
 
-  itLive(CANCEL_RESOLVER_TEST, async () => {
-    // Books the run's own client into a future class (RequirePayment false, so
-    // no pass is consumed), then cancels it through the resolver with
-    // lateCancel: false, so nothing is forfeited whatever the site window is.
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
+  /**
+   * Books the run's own client into a future class (RequirePayment false, so
+   * no pass is consumed). Returns the class id, or undefined after a loud skip.
+   */
+  async function bookFutureClass(testName: string): Promise<number | undefined> {
     if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
-    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
     const listed = await callTool('getClasses', { startDate: day(2), endDate: day(9) });
     const candidates = listed.classes
       .filter((cls: any) => !cls.isCanceled && cls.spotsAvailable > 0)
       .slice(0, RESOLVER_CLASS_CANDIDATES);
-
-    let booked: { classId: number; message?: string } | undefined;
     const failures: string[] = [];
     for (const cls of candidates) {
       const result = await callTool('addClientToClass', { clientId: createdClientId, classId: cls.id, requirePayment: false });
-      if (result.success) {
-        booked = { classId: cls.id };
-        break;
-      }
+      if (result.success) return cls.id;
       const known = CLASS_BOOKING_REFUSALS_TO_SKIP_PAST.some((pattern) => pattern.test(String(result.message)));
       expect(known, `addClientToClass refused class ${cls.id}: ${result.message}`).toBe(true);
       failures.push(`class ${cls.id}: ${result.message}`);
     }
-    if (!booked) {
-      announceLoudSkip(CANCEL_RESOLVER_TEST, [
-        `reason: no future class with space to book the run's client into (${candidates.length} tried)`,
-        ...failures,
-      ]);
-      return;
-    }
+    announceLoudSkip(testName, [
+      `reason: no future class with space to book the run's client into (${candidates.length} tried)`,
+      ...failures,
+    ]);
+    return undefined;
+  }
+
+  itLive(CANCEL_RESOLVER_TEST, async () => {
+    // Cancels with lateCancel: false, so nothing is forfeited whatever the site window is.
+    const classId = await bookFutureClass(CANCEL_RESOLVER_TEST);
+    if (classId === undefined) return;
+    const booked = { classId };
 
     const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId: booked.classId, lateCancel: false });
     expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal', booking: { classId: booked.classId } });
@@ -1183,6 +1186,33 @@ describe('live tier — booking-cancel resolver', () => {
     const still = after.bookings.filter((b: any) => b.classId === booked!.classId && !b.lateCancelled);
     expect(still).toEqual([]);
     console.log(`\n LIVE cancel resolver: class ${booked.classId} booked then cancelled via ${result.receipt.tool}.\n`);
+  }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
+
+  itLive(CANCEL_IMPACT_TEST, async () => {
+    // Same booking as above, cancelled normally with observeBalance: true. The
+    // booking is unpaid (RequirePayment false), so the visit normally carries no
+    // ServiceId and impact.observed is false; either way the reads must land,
+    // be timestamped, and leave the cancel's outcome untouched.
+    const classId = await bookFutureClass(CANCEL_IMPACT_TEST);
+    if (classId === undefined) return;
+
+    const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId, lateCancel: false, observeBalance: true });
+    expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal' });
+    const impact = result.impact;
+    expect(impact, 'impact block').toBeDefined();
+    expect(typeof impact.observed).toBe('boolean');
+    expect(Date.parse(impact.readAtBefore)).not.toBeNaN();
+    expect(Date.parse(impact.readAtAfter)).not.toBeNaN();
+    expect(impact.caveats.length).toBeGreaterThan(0);
+    if (impact.observed) expect(Number.isInteger(impact.consumed)).toBe(true);
+    else expect(typeof impact.reason).toBe('string');
+    if (impact.accountBalanceBefore !== undefined && impact.accountBalanceAfter !== undefined) {
+      expect(impact.accountBalanceDelta).toBe(Math.round((impact.accountBalanceAfter - impact.accountBalanceBefore) * 100) / 100);
+    }
+    console.log(
+      `\n LIVE cancel impact: class ${classId}, observed ${impact.observed}` +
+        `${impact.observed ? `, consumed ${impact.consumed}` : ` (${impact.reason})`}, balance delta ${impact.accountBalanceDelta}.\n`
+    );
   }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
 });
 
