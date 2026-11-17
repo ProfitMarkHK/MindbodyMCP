@@ -60,7 +60,7 @@ spec:
       - name: mindbody-mcp
         image: mindbody-mcp:latest
         imagePullPolicy: Always
-        command: ["bun", "run", "dist/index.js", "--transport", "sse"]
+        command: ["bun", "src/index.ts", "--transport", "sse"]
         ports:
         - containerPort: 3000
           name: sse
