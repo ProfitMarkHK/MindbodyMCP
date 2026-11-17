@@ -1593,7 +1593,8 @@ function parseArgs(): { transport: TransportKind, port?: number, host?: string, 
 
   // MCP_TRANSPORT was declared but never read: `transport` was always truthy,
   // so the old `if (!transport && process.env.MCP_TRANSPORT)` could not fire.
-  rawTransport = (rawTransport ?? process.env.MCP_TRANSPORT ?? 'stdio').toLowerCase();
+  // `||`, not `??`: an empty MCP_TRANSPORT= must mean "unset", as it always did.
+  rawTransport = (rawTransport || process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
   if (rawTransport !== 'stdio' && rawTransport !== 'sse' && rawTransport !== 'http') {
     console.error(`Unknown transport "${rawTransport}"; expected stdio, sse or http.`);
     process.exit(1);

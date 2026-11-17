@@ -4,8 +4,7 @@ services:
   mindbody-mcp-sse:
     build: .
     container_name: mindbody-mcp-sse
-    # The image's default CMD is `--transport http`; the CLI flag beats
-    # MCP_TRANSPORT, so the transport has to be passed here.
+    # The image defaults to MCP_TRANSPORT=http; select SSE explicitly here.
     command: ["--transport", "sse"]
     ports:
       - "${MCP_PORT:-3000}:3000"
