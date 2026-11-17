@@ -1117,8 +1117,17 @@ describe('live tier — clients', () => {
 
 // ── 4. Service definitions ────────────────────────────────────────────────────
 
-/** How many future classes the resolver test tries to book before a loud skip. */
+/** How many future classes the resolver test tries to book. */
 const RESOLVER_CLASS_CANDIDATES = 5;
+
+/**
+ * Mindbody refusals of an addClientToClass request that the class listing
+ * cannot predict, so the resolver test moves on to the next class. Every other
+ * refusal is a failure. Empty on purpose: a dry-run probe (2026-11-17, `Test:
+ * true`) accepted all 60 future classes with space on -99, so no such refusal
+ * has been seen. Add a message here only after a run shows it.
+ */
+const CLASS_BOOKING_REFUSALS_TO_SKIP_PAST: RegExp[] = [];
 const CANCEL_RESOLVER_TEST = 'cancelClientBooking resolves a class booking by classId and normal-cancels it';
 
 describe('live tier — booking-cancel resolver', () => {
@@ -1152,11 +1161,13 @@ describe('live tier — booking-cancel resolver', () => {
         booked = { classId: cls.id };
         break;
       }
+      const known = CLASS_BOOKING_REFUSALS_TO_SKIP_PAST.some((pattern) => pattern.test(String(result.message)));
+      expect(known, `addClientToClass refused class ${cls.id}: ${result.message}`).toBe(true);
       failures.push(`class ${cls.id}: ${result.message}`);
     }
     if (!booked) {
       announceLoudSkip(CANCEL_RESOLVER_TEST, [
-        `reason: could not book the run's client into any of ${candidates.length} future class(es) with space`,
+        `reason: no future class with space to book the run's client into (${candidates.length} tried)`,
         ...failures,
       ]);
       return;
