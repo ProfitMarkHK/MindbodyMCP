@@ -23,13 +23,7 @@ scoop install bun
 
 ### 2. Replace package.json
 
-```bash
-# Backup existing
-copy package.json package.node.json
-
-# Use Bun version
-copy package.bun.json package.json
-```
+`package.json` already carries both the Bun scripts and the `node:*` scripts, so there is nothing to replace. (The old `package.node.json` and `package.bun.json` swap files, and `switch.bat`, have been removed.)
 
 ### 3. Install Dependencies with Bun
 
@@ -82,10 +76,9 @@ bun run dev
 ## Rollback (if needed)
 
 ```bash
-# Restore Node.js setup
-copy package.node.json package.json
+# Run on Node.js instead (package.json supports both)
 npm install
-npm run build
+npm run node:build
 ```
 
 Then update Claude config back to use `node` with `dist/index.js`.

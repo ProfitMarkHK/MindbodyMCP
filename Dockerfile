@@ -15,9 +15,9 @@ COPY tsconfig.json ./
 USER bun
 EXPOSE 3000
 
-# Serve Streamable HTTP by default. The transport flag beats MCP_TRANSPORT, so
-# overriding it means passing an argument: `docker run ... --transport sse`.
-# Auth comes from CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD; without them the server
-# refuses to start (MCP_ALLOW_UNAUTHENTICATED=true works on loopback only).
+# Serve Streamable HTTP by default, through MCP_TRANSPORT rather than a CMD
+# argument, so both `docker run -e MCP_TRANSPORT=sse ...` and `docker run ... --transport sse`
+# still select SSE. Auth for http comes from CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD; without
+# them the server refuses to start (MCP_ALLOW_UNAUTHENTICATED=true works on loopback only).
+ENV MCP_TRANSPORT=http
 ENTRYPOINT ["bun", "src/index.ts"]
-CMD ["--transport", "http"]
