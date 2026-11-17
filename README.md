@@ -25,22 +25,21 @@ This project is not published to npm under its own name yet. Install it from Git
 ### Install from GitHub
 
 ```bash
-# Using npx
-npx github:ProfitMarkHK/MindbodyMCP
-
-# Using bunx (recommended for performance)
+# Using bunx
 bunx github:ProfitMarkHK/MindbodyMCP
 
 # Or clone and run locally
 git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
-bun install # or npm install
-bun run start # or npm start
+bun install
+bun run start
 ```
+
+The server runs on [Bun](https://bun.sh), which executes the TypeScript source directly: there is no build step. The package's `bin` points at `src/index.ts` (with a `bun` shebang), so `npx` also needs Bun installed. Node.js is supported as an option; see [Using Node.js](#using-nodejs-optional).
 
 ## 📋 Prerequisites
 
-- Node.js 20+ or Bun 1.0+
+- Bun 1.0+ (Node.js 20+ works as an option; see [Using Node.js](#using-nodejs-optional))
 - Mindbody API credentials (API Key, Site ID, Source credentials)
 - 1Password CLI (`op`) to run this repo's server scripts; see [1Password setup](#1password-setup)
 - Claude Desktop or any MCP-compatible client
@@ -219,20 +218,32 @@ git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
 
 # Install dependencies
-bun install  # or npm install
+bun install
 
 # If you cloned with --no-scripts, install the pre-commit quality gate by hand:
 git config core.hooksPath .githooks
 
 # Run in development mode
-bun run dev  # or npm run dev
+bun run dev
 
 # Run tests
-bun test  # or npm test
+bun test
 
-# Build for production
-bun run build  # or npm run build
+# Type-check and compile to dist/ (not needed to run; used for the Node.js option and npm releases)
+bun run build
 ```
+
+### Using Node.js (optional)
+
+Bun is the default runtime, and installing does not build `dist/`. To run on Node.js instead, compile once and run the output:
+
+```bash
+npm install
+npm run node:build        # tsc -> dist/
+node dist/index.js        # add --transport sse|http for the hosted transports
+```
+
+`npm run node:start`, `node:start:sse`, `node:start:http` and `node:dev*` (via `tsx`, no build) wrap these with the 1Password CLI like the Bun scripts. Node 18 to 22 is built and smoke-tested in CI.
 
 ### 1Password setup
 

@@ -26,8 +26,6 @@ docs/
 # Build files
 tsconfig.json
 bunfig.toml
-switch.bat
-package.node.json
 
 # Git
 .git/
