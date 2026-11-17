@@ -68,7 +68,10 @@ src/
 │   ├── appointmentManagement.ts
 │   ├── enrollmentManagement.ts
 │   ├── siteManagement.ts
-│   ├── salesManagement.ts
+│   ├── salesManagement.ts    # sales barrel (catalogue / contracts / checkout)
+│   ├── salesCatalogue.ts     # getServices, getPackages, getProducts
+│   ├── salesContracts.ts     # getContracts, purchaseContract
+│   ├── salesCheckout.ts      # checkoutShoppingCart, getCustomPaymentMethods
 │   ├── salesHistory.ts       # getSales (read-only sales history)
 │   └── teacherSchedule.ts
 ├── cache/               # In-memory caching system
@@ -92,7 +95,12 @@ bun run test:sse
 
 # Run performance benchmarks
 bun run benchmark
+
+# Report which docs/openapi.json paths the tools call (offline, informational)
+bun run spec:coverage            # add -- --min <percent> to exit 1 below a floor
 ```
+
+`spec:coverage` reuses Gate 13's scanner (`tests/support/api-call-scanner.ts`) and maps each tool registered in `src/index.ts` to the spec paths it reaches. It is not part of `bun run check`. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Adding a New Tool
 
@@ -149,7 +157,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (51 tools)
+## Available Tools (52 tools)
 
 ### 📅 Class Management
 
@@ -195,6 +203,7 @@ Cancel a client's class booking.
 - `clientId` (required): Client ID
 - `classId` (required): Class ID
 - `lateCancel` (optional): Mark as late cancellation. Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused)
+- `sendEmail` (optional): Email the client about the cancellation (default false), sent as `SendEmail`. Not a dry run: `true` can email a real client. A refused late cancel sends nothing, so no email
 
 #### `getWaitlistEntries`
 View waitlist entries for classes.
@@ -310,6 +319,16 @@ Read a client's formula notes (`GET /client/clientformulanotes`, every page fetc
 
 **Returns:** `{ formulaNotes: [{ id, clientId, appointmentId, entryDate, note, siteId, siteName, staffName }], totalFormulaNotes }`. Notes are cross-regional, so a note's `clientId` is the client's ID at the site the note came from and can differ from the requested one. `staffName` is set only for notes tied to an appointment.
 
+#### `getClientPurchases`
+A client's purchase history with prices (`GET /client/clientpurchases`, every page fetched, list key `Purchases`). Read-only. Use it to value what a client bought, to check for an existing sale before a `checkoutShoppingCart` (a one-day window), or to read a sale back afterwards by `saleId`, including a web-app sale at an overridden price (it reads back as plain `price`/`unitPrice`; there is no override flag).
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, site-local, sent as `StartDate` `T00:00:00` and `EndDate` `T23:59:59`. Both are always sent, because the endpoint's own defaults (`now` through end of today) return almost nothing. Default: 365 days back through today in the site's zone.
+- `saleId` (optional): Only the record for this sale
+
+**Returns:** `{ purchases: [{ description, price, amountPaid, discount, tax, returned, quantity, accountPayment, sale: { id, saleDateTime, locationId, purchasedItems: [{ id, isService, description, unitPrice, quantity, totalAmount, returned, contractId, expDate, activeDate }], payments: [{ id, amount, method, type, transactionId }] } }], totalPurchases }`. An `AccountPayment: true` record (a payment onto the account) is kept and reported as `accountPayment: true`. `saleDateTime` is site-local with the API's spurious `Z` stripped (D-11). No per-session value is computed.
+
 #### `getClientCompleteInfo`
 A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.
 
@@ -363,8 +382,11 @@ Process a complete purchase transaction.
 
 **Parameters:**
 - `clientId` (required): Client ID
-- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds? }`
-  - `item.type`: `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the service, product or package; a `Tip` uses `item.metadata.amount` instead.
+- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`
+  - `item.type`: `Service`, `Product`, `Package` or `Tip`.
+  - `item.metadata`: `{ id }` for `Service` (pricing option ID), `Product` and `Package`; `{ amount }` for `Tip`. Only that key is sent. Any other key, such as `price` or `name`, is dropped without error.
+  - `discountAmount` (optional, per item): Amount taken off the item, sent as `DiscountAmount`. Must be a non-negative number, or the whole checkout is refused before anything is sent. Omitted, no `DiscountAmount` is sent. Mindbody ignores it for packages. The discount shows in the result's `shoppingCart.discountTotal` and `grandTotal` only; a line's `discountAmount` is as Mindbody reports it (0 on the sandbox) and its `total` is `price × quantity` before discount.
+  - `appointmentBookingRequests` (optional, per item, pricing option items only): New appointments to book and pay for with this item, sent as `AppointmentBookingRequests`. Each entry has `staffId`, `locationId`, `sessionTypeId`, `startDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and optional `notes`. `notes` is sent as `Notes` but **Mindbody ignores it**: the spec does not define it for this object, and the sandbox books the appointment with no notes. Use `updateAppointment` to add notes. No ownership guard applies: these create appointments.
   - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`. Every ID is verified to belong to `clientId` (same lookup as `cancelAppointments`) before anything is sent; if any fails, or the lookup cannot run, the whole checkout is refused and nothing is charged.
 - `payments` (required): Payment methods, each `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`.
   - `Custom`: `metadata` is `{ amount, id }`, where `id` comes from `getCustomPaymentMethods`. A `Custom` payment without a positive integer `id` refuses the whole checkout before anything is sent.
@@ -373,6 +395,9 @@ Process a complete purchase transaction.
 - `promotionCode` (optional): Discount code
 - `sendEmail` (optional): Send receipt (default true)
 - `locationId` (optional): Location ID
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the cart and returns its totals but records no sale; omitted or false, `Test` is never sent. Every guard above still runs and refuses before any request. Mindbody does **not** check payments in test mode (sandbox: Cash 107 against a total of 100 passed), so the tool compares the sum of `payments[].metadata.amount` with `GrandTotal` in whole cents and returns `success: false` with both figures on a mismatch. The result carries `dryRun: true` and never the response's `SaleId`, which names no recorded sale in test mode.
+
+**No per-sale price override.** Each item sells at its catalogue price. The Mindbody REST API has no field that sets a different price for one sale (22 candidate keys were ignored on the sandbox), and `discountAmount` can only lower a price. Record a sale that needs another price, including any 0-priced, hourly-billed option, in the Mindbody web app; a client purchases read can then confirm it. Evidence: [`docs/API.md`](docs/API.md#no-per-sale-price-override).
 
 #### `getCustomPaymentMethods`
 List the site's custom payment methods (`GET /sale/custompaymentmethods`). Takes no parameters; every page is fetched.
@@ -388,7 +413,7 @@ Read-only sales history (`GET /sale/sales`, every page fetched, list key `Sales`
 - `salesRepIds`, `clientIds`: filters applied client-side (the endpoint has none)
 - `matchAppointments` (default false): also read `GET /appointment/staffappointments` for the same range and credit each product sale to the staff on every appointment the same client had on the same site-local day
 
-**Returns:** `{ startDate, endDate, sales: [{ id, saleDateTime, salesRepId, clientId, locationId, items: [{ id, description, isService, categoryId, unitPrice, quantity, totalAmount, returned }], payments: [{ id, amount, method, type }] }], totalSales, bySalesRep: [{ salesRepId, staffName, saleCount, productItemCount, productTotal }] }`. With `matchAppointments`, also `byAppointmentStaff` (same shape, keyed `staffId`), `unmatchedProductSales` and `appointmentMatchNote`. Tip lines (a non-service item described `Tip`; v6 has no tip flag) are dropped from `items` and every summary, and a sale that was only a tip is dropped. Gift cards stay. Summaries count product lines only and skip returned lines; `saleCount` counts every sale for the rep. `saleDateTime` is site-local; the API appends a spurious `Z`, which is stripped, and its date filter matches the sale date only (`docs/mindbody-spec-discrepancies.md` D-11). Staff names come from one cached `GET /staff/staff`. The appointment match is a correlation, not a record: a client seen by two staff that day credits both.
+**Returns:** `{ startDate, endDate, sales: [{ id, saleDateTime, salesRepId, clientId, locationId, items: [{ id, description, isService, categoryId, unitPrice, quantity, totalAmount, returned }], payments: [{ id, amount, method, type }] }], totalSales, bySalesRep: [{ salesRepId, staffName, saleCount, productItemCount, productTotal }] }`. With `matchAppointments`, also `byAppointmentStaff` (same shape, keyed `staffId`), `unmatchedProductSales` and `appointmentMatchNote`. Tip lines (a non-service item described `Tip`; v6 has no tip flag) are dropped from `items` and every summary, and a sale that was only a tip is dropped. Gift cards stay. Summaries count product lines only and skip returned lines; `saleCount` counts every sale for the rep. `saleDateTime` is site-local; the API appends a spurious `Z`, which is stripped, and its date filter matches the sale date only (`docs/mindbody-spec-discrepancies.md` D-11). The endpoint's `TotalResults` counts sale-payment pairs, not sales (D-12), so it is ignored: paging ends on the first short page and `totalSales` counts the sales returned. Staff names come from one cached `GET /staff/staff`. The appointment match is a correlation, not a record: a client seen by two staff that day credits both.
 
 #### `purchaseContract`
 Purchase a membership/contract.
@@ -491,7 +516,7 @@ Book a new appointment.
 - `notes` (optional): Appointment notes
 
 #### `updateAppointment`
-Update an existing appointment: reschedule, change staff or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
+Update an existing appointment: reschedule, change staff, session type or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
 
 **Parameters:**
 - `clientId` (required): Client ID who owns the appointment. Ownership is verified before anything is written.
@@ -499,6 +524,7 @@ Update an existing appointment: reschedule, change staff or notes, or apply a st
 - `startDateTime` (optional): New start date/time (reschedule)
 - `endDateTime` (optional): New end date/time
 - `staffId` (optional): Change staff
+- `sessionTypeId` (optional): Change the session type (service), sent as `SessionTypeId`. A positive integer; anything else is refused before any request. Allowed on `Booked`, `Confirmed` and `Arrived` appointments (the usual case: a wrong service corrected before checkout). Mindbody may reset the end time to the new type's duration; the result returns `startDateTime`, `endDateTime` and `sessionTypeId` from the response. A Mindbody error, such as staff not set up for the new type, is returned unchanged as `success: false`.
 - `resourceIds` (optional): Resource IDs
 - `notes` (optional): Update notes
 - `execute` (optional): Status action: `confirm`, `unconfirm`, `arrive`, `unarrive` or `complete`. `cancel` and `latecancel` are refused with no API call.
@@ -509,9 +535,9 @@ Update an existing appointment: reschedule, change staff or notes, or apply a st
 **Guards.** All are checked before any write, and none can be skipped by omitting an argument:
 - `clientId` must be a non-empty string and `appointmentId` a positive integer.
 - Ownership: the appointment must belong to `clientId`, checked with the same `GET /appointment/staffappointments` lookup `cancelAppointments` uses. Someone else's appointment, or one outside the lookup window (a year back through two years ahead, so a finished appointment can still be annotated), is reported as "not found for this client".
-- Status: a `Cancelled` or `LateCancelled` appointment is final and accepts no update at all. A `Completed` or `NoShow` one accepts no status action, no `applyPayment` and no reschedule — but notes, staff and resources are still fine, because staff do annotate a finished appointment.
+- Status: a `Cancelled` or `LateCancelled` appointment is final and accepts no update at all. A `Completed` or `NoShow` one accepts no status action, no `applyPayment`, no reschedule and no `sessionTypeId` change (it has been checked out, so a new service would desync the sale) — but notes, staff and resources are still fine, because staff do annotate a finished appointment.
 - Timing: `execute: complete` needs the appointment to have started, compared in the site's timezone. `arrive`/`unarrive` are deliberately *not* time-gated: arrival is recorded against a booked appointment, including one booked for a later day. If the site timezone cannot be resolved, nothing is looked up or written.
-- `applyPayment` is refused in the same call as a reschedule. It applies a service chosen against the appointment's current time, so move first, pay second; no MCP path reverses a sale.
+- `applyPayment` is refused in the same call as a reschedule. It applies a service chosen against the appointment's current time, so move first, pay second; no MCP path reverses a sale. A `sessionTypeId` change is not a reschedule, so it may be combined with `applyPayment`.
 
 **Returns:** `{ success, appointment?, rejected: [{ id, reason }], message }`
 
@@ -542,7 +568,7 @@ Cancel one booking for one client and choose late or normal. A resolver: it find
 - `clientId` (required)
 - Exactly one locator: `classId`, `appointmentId`, `visitId`, or `startDateTime` (site-local `YYYY-MM-DDTHH:MM[:SS]`, optionally narrowed by `classScheduleId`)
 - `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset (before any read); `false` forces a normal cancel
-- `sendEmail` (optional, default false). Refused for a drop-in class, because `removeClientFromClass` sends no `SendEmail`
+- `sendEmail` (optional, default false). Passed to whichever tool does the write
 - `observeBalance` (optional, default false): read the paying service's `Remaining` and the client's `AccountBalance` before and after the write, and return `impact`
 
 **Resolution.** Reads `getClientSchedule` over the locator's day for `startDateTime`, otherwise today through 30 days (a booking further out is not found). Matched rows that are waitlist entries, signed in, already late-cancelled or cancelled, or already started are not cancellable. Exactly one cancellable match proceeds. None, or more than one, is refused with `candidates` and no write; the message names why each matched row was not cancellable. Routing: `appointment` → `cancelAppointments`, `enrollment` → `cancelEnrollmentVisits` (`visitId`), `class` → `removeClientFromClass` (`classId`), `waitlist` refused.
@@ -746,6 +772,11 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
+# MCP_AUTH_TOKEN=...  # SSE only: bearer token clients must send; required unless MCP_HOST is loopback
+# MCP_ALLOWED_HOSTS=mcp.example.com  # SSE only: Host values accepted (403 otherwise); unset = loopback only
+# MCP_ALLOWED_ORIGINS=https://app.example.com  # SSE only: Origin values accepted; unset = not checked
+# MCP_CORS_ORIGIN=*  # SSE only: Access-Control-Allow-Origin, one origin or *; no Allow-Credentials is sent
+# MCP_DNS_REBINDING_PROTECTION=false  # SSE only: opt out of the Host/Origin check
 ```
 
 ### Dates and timezones

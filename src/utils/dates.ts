@@ -50,10 +50,15 @@ export function getDateOnly(dateTimeStr: string): string {
   return dateTimeStr.split('T')[0];
 }
 
+/**
+ * Minutes between two Mindbody date-times, as wall-clock difference. They are
+ * offset-less site-local times, so they are read as UTC: parsing them in this
+ * process's zone would shorten or lengthen a class that spans a host DST change.
+ */
 export function getDurationInMinutes(start: string, end: string): number {
-  const startDate = parseDateTime(start);
-  const endDate = parseDateTime(end);
-  return Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60));
+  const wallClockMs = (s: string) =>
+    Date.parse(/(Z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : `${s}Z`);
+  return Math.round((wallClockMs(end) - wallClockMs(start)) / (1000 * 60));
 }
 
 export function isDateInRange(date: string, start: string, end: string): boolean {

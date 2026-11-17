@@ -99,7 +99,7 @@ its output so the side effect is never a surprise.
 | 8 | Security / secrets checks pass | applies | `npm audit --audit-level=moderate` → **found 0 vulnerabilities** (exit 0), plus the fail-closed secret scan below. The audit was verified green 2026-10-15; the secret scan passed on 2026-10-17 (see Gate 8). **The secret scan half is wired into the runner and runs on every `bun run check` and every commit** — `bash scripts/secret-scan.sh .`, then an index-only guard that refuses a staged `.env*` file. The scan prints filenames only and fails closed. `npm audit` stays CI-only: it needs the registry, and a pre-commit hook must not depend on the network. |
 | 9 | Change reviewed | applies | manual — peer review via `.github/PULL_REQUEST_TEMPLATE.md`. Never a gate that always passes. |
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
-| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
+| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. `bun run spec:coverage` lists which spec paths the tools reach and which they do not (informational, see below Gate 13). **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
 | 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
@@ -285,8 +285,13 @@ and not needed" from "forgotten":
     opt-in live tier targets exactly this gap (see the live-tier entry below). It
     has now been run against the sandbox, but its last recorded run is not all
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
-  - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
-    manual script needing a server already listening.
+  - **SSE transport.** Everything here is STDIO. The SSE transport is covered
+    outside Gate 2, still inside Gate 1's `bun test`: `tests/sse-routing.test.ts`
+    runs the routing in-process and the real `src/index.ts` with
+    `--transport sse` against this stub (`initialize`, `tools/list` compared
+    with STDIO, one tool call, with and without `MCP_AUTH_TOKEN`), and
+    `tests/sse-auth.test.ts` covers the bearer check. `bun run test:sse` remains
+    a manual script for a server that is already listening.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
@@ -564,7 +569,7 @@ and not needed" from "forgotten":
   `import { mindbodyClient as mb }`, `this.mindbody.get(p)`, `client?.get(p)`,
   `client['get'](p)`, `(client.get as any)(p)`, or a receiver on the line below.
   A call is ignored only when the receiver's **type** is on the benign list
-  (`BENIGN_RECEIVER_TYPES` in the test: `Map`, `ReadonlyMap`, `WeakMap`,
+  (`BENIGN_RECEIVER_TYPES` in [`tests/support/api-call-scanner.ts`](../tests/support/api-call-scanner.ts): `Map`, `ReadonlyMap`, `WeakMap`,
   `URLSearchParams`, `Headers`, and this repo's `SimpleCache` / `SimpleTtlCache` /
   `TtlCache`), because those `.get` calls are keyed lookups, never an HTTP read.
   Anything else, including an `any`-typed receiver or axios itself, is treated as
@@ -695,6 +700,50 @@ and not needed" from "forgotten":
   checks paths, not query parameters, so a call that sends a parameter the spec
   does not document (for example `Days` on `/appointment/activesessiontimes`)
   passes Gate 13. That is Gate 11 work.
+
+  **Where the scanner lives.** The call-site scanner is
+  [`tests/support/api-call-scanner.ts`](../tests/support/api-call-scanner.ts),
+  shared with `bun run spec:coverage` (below); the rules, floors and fixtures
+  above stay in the gate file. It sits under `tests/`, outside the scan roots,
+  because its own reads of the spec (`item.get`) would otherwise be flagged.
+- **Spec coverage report — `bun run spec:coverage` (not a gate; informational).**
+  Reports which [`docs/openapi.json`](openapi.json) paths the registered MCP
+  tools call and which they do not. Offline: it parses `src/` and reads the spec,
+  no network, no credentials, ~2s. It is **not** run by `bun run check` and gates
+  nothing by default; it is evidence for Gate 11 reviews and for picking the next
+  endpoint to wrap.
+  ```bash
+  bun run spec:coverage              # informational, exits 0
+  bun run spec:coverage -- --min 30  # exits 1 below 30% of spec paths covered
+  SPEC_COVERAGE_MIN=30 bun run spec:coverage
+  ```
+  A threshold that is not a number from 0 to 100 exits 2. Output: each tool with
+  the spec paths it reaches, the uncovered paths grouped by API tag (with their
+  methods), paths called in `src/` that no tool reaches, call sites whose path or
+  method the spec does not define, and a `Summary: covered/total` line.
+
+  **How it maps tools to paths.** Call sites come from Gate 13's scanner, so path
+  resolution is the same (hoisted constants, aliased imports, `fetchAllPages`),
+  plus `.post('/…')` writes, which Gate 13 does not read. A tool is an object
+  literal in `src/index.ts` with both `name` and `inputSchema` (the ListTools
+  list), dispatched by its `case '<name>':` clause (an empty clause falls through
+  to the next). From that clause, every identifier that resolves, through imports,
+  to a function, method or function-valued const is followed transitively, and a
+  call site belongs to the innermost named function that holds it. Nothing is
+  hardcoded: a new tool or endpoint shows up on the next run. A path counts as
+  covered when a tool reaches it with a method the spec defines for it; templated
+  paths (`/pickaspot/v1/class/{classId}`) match any one segment.
+
+  **Limits.** The graph counts a referenced function as reached, so a path a tool
+  calls only on one branch is still covered; it over-approximates, never misses a
+  path reached through a named function. Calls the scanner cannot resolve to a
+  literal path are not mapped: the token issue in `src/api/auth.ts` builds its URL
+  at runtime, so `/usertoken/issue` is reported uncovered although every request
+  depends on it. The logic is in
+  [`tests/support/spec-coverage.ts`](../tests/support/spec-coverage.ts), tested
+  by `tests/spec-coverage.test.ts` against
+  [`tests/fixtures/spec-coverage/`](../tests/fixtures/spec-coverage/); the CLI
+  is `scripts/spec-coverage.ts`.
 - **Gate 16 — OpenAPI spec integrity (applies; passes; offline).**
   `sha256(docs/openapi.json)` must equal the single value in
   [`docs/openapi.lock`](openapi.lock). Purely local: it reads two files and

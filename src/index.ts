@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -22,6 +21,8 @@ dotenv.config();
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
+import { resolveSseAuthToken } from './sseAuth.js';
+import { createSseRequestHandler, resolveDnsRebindingSettings } from './sseServer.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -44,6 +45,7 @@ import {
   getClientFormulaNotesTool,
   getClientCompleteInfoTool,
   getClientScheduleTool,
+  getClientPurchasesTool,
 } from './tools/clientManagement.js';
 import {
   getServicesTool,
@@ -222,13 +224,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'removeClientFromClass',
-        description: 'Cancel a client\'s class booking',
+        description: 'Cancel a client\'s class booking. Not a dry run: sendEmail (default false) can email a real client.',
         inputSchema: {
           type: 'object',
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
             classId: { type: 'number', description: 'Class ID' },
             lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for a class starting within that window' },
+            sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'classId'],
         },
@@ -421,6 +424,23 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         },
       },
       {
+        name: 'getClientPurchases',
+        description:
+          'Get a client\'s purchase history with prices (read-only): description, price, amount paid, discount, tax, ' +
+          'account-payment flag and the nested sale with its items and payments. Default window: the last 365 days through ' +
+          'today in the site timezone. Use a one-day window to check for an existing sale before a checkout, or saleId to read one sale back',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Purchases on or after this site-local date (YYYY-MM-DD). Default: 365 days ago' },
+            endDate: { type: 'string', description: 'Purchases up to the end of this site-local date (YYYY-MM-DD). Default: today' },
+            saleId: { type: 'number', description: 'Only the record for this sale ID' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
         name: 'getClientCompleteInfo',
         description:
           'Get a client\'s whole wallet in one call: account balance, purchased services, contracts, memberships and arrival programs. ' +
@@ -583,7 +603,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'checkoutShoppingCart',
-        description: 'Process a shopping cart checkout',
+        description:
+          'Process a shopping cart checkout. Commits a real sale unless test is true (dry run). ' +
+          'Each item is sold at its catalogue price: the Mindbody API has no per-sale price override, and ' +
+          'discountAmount can only lower a price. A sale that needs a different price (for example a 0-priced, ' +
+          'hourly-billed option) must be recorded in the Mindbody web app instead; a client purchases read can then confirm it.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -598,7 +622,16 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'object',
                     properties: {
                       type: { type: 'string', enum: ['Service', 'Product', 'Package', 'Tip'] },
-                      metadata: { type: 'object' },
+                      metadata: {
+                        type: 'object',
+                        description:
+                          'Service, Product, Package: { id } (the pricing option, product or package ID). Tip: { amount }. ' +
+                          'Only that key is sent; any other key (price, name, ...) is dropped without error.',
+                        properties: {
+                          id: { type: 'number', description: 'Service, Product or Package ID' },
+                          amount: { type: 'number', description: 'Tip amount (Tip only)' },
+                        },
+                      },
                     },
                   },
                   quantity: { type: 'number' },
@@ -606,6 +639,26 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
                     type: 'array',
                     items: { type: 'number' },
                     description: 'Existing appointment IDs this item pays for (reconciles). Each must belong to clientId, else the whole checkout is refused',
+                  },
+                  discountAmount: {
+                    type: 'number',
+                    minimum: 0,
+                    description: 'Amount taken off this item, sent as DiscountAmount. Non-negative; a negative or non-numeric value refuses the checkout. Mindbody ignores it for packages. It cannot raise a price.',
+                  },
+                  appointmentBookingRequests: {
+                    type: 'array',
+                    description: 'New appointments to book and pay for with this item (pricing option items only). Sent as AppointmentBookingRequests.',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        staffId: { type: 'number' },
+                        locationId: { type: 'number' },
+                        sessionTypeId: { type: 'number' },
+                        startDateTime: { type: 'string', description: 'Site-local yyyy-mm-ddThh:mm:ss' },
+                        notes: { type: 'string', description: 'Ignored by Mindbody: sent as Notes, but the booked appointment has no notes (verified on the sandbox). Add notes afterwards with updateAppointment' },
+                      },
+                      required: ['staffId', 'locationId', 'sessionTypeId', 'startDateTime'],
+                    },
                   },
                 },
               },
@@ -635,6 +688,10 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             promotionCode: { type: 'string', description: 'Promotion code' },
             sendEmail: { type: 'boolean', description: 'Send email receipt' },
             locationId: { type: 'number', description: 'Location ID' },
+            test: {
+              type: 'boolean',
+              description: 'Dry run (default false): Mindbody validates the cart and returns its totals but records no sale. Mindbody does not check payments in test mode, so the tool checks that the payment amounts sum to GrandTotal and returns success false if not. The result carries dryRun: true and no sale ID. All other checks still run.',
+            },
           },
           required: ['clientId', 'items', 'payments'],
         },
@@ -766,11 +823,12 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       {
         name: 'updateAppointment',
         description:
-          "Update ONE appointment belonging to ONE client: reschedule, change staff, notes or resources, or apply a " +
+          "Update ONE appointment belonging to ONE client: reschedule, change staff, session type, notes or resources, or apply a " +
           `status action via execute (confirm, unconfirm, arrive, unarrive, complete). Guards, all checked before ` +
           `anything is written: clientId and appointmentId must both be given; the appointment must belong to that ` +
           `client, else "not found for this client"; a cancelled appointment is final and accepts no update; a ` +
-          `completed or no-show one takes no status action, no payment and no reschedule (notes are still fine); ` +
+          `completed or no-show one takes no status action, no payment, no reschedule and no session type change ` +
+          `(notes are still fine); ` +
           `execute complete needs the appointment to have started, in the site's timezone. applyPayment may not be ` +
           `combined with a reschedule. Does not cancel: use cancelAppointments.`,
         inputSchema: {
@@ -779,6 +837,14 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID who owns the appointment; verified before any write' },
             appointmentId: { type: 'number', description: 'Appointment ID' },
             staffId: { type: 'number', description: 'Staff ID' },
+            sessionTypeId: {
+              type: 'number',
+              description:
+                'New session type (service), a positive integer. Allowed on Booked, Confirmed and Arrived ' +
+                'appointments; refused on Completed, NoShow, Cancelled and LateCancelled. Not a reschedule, so it ' +
+                'may be combined with applyPayment. Mindbody may reset the end time to the new type\'s duration; ' +
+                'the response returns the updated times and sessionTypeId.',
+            },
             startDateTime: { type: 'string', description: 'Start date/time' },
             endDateTime: { type: 'string', description: 'End date/time' },
             resourceIds: { type: 'array', items: { type: 'number' }, description: 'Resource IDs' },
@@ -852,7 +918,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             startDateTime: { type: 'string', description: 'Locator: site-local start, YYYY-MM-DDTHH:MM[:SS], no offset' },
             classScheduleId: { type: 'number', description: 'Narrows a startDateTime match to one class schedule' },
             lateCancel: { type: 'boolean', description: 'Omit to let the resolver decide; true forces late (refused outside the window); false forces normal' },
-            sendEmail: { type: 'boolean', description: 'Email the client (default false). Not supported for drop-in classes' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
             observeBalance: { type: 'boolean', description: 'Read the paying service\'s Remaining and the account balance before and after, and return impact (default false)' },
           },
           required: ['clientId'],
@@ -1030,7 +1096,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         const removeClassResult = await removeClientFromClassTool(
           args.clientId as string,
           args.classId as number,
-          args.lateCancel as boolean | undefined
+          args.lateCancel as boolean | undefined,
+          undefined,
+          undefined,
+          args.sendEmail as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(removeClassResult, null, 2) }] };
       
@@ -1138,6 +1207,14 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(formulaNotesResult, null, 2) }] };
       
+      case 'getClientPurchases':
+        const purchasesResult = await getClientPurchasesTool(args.clientId as string, {
+          startDate: typeof args.startDate === 'string' ? args.startDate : undefined,
+          endDate: typeof args.endDate === 'string' ? args.endDate : undefined,
+          saleId: typeof args.saleId === 'number' ? args.saleId : undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(purchasesResult, null, 2) }] };
+
       case 'getClientCompleteInfo':
         const completeInfoResult = await getClientCompleteInfoTool(args.clientId as string, {
           requiredClientData: Array.isArray(args.requiredClientData)
@@ -1248,7 +1325,10 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.inStore as boolean | undefined,
           args.promotionCode as string | undefined,
           args.sendEmail as boolean | undefined,
-          args.locationId as number | undefined
+          args.locationId as number | undefined,
+          undefined,
+          undefined,
+          args.test === true
         );
         return { content: [{ type: 'text', text: JSON.stringify(checkoutResult, null, 2) }] };
       
@@ -1342,7 +1422,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.executePayment as boolean | undefined,
           args.sendEmail as boolean | undefined,
           args.applyPayment as boolean | undefined,
-          args.execute as UpdateAppointmentExecute | undefined
+          args.execute as UpdateAppointmentExecute | undefined,
+          args.sessionTypeId as number | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(updateAppointmentResult, null, 2) }] };
 
@@ -1530,116 +1611,14 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
   return { transport, port, host, sslCert, sslKey };
 }
 
-// Hosts that are always safe for local development. Note these are compared as
-// full `Host` header values, so they are listed with and without the default
-// port because the SDK does an exact string match on the header.
-const LOCAL_DEV_HOSTS = [
-  'localhost',
-  'localhost:3000',
-  '127.0.0.1',
-  '127.0.0.1:3000',
-  '[::1]',
-  '[::1]:3000',
-];
-
-/**
- * Enforce DNS rebinding protection at the HTTP layer.
- *
- * This exists because the SDK's own `validateRequestHeaders()` is only reachable
- * from `SSEServerTransport.handlePostMessage()`, which this server never calls -
- * the POST route below only sets CORS headers. So setting the transport options
- * alone provides NO protection here. We validate the GET ourselves, which is the
- * request that actually opens the stream.
- *
- * Semantics deliberately mirror the SDK exactly (see validateRequestHeaders in
- * SDK 1.32.1): Host is compared by exact string match against the allowlist, and
- * Origin is only checked when an origin allowlist is configured.
- *
- * @returns an error string when the request must be rejected, else undefined.
- */
-function checkDnsRebinding(
-  req: http.IncomingMessage,
-  settings: { enableDnsRebindingProtection: boolean; allowedHosts: string[]; allowedOrigins: string[] }
-): string | undefined {
-  if (!settings.enableDnsRebindingProtection) {
-    return undefined;
-  }
-
-  if (settings.allowedHosts.length > 0) {
-    const hostHeader = req.headers.host;
-    if (!hostHeader || !settings.allowedHosts.includes(hostHeader)) {
-      return `Invalid Host header: ${hostHeader}`;
-    }
-  }
-
-  if (settings.allowedOrigins.length > 0) {
-    const originHeader = req.headers.origin;
-    if (originHeader && !settings.allowedOrigins.includes(originHeader)) {
-      return `Invalid Origin header: ${originHeader}`;
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Resolve DNS rebinding protection settings for the SSE transport.
- *
- * Security posture: protection is ON by default.
- *
- * Evidence from SDK 1.32.1 (`dist/esm/server/sse.js`, validateRequestHeaders):
- *   - if `enableDnsRebindingProtection` is falsy, validation is skipped entirely;
- *   - the Host header is only checked when `allowedHosts` is non-empty;
- *   - the Origin header is only checked when `allowedOrigins` is non-empty.
- *
- * So enabling protection with an empty allowlist is a no-op (it does not reject
- * everything), and enabling it with a localhost allowlist keeps local dev
- * working. We therefore default `allowedHosts` to loopback names rather than
- * leaving it undefined.
- */
-function resolveDnsRebindingSettings(port: number): {
-  enableDnsRebindingProtection: boolean;
-  allowedHosts: string[];
-  allowedOrigins: string[];
-} {
-  // Opt-out escape hatch. Anything other than an explicit falsy value keeps
-  // protection enabled.
-  const rawOptOut = process.env.MCP_DNS_REBINDING_PROTECTION?.trim().toLowerCase();
-  const enabled = rawOptOut !== 'false' && rawOptOut !== '0' && rawOptOut !== 'no' && rawOptOut !== 'off';
-
-  const parseList = (value: string | undefined): string[] | undefined => {
-    const items = value
-      ?.split(',')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return items && items.length > 0 ? items : undefined;
-  };
-
-  const configuredHosts = parseList(process.env.MCP_ALLOWED_HOSTS);
-
-  // When the operator has not set an explicit allowlist, fall back to loopback
-  // plus the port we are actually listening on, so a non-default MCP_PORT in
-  // local development still works with zero configuration.
-  const allowedHosts = configuredHosts ?? [
-    ...LOCAL_DEV_HOSTS,
-    `localhost:${port}`,
-    `127.0.0.1:${port}`,
-    `[::1]:${port}`,
-  ];
-
-  return {
-    enableDnsRebindingProtection: enabled,
-    allowedHosts: enabled ? allowedHosts : [],
-    // Origins are only checked when explicitly configured; the SSE endpoint is
-    // normally driven by native MCP clients that send no Origin header at all.
-    allowedOrigins: parseList(process.env.MCP_ALLOWED_ORIGINS) ?? [],
-  };
-}
-
 // Start SSE server
 async function startSSEServer(config: { port?: number, host?: string, sslCert?: string, sslKey?: string }) {
   const port = config.port || 3000;
   const host = config.host || '0.0.0.0';
+
+  // Inbound bearer auth (MCP_AUTH_TOKEN). Throws before anything listens when
+  // the bind is off loopback and no token is set; see src/sseAuth.ts.
+  const authToken = resolveSseAuthToken(host, process.env.MCP_AUTH_TOKEN);
 
   // DNS rebinding protection is enabled by default; see
   // resolveDnsRebindingSettings() for the SDK-derived rationale.
@@ -1657,10 +1636,6 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error('DNS rebinding protection: DISABLED (MCP_DNS_REBINDING_PROTECTION opt-out set)');
   }
 
-  // Every SSE connection gets its own Server instance so that concurrent
-  // sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
-  const activeServers = new Set<Server>();
-  
   // Create HTTP/HTTPS server based on SSL configuration
   let httpServer: http.Server | https.Server;
   
@@ -1684,130 +1659,20 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error(`Starting HTTP SSE server on ${host}:${port}`);
   }
 
-  // Handle HTTP requests
-  httpServer.on('request', async (req, res) => {
-    // Set CORS headers for all requests
-    const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
-    
-    // Handle OPTIONS preflight requests
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': corsOrigin,
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Max-Age': '86400'
-      });
-      res.end();
-      return;
-    }
-    
-    // Health check endpoint
-    if (req.url === '/health' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({ 
-        status: 'healthy',
-        server: 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        transport: 'sse',
-        timestamp: new Date().toISOString()
-      }));
-      return;
-    }
-    
-    // Server info endpoint
-    if (req.url === '/info' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({
-        name: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        description: 'Comprehensive MCP server for Mindbody API',
-        capabilities: {
-          tools: true,
-          resources: false,
-          prompts: false
-        },
-        transport: {
-          type: 'sse',
-          endpoint: '/sse',
-          cors: true
-        }
-      }));
-      return;
-    }
-    
-    // SSE endpoint - create transport for each connection
-    if (req.url === '/sse' && req.method === 'GET') {
-      // DNS rebinding protection. Must run before any header is written,
-      // otherwise the response is already committed and we cannot send a 403.
-      const rebindingError = checkDnsRebinding(req, dnsRebinding);
-      if (rebindingError) {
-        console.error(`Rejected SSE connection: ${rebindingError}`);
-        res.writeHead(403, { 'Content-Type': 'text/plain' });
-        res.end(rebindingError);
-        return;
-      }
-
-      // Set SSE headers.
-      // These must be set via setHeader (not writeHead) because the SDK's
-      // SSEServerTransport.start() issues its own res.writeHead(200, ...) when
-      // connect() runs. Calling writeHead here first throws
-      // ERR_HTTP_HEADERS_SENT and kills the SSE endpoint. setHeader values are
-      // merged into that writeHead, with the SDK's own Content-Type winning.
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
-
-      // Create SSE transport for this connection
-      const transport = new SSEServerTransport('/sse', res as any, {
-        // DNS rebinding protection - ON by default, env-driven.
-        enableDnsRebindingProtection: dnsRebinding.enableDnsRebindingProtection,
-        allowedHosts: dnsRebinding.allowedHosts,
-        allowedOrigins: dnsRebinding.allowedOrigins,
-      });
-
-      // Give this connection its own Server with its own tool handlers.
-      const connectionServer = createMcpServer();
-      activeServers.add(connectionServer);
-
-      // Connect the server to this transport
-      await connectionServer.connect(transport);
-
-      // Handle connection close
-      req.on('close', () => {
-        activeServers.delete(connectionServer);
-        transport.close();
-      });
-      
-      return;
-    }
-    
-    // Handle POST requests to SSE endpoint (for sending messages back)
-    if (req.url === '/sse' && req.method === 'POST') {
-      // This will be handled by the SSE transport
-      // Just pass through with CORS headers
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      return;
-    }
-    
-    // 404 for other paths
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not Found');
+  // Routing lives in src/sseServer.ts: bearer auth first, then /health, /info,
+  // GET /sse (open a stream) and POST /sse?sessionId= (one message for the
+  // session that owns that id). Every connection gets its own Server instance
+  // so concurrent sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
+  const sse = createSseRequestHandler({
+    createMcpServer,
+    authToken,
+    dnsRebinding,
+    corsOrigin: process.env.MCP_CORS_ORIGIN || '*',
+    serverName: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
+    serverVersion: process.env.MCP_SERVER_VERSION || '2.0.0',
   });
-  
+  httpServer.on('request', sse.listener);
+
   // Start the HTTP server
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(port, host, () => {
@@ -1822,14 +1687,7 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     console.error(`\nShutting down SSE server gracefully (${signal})...`);
-    for (const active of activeServers) {
-      try {
-        await active.close();
-      } catch {
-        // Connection already torn down; nothing to do.
-      }
-    }
-    activeServers.clear();
+    await sse.closeAll();
     httpServer.close(() => {
       console.error('Server closed');
       process.exit(0);
