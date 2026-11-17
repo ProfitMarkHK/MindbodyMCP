@@ -4,8 +4,10 @@
 
 ```bash
 cd /path/to/MindbodyMCP
-npm install
+bun install
 ```
+
+Bun is the runtime; if you only have Node.js, see [Using Node.js](../README.md#using-nodejs-optional).
 
 ## 2. Configure Environment
 
@@ -22,18 +24,12 @@ Then edit `.env` with your Mindbody credentials.
 Run the test script to verify everything works:
 
 ```bash
-npm run test:tool
+bun run test:tool
 ```
 
 This will attempt to fetch Alexia Bauer's schedule. If successful, you'll see her classes listed.
 
-## 4. Build the Project
-
-```bash
-npm run build
-```
-
-## 5. Configure Claude Desktop
+## 4. Configure Claude Desktop
 
 Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 
@@ -41,8 +37,8 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 {
   "mcpServers": {
     "mindbody": {
-      "command": "node",
-      "args": ["/path/to/MindbodyMCP/dist/index.js"],
+      "command": "bun",
+      "args": ["run", "/path/to/MindbodyMCP/src/index.ts"],
       "env": {
         "MINDBODY_API_KEY": "your_api_key",
         "MINDBODY_SITE_ID": "-99",
@@ -54,11 +50,11 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 }
 ```
 
-## 6. Restart Claude Desktop
+## 5. Restart Claude Desktop
 
 After saving the config, restart Claude Desktop to load the MCP server.
 
-## 7. Test in Claude
+## 6. Test in Claude
 
 Try asking:
 - "Using the mindbody tool, show me Alexia Bauer's schedule for this week"
@@ -74,7 +70,7 @@ If the test script fails:
 4. Check the console for specific error messages
 
 If Claude can't find the tool:
-1. Make sure you built the project (`npm run build`)
+1. Make sure `bun` is on the PATH Claude Desktop uses (`bun --version`; there is no build step)
 2. Verify the path in claude_desktop_config.json is correct
 3. Check Claude's MCP logs for errors
 4. Restart Claude Desktop completely

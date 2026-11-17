@@ -46,3 +46,7 @@ dist/
 # Temporary files
 tmp/
 temp/
+# Not deployed to Railway
+nextjs-app/
+.claude/
+.agents/

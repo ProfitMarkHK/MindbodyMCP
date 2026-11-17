@@ -40,16 +40,13 @@ bun --version
 
 ### Alternative: Use Node.js
 
-If you prefer Node.js:
+Bun is the default runtime. If you prefer Node.js 20+:
 
 ```bash
-# Ensure Node.js 20+ is installed
 node --version
-
-# Switch to Node.js configuration
-./switch.bat node  # Windows
-# or
-cp package.node.json package.json  # macOS/Linux
+npm install
+npm run node:build    # compile to dist/ (nothing builds it for you)
+node dist/index.js    # or: npm run node:start (1Password), npm run node:dev (tsx, no build)
 ```
 
 ## Step 2: Clone the Repository
@@ -345,10 +342,10 @@ In Claude Desktop:
    - Second identical request should be faster
    - Look for cache-related output in logs
 
-3. **Consider switching to Bun**
+3. **Make sure you are running on Bun** (not the Node.js option)
    ```bash
-   ./switch.bat bun
    bun install
+   bun run dev
    ```
 
 ## Next Steps
