@@ -835,7 +835,8 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           `completed or no-show one takes no status action, no payment, no reschedule and no session type change ` +
           `(notes are still fine); ` +
           `execute complete needs the appointment to have started, in the site's timezone. applyPayment may not be ` +
-          `combined with a reschedule. Does not cancel: use cancelAppointments.`,
+          `combined with a reschedule. test: true is a dry run: the same guards run, Mindbody validates the ` +
+          `update and nothing is saved (result has dryRun: true). Does not cancel: use cancelAppointments.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -868,6 +869,13 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
               description:
                 "Apply a current applicable client service from the client's account. Refused alongside a " +
                 'reschedule, and on an appointment that has already taken place.',
+            },
+            test: {
+              type: 'boolean',
+              description:
+                'Dry run (default false): sent as Test. Every guard still runs, so a dry run is refused wherever ' +
+                'a real call would be. Mindbody validates the update and saves nothing; the result carries ' +
+                'dryRun: true and no appointment. Repeat without test to apply it.',
             },
           },
           required: ['clientId', 'appointmentId'],
@@ -1428,7 +1436,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.sendEmail as boolean | undefined,
           args.applyPayment as boolean | undefined,
           args.execute as UpdateAppointmentExecute | undefined,
-          args.sessionTypeId as number | undefined
+          args.sessionTypeId as number | undefined,
+          args.test as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(updateAppointmentResult, null, 2) }] };
 

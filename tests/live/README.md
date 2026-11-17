@@ -152,7 +152,7 @@ indistinguishable in a CI log.
 | Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientPurchases` (walks up to 20 clients for one with a purchase in the default window, then reads that sale back by `saleId` over a one-day window); `getClientSchedule` (default window for one client, then walks up to 40 clients from a year back for one with bookings and checks each row's `kind`, ids and flags; loud skip if none has any) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
-| Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
+| Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, dry-run probe (`test: true`, issue #30), reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
 | Booking-cancel resolver | `cancelClientBooking` refusals for two locators and an unmatched one (no write) | books the run's client into a future class (`addClientToClass`, `requirePayment: false`), then `cancelClientBooking` with `lateCancel: false` and a schedule read-back; a second booking cancelled the same way with `observeBalance: true`, asserting the `impact` reads are timestamped; loud skip if no class can be booked |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
@@ -440,7 +440,11 @@ With `SKIP_LIVE_E2E=1` every test in the file skips.
 
 On the #26 branch (`observeBalance`, one more test), the same day: 37 pass, 0 fail.
 
-- **No skips and no loud skips.** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
+On the #30 branch, the same day: 35 pass, 0 fail (before #81). Its dry-run probe passed: `updateAppointment` with `test: true` and new notes answered `dryRun: true`, and the re-read showed the booking's notes (`live-e2e <run token>`), times, staff and status unchanged. On master the default run gains this one test.
+
+The tallies below this point are from the 2026-10-28 run (29 tests), kept for the field evidence they record.
+
+- **No skips and no loud skips (2026-10-28).** Every test ran, including the two writes the older tally treated as financial edges: the comp-paid checkout and `purchaseContract`. The `it.skip` that used to sit at this point is gone — its premise ("requires real payment details") was wrong, because `UseAccountCredit` is a flag, not an instrument.
 - **The contract purchase passed.** It walked the 11 contracts at location 1, was refused `356` ("Contract 356 cannot be purchased at location 1"), accepted `347` (Corporate Monthly Membership) and returned `ClientContractId` 16045. `getClientContracts` read it back as `Id` 16045 with `AutopayStatus: "Active"`.
 - **The custom-payment checkout passed (2026-10-28).** `getCustomPaymentMethods` returned `23` "paypal" and `24` "Groupon Voucher" (the response reports `TotalResults: 0` beside them, which the tool ignores). The checkout sold service `1395` paid `{ Type: 'Custom', Metadata: { Amount, Id: 23 } }` and Mindbody committed the sale.
 - **The comp-paid checkout passed.** It sold the appointment's pricing option (service `1395`, price 30) against the booked appointment with `Payments: [{ Type: 'Comp' }]`. Mindbody committed the sale, and the appointment read back as `Completed`. The response's reconciled-appointment arrays were empty, so the `LIVE NOTE (loud)` about the unverified link prints on every run.

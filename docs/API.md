@@ -152,12 +152,13 @@ Ownership, status and timing are verified before anything is written, and none o
 | `executePayment` | boolean | No | Deprecated and ignored: not part of the Mindbody API | - |
 | `sendEmail` | boolean | No | Send email | - |
 | `applyPayment` | boolean | No | Apply a current applicable client service from that client's account. Refused alongside a reschedule, and on an appointment that has already taken place. | - |
+| `test` | boolean | No | Dry run, sent as `Test`. Every guard still runs. Mindbody validates the update and saves nothing; the result has `dryRun: true` and no `appointment`. See "Dry run". A non-boolean is refused before any request. | `false` (`Test` omitted) |
 
 #### Guards
 
 | Guard | Rule |
 |-------|------|
-| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer, and `sessionTypeId`, when given, a positive integer. No API call is made if any fails. |
+| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer, `sessionTypeId`, when given, a positive integer, and `test`, when given, a boolean. No API call is made if any fails. |
 | Ownership | The appointment must belong to `clientId`, looked up with `GET /appointment/staffappointments`. Someone else's appointment — or one outside the window, one year back through two years ahead — is reported as `not found for this client`, which never names the real owner. |
 | Terminal status | A `Cancelled` or `LateCancelled` appointment is final: no update of any kind is accepted. |
 | Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment`, no reschedule and no `sessionTypeId` change: a completed appointment has been checked out, so changing its service would desync it from the sale. Notes, staff and resources are still accepted. |
@@ -178,8 +179,15 @@ interface UpdateAppointmentResponse {
     sessionTypeId?: number; // as Mindbody returns it after the update
   };
   message: string;
+  dryRun?: true; // only on a successful test call; appointment is then absent
 }
 ```
+
+#### Dry run
+
+`test: true` sends the same request with `Test: true`. `UpdateAppointmentRequest` documents it as "validated, but no new appointment data is added". The guards are unchanged, so a dry run is refused exactly where a real call would be, and a refused dry run sends no POST. A successful dry run returns `success: true`, `dryRun: true`, no `appointment`, and a message that says nothing was saved. A Mindbody refusal is `success: false` with no `dryRun`.
+
+The spec is not proof: `POST /client/addclient` on `-99` refuses `Test: true` outright. The live tier probes this endpoint (`updateAppointment test=true validates a notes change and leaves the appointment unchanged`): it sends a dry run that would change the notes, then re-reads the appointment and requires the original notes, times, staff and status. **Observed on `-99` on 2026-11-16:** Mindbody accepted the dry run and the re-read showed the original notes unchanged.
 
 #### Session type changes
 
@@ -205,6 +213,10 @@ Mindbody may reset the end time to the new session type's default duration, so t
 
 ```json
 { "clientId": "100015", "appointmentId": 987654, "sessionTypeId": 88 }
+```
+
+```json
+{ "clientId": "100015", "appointmentId": 987654, "notes": "Allergic to latex", "test": true }
 ```
 
 #### Error Handling

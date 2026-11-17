@@ -536,6 +536,7 @@ Update an existing appointment: reschedule, change staff, session type or notes,
 - `executePayment` (optional): Deprecated and ignored (not part of the Mindbody API)
 - `sendEmail` (optional): Send email
 - `applyPayment` (optional): Apply a current applicable client service from that client's account
+- `test` (optional, default false): Dry run, sent as `Test: true`. Every guard below still runs, so a dry run is refused wherever a real call would be, with no POST. A successful dry run returns `dryRun: true`, no `appointment`, and a message saying nothing was saved. A non-boolean is refused before any request. Verified on `-99` (2026-11-16): a dry run of a notes change left the notes unchanged on re-read.
 
 **Guards.** All are checked before any write, and none can be skipped by omitting an argument:
 - `clientId` must be a non-empty string and `appointmentId` a positive integer.

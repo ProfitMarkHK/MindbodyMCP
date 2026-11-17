@@ -570,10 +570,10 @@ describe("cancelAppointmentsTool — execution", () => {
 describe("updateAppointmentTool — request-shape guards make no calls at all", () => {
   it("requires a non-empty clientId and a positive integer appointmentId", async () => {
     const client = new RecordingClient([row(1)]);
-    expect((await updateAppointmentTool("  ", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache)).rejected)
+    expect((await updateAppointmentTool("  ", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache)).rejected)
       .toEqual([{ id: -1, reason: "clientId must be a non-empty string" }]);
     for (const bad of [0, -3, 2.5, "5", null, undefined]) {
-      const result = await updateAppointmentTool(CLIENT, bad as any, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+      const result = await updateAppointmentTool(CLIENT, bad as any, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
       expect(result.success).toBe(false);
       expect(result.rejected[0].id).toBe(-1);
       expect(result.rejected[0].reason).toContain("not a positive integer");
@@ -584,7 +584,7 @@ describe("updateAppointmentTool — request-shape guards make no calls at all", 
   for (const value of ["cancel", "latecancel", "CANCEL", "explode"]) {
     it(`refuses execute ${value} and makes no call`, async () => {
       const client = new RecordingClient([row(1)]);
-      const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, value as any, undefined, client, client.cache);
+      const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, value as any, undefined, undefined, client, client.cache);
       expect(result.success).toBe(false);
       expect(result.rejected[0].id).toBe(-1);
       expect(result.message).toContain("cancelAppointments");
@@ -594,7 +594,7 @@ describe("updateAppointmentTool — request-shape guards make no calls at all", 
 
   it("refuses applyPayment combined with a reschedule, with no call", async () => {
     const client = new RecordingClient([row(1)]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, "2030-01-01T10:00:00", undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, "2030-01-01T10:00:00", undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain("cannot be combined with a reschedule");
     expect(client.callCount).toBe(0);
@@ -604,7 +604,7 @@ describe("updateAppointmentTool — request-shape guards make no calls at all", 
 describe("updateAppointmentTool — ownership is verified before any write", () => {
   it("looks the appointment up by id and the single ClientId, over a window that reaches both ways", async () => {
     const client = new RecordingClient([row(1)]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.gets.map((get) => get.url)).toEqual(["/site/sites", "/appointment/staffappointments"]);
     const { params } = client.gets[1];
@@ -619,7 +619,7 @@ describe("updateAppointmentTool — ownership is verified before any write", () 
 
   it("reports another client's appointment as not found, without naming the owner", async () => {
     const client = new RecordingClient([row(1, { ClientId: "C-200" })]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "overwrite their notes", undefined, undefined, undefined, "complete", undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "overwrite their notes", undefined, undefined, undefined, "complete", undefined, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected).toEqual([{ id: 1, reason: "not found for this client" }]);
     expect(JSON.stringify(result)).not.toContain("C-200");
@@ -628,26 +628,26 @@ describe("updateAppointmentTool — ownership is verified before any write", () 
 
   it("compares ClientId as strings, strictly", async () => {
     const numeric = new RecordingClient([row(1, { ClientId: 100 })]);
-    expect((await updateAppointmentTool("100", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, numeric, numeric.cache)).success).toBe(true);
+    expect((await updateAppointmentTool("100", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, numeric, numeric.cache)).success).toBe(true);
     const prefixClient = new RecordingClient([row(1, { ClientId: 100 })]);
-    const prefix = await updateAppointmentTool("10", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prefixClient, prefixClient.cache);
+    const prefix = await updateAppointmentTool("10", 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prefixClient, prefixClient.cache);
     expect(prefix.rejected).toEqual([{ id: 1, reason: "not found for this client" }]);
     expect(prefixClient.posts).toHaveLength(0);
   });
 
   it("reads ownership off Client.Id when ClientId is absent", async () => {
     const client = new RecordingClient([{ Id: 1, Status: "Booked", StartDateTime: siteLocal(2 * DAY_MS), Client: { Id: CLIENT } }]);
-    expect((await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache)).success).toBe(true);
+    expect((await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache)).success).toBe(true);
   });
 
   it("refuses an id the lookup did not return, and one it returned twice", async () => {
     const missing = new RecordingClient([row(1)]);
-    expect((await updateAppointmentTool(CLIENT, 9, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, missing, missing.cache)).rejected)
+    expect((await updateAppointmentTool(CLIENT, 9, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, missing, missing.cache)).rejected)
       .toEqual([{ id: 9, reason: "not found for this client" }]);
     expect(missing.posts).toHaveLength(0);
 
     const twice = new RecordingClient([row(1), row(1)]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, twice, twice.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, twice, twice.cache);
     expect(result.rejected[0].reason).toContain("more than once");
     expect(twice.posts).toHaveLength(0);
   });
@@ -659,7 +659,7 @@ describe("updateAppointmentTool — ownership is verified before any write", () 
       if (url === "/site/sites") return realGet<T>(url, config);
       throw new Error("Mindbody API Error: down (Code: 500)");
     };
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain("appointment lookup failed");
     expect(client.posts).toHaveLength(0);
@@ -668,7 +668,7 @@ describe("updateAppointmentTool — ownership is verified before any write", () 
   it("fails closed without a site timezone, with no lookup and no write", async () => {
     const client = new RecordingClient([row(1)]);
     client.siteZone = null;
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toStartWith("site timezone unavailable:");
     expect(client.dataGets).toHaveLength(0);
@@ -680,7 +680,7 @@ describe("updateAppointmentTool — status guards make no writes", () => {
   for (const status of ["Cancelled", "LateCancelled"]) {
     it(`refuses every update to a ${status} appointment`, async () => {
       const client = new RecordingClient([row(1, { Status: status })]);
-      const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "a note", undefined, undefined, undefined, undefined, undefined, client, client.cache);
+      const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "a note", undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
       expect(result.success).toBe(false);
       expect(result.rejected[0].reason).toContain(`appointment status is ${status}, which is final`);
       expect(client.posts).toHaveLength(0);
@@ -691,27 +691,27 @@ describe("updateAppointmentTool — status guards make no writes", () => {
     it(`refuses execute on a ${status} appointment but still allows a note`, async () => {
       for (const verb of ["arrive", "unarrive", "complete"]) {
         const client = new RecordingClient([row(1, { Status: status })]);
-        const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, verb as any, undefined, client, client.cache);
+        const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, verb as any, undefined, undefined, client, client.cache);
         expect(result.success).toBe(false);
         expect(result.rejected[0].reason).toContain(`appointment status is ${status}, which has settled`);
         expect(client.posts).toHaveLength(0);
       }
 
       const noted = new RecordingClient([row(1, { Status: status })]);
-      const ok = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "late note", undefined, undefined, undefined, undefined, undefined, noted, noted.cache);
+      const ok = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, "late note", undefined, undefined, undefined, undefined, undefined, undefined, noted, noted.cache);
       expect(ok.success).toBe(true);
       expect(noted.posts).toHaveLength(1);
     });
 
     it(`refuses applyPayment and a reschedule on a ${status} appointment`, async () => {
       const paid = new RecordingClient([row(1, { Status: status })]);
-      const paidResult = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, paid, paid.cache);
+      const paidResult = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true, undefined, undefined, undefined, paid, paid.cache);
       expect(paidResult.success).toBe(false);
       expect(paidResult.rejected[0].reason).toContain("a payment cannot be applied");
       expect(paid.posts).toHaveLength(0);
 
       const moved = new RecordingClient([row(1, { Status: status })]);
-      const movedResult = await updateAppointmentTool(CLIENT, 1, undefined, siteLocal(3 * DAY_MS), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, moved, moved.cache);
+      const movedResult = await updateAppointmentTool(CLIENT, 1, undefined, siteLocal(3 * DAY_MS), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, moved, moved.cache);
       expect(movedResult.success).toBe(false);
       expect(movedResult.rejected[0].reason).toContain("cannot be rescheduled");
       expect(moved.posts).toHaveLength(0);
@@ -722,13 +722,13 @@ describe("updateAppointmentTool — status guards make no writes", () => {
 describe("updateAppointmentTool — the complete guard uses the SITE's zone", () => {
   it("refuses to complete an appointment that has not started, and allows one that has", async () => {
     const future = new RecordingClient([row(1, { StartDateTime: siteLocal(2 * DAY_MS) })]);
-    const refused = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, future, future.cache);
+    const refused = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, undefined, future, future.cache);
     expect(refused.success).toBe(false);
     expect(refused.rejected[0].reason).toContain("needs the appointment to have started");
     expect(future.posts).toHaveLength(0);
 
     const started = new RecordingClient([row(2, { StartDateTime: siteLocal(-2 * HOUR_MS) })]);
-    const allowed = await updateAppointmentTool(CLIENT, 2, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, started, started.cache);
+    const allowed = await updateAppointmentTool(CLIENT, 2, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, undefined, started, started.cache);
     expect(allowed.success).toBe(true);
     expect(started.posts[0].data.Execute).toBe("complete");
   });
@@ -739,12 +739,12 @@ describe("updateAppointmentTool — the complete guard uses the SITE's zone", ()
         await withProcessTz(processTz, async () => {
           const notYet = new RecordingClient([row(1, { StartDateTime: siteLocal(2 * HOUR_MS, siteTz) })]);
           notYet.siteZone = siteTz;
-          expect((await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, notYet, notYet.cache)).success).toBe(false);
+          expect((await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, undefined, notYet, notYet.cache)).success).toBe(false);
           expect(notYet.posts).toHaveLength(0);
 
           const underway = new RecordingClient([row(2, { StartDateTime: siteLocal(-2 * HOUR_MS, siteTz) })]);
           underway.siteZone = siteTz;
-          expect((await updateAppointmentTool(CLIENT, 2, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, underway, underway.cache)).success).toBe(true);
+          expect((await updateAppointmentTool(CLIENT, 2, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, undefined, underway, underway.cache)).success).toBe(true);
           expect(underway.posts).toHaveLength(1);
         });
       });
@@ -753,21 +753,21 @@ describe("updateAppointmentTool — the complete guard uses the SITE's zone", ()
 
   it("refuses an unparseable start time rather than comparing it", async () => {
     const client = new RecordingClient([row(1, { StartDateTime: "not a date" })]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "complete", undefined, undefined, client, client.cache);
     expect(result.rejected[0].reason).toBe("appointment start time could not be parsed");
     expect(client.posts).toHaveLength(0);
   });
 
   it("does not time-gate arrive: a future booking can still be checked in", async () => {
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(6 * DAY_MS) })]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "arrive", undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "arrive", undefined, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts[0].data.Execute).toBe("arrive");
   });
 
   it("does not time-gate a reschedule or a confirm of a future booking", async () => {
     const client = new RecordingClient([row(1)]);
-    const result = await updateAppointmentTool(CLIENT, 1, undefined, siteLocal(4 * DAY_MS), undefined, undefined, undefined, undefined, false, undefined, "confirm", undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 1, undefined, siteLocal(4 * DAY_MS), undefined, undefined, undefined, undefined, false, undefined, "confirm", undefined, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts[0].data.StartDateTime).toBe(siteLocal(4 * DAY_MS));
   });
@@ -778,7 +778,7 @@ describe("updateAppointmentTool — the write", () => {
 
   it("sends exactly the given fields and never ExecutePayment", async () => {
     const client = new RecordingClient([row(5)], updated);
-    const result = await updateAppointmentTool(CLIENT, 5, 42, undefined, undefined, undefined, "n", true, true, true, "arrive", undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 5, 42, undefined, undefined, undefined, "n", true, true, true, "arrive", undefined, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(result.rejected).toEqual([]);
     expect(result.appointment?.status).toBe("Arrived");
@@ -796,13 +796,13 @@ describe("updateAppointmentTool — the write", () => {
 
   it("omits Execute when not given", async () => {
     const client = new RecordingClient([row(5)], updated);
-    await updateAppointmentTool(CLIENT, 5, 42, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+    await updateAppointmentTool(CLIENT, 5, 42, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
     expect(client.posts[0].data.Execute).toBeUndefined();
   });
 
   it("reports an upstream failure", async () => {
     const client = new RecordingClient([row(5)], () => { throw new Error("Mindbody API Error: nope (Code: 400)"); });
-    const result = await updateAppointmentTool(CLIENT, 5, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
+    const result = await updateAppointmentTool(CLIENT, 5, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.message).toContain("nope");
   });
@@ -814,7 +814,7 @@ describe("updateAppointmentTool — sessionTypeId (issue #29)", () => {
   });
   /** Only sessionTypeId (and optionally applyPayment) set; every other field omitted. */
   const changeType = (client: RecordingClient, sessionTypeId: unknown, applyPayment?: boolean) =>
-    updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, applyPayment, undefined, sessionTypeId as any, client, client.cache);
+    updateAppointmentTool(CLIENT, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, applyPayment, undefined, sessionTypeId as any, undefined, client, client.cache);
 
   it("sends SessionTypeId on an owned Arrived appointment and returns the response's sessionTypeId and endDateTime", async () => {
     const client = new RecordingClient([row(1, { Status: "Arrived" })], changed);
@@ -897,6 +897,94 @@ describe("updateAppointmentTool — sessionTypeId (issue #29)", () => {
     const client = new RecordingClient([row(1)], changed);
     await changeType(client, undefined);
     expect(client.posts[0].data.SessionTypeId).toBeUndefined();
+  });
+});
+
+describe("updateAppointmentTool — test (dry run, issue #30)", () => {
+  const echoed = (_url: string, data: any) => ({
+    Appointment: { Id: data.AppointmentId, Status: "Booked", Notes: data.Notes, StartDateTime: "s", EndDateTime: "e", Staff: { Name: "Ada" } },
+  });
+  /** notes, reschedule, applyPayment and test set positionally; everything else omitted. */
+  const update = (
+    client: RecordingClient,
+    opts: { notes?: string; startDateTime?: string; applyPayment?: boolean; test?: unknown }
+  ) =>
+    updateAppointmentTool(CLIENT, 1, undefined, opts.startDateTime, undefined, undefined, opts.notes, undefined, undefined, opts.applyPayment, undefined, undefined, opts.test as any, client, client.cache);
+
+  it("sends Test: true and labels the result a dry run that saved nothing", async () => {
+    const client = new RecordingClient([row(1)], echoed);
+    const result = await update(client, { notes: "new note", test: true });
+    expect(result.success).toBe(true);
+    expect(result.dryRun).toBe(true);
+    expect(client.posts).toHaveLength(1);
+    expect(client.posts[0].data).toEqual({ AppointmentId: 1, Notes: "new note", Test: true });
+    expect(result.message).toContain("Dry run");
+    expect(result.message).toContain("saved nothing");
+    expect(result.message).not.toMatch(/updated|successfully/i);
+    // The echoed appointment is not presented as the appointment's new state.
+    expect(result.appointment).toBeUndefined();
+  });
+
+  it("omits Test when test is not given, and is not labelled a dry run", async () => {
+    const client = new RecordingClient([row(1)], echoed);
+    const result = await update(client, { notes: "new note" });
+    expect(result.success).toBe(true);
+    expect("Test" in client.posts[0].data && client.posts[0].data.Test !== undefined).toBe(false);
+    expect(result.dryRun).toBeUndefined();
+    expect(result.message).toBe("Appointment updated successfully");
+  });
+
+  it("sends Test: false for test: false, never true", async () => {
+    const client = new RecordingClient([row(1)], echoed);
+    const result = await update(client, { notes: "new note", test: false });
+    expect(client.posts[0].data.Test).toBe(false);
+    expect(result.dryRun).toBeUndefined();
+  });
+
+  for (const bad of ["true", 1, 0, null, {}]) {
+    it(`refuses test ${JSON.stringify(bad)} before any request`, async () => {
+      const client = new RecordingClient([row(1)], echoed);
+      const result = await update(client, { notes: "x", test: bad });
+      expect(result.success).toBe(false);
+      expect(result.rejected[0].id).toBe(-1);
+      expect(result.rejected[0].reason).toContain("is not a boolean");
+      expect(result.dryRun).toBeUndefined();
+      expect(client.callCount).toBe(0);
+    });
+  }
+
+  it("refuses a dry run on another client's appointment, with no POST", async () => {
+    const client = new RecordingClient([row(1, { ClientId: "C-200" })], echoed);
+    const result = await update(client, { notes: "x", test: true });
+    expect(result.rejected).toEqual([{ id: 1, reason: "not found for this client" }]);
+    expect(result.dryRun).toBeUndefined();
+    expect(client.posts).toHaveLength(0);
+  });
+
+  it("refuses a dry run on a Cancelled appointment, with no POST", async () => {
+    const client = new RecordingClient([row(1, { Status: "Cancelled" })], echoed);
+    const result = await update(client, { notes: "x", test: true });
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain("appointment status is Cancelled, which is final");
+    expect(client.posts).toHaveLength(0);
+  });
+
+  it("refuses a dry run of applyPayment with a reschedule, with no call at all", async () => {
+    const client = new RecordingClient([row(1)], echoed);
+    const result = await update(client, { startDateTime: "2030-01-01T10:00:00", applyPayment: true, test: true });
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain("cannot be combined with a reschedule");
+    expect(client.callCount).toBe(0);
+  });
+
+  it("returns a Mindbody refusal of a dry run as success: false, not a dry-run success", async () => {
+    const client = new RecordingClient([row(1)], () => {
+      throw new Error("Mindbody API Error: Test mode is not allowed for this endpoint (Code: 400)");
+    });
+    const result = await update(client, { notes: "x", test: true });
+    expect(result.success).toBe(false);
+    expect(result.dryRun).toBeUndefined();
+    expect(result.message).toContain("Test mode is not allowed");
   });
 });
 
