@@ -174,7 +174,7 @@ export function gracefulClose(httpServer: http.Server, timeoutMs: number): Promi
   });
 }
 
-/** Railway's `deploy.drainingSeconds` (railway.json) must be at least this. */
+/** Railway's `deploy.drainingSeconds` (.railway/railway.ts) must be at least this. */
 export const SHUTDOWN_GRACE_MS = 25_000;
 
 export async function startHttpServer(opts: HttpServerOptions): Promise<http.Server> {

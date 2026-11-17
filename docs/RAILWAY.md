@@ -12,7 +12,7 @@ only the HTTP transport and Railway.
 
 ## Why it costs almost nothing idle
 
-- **Serverless (App Sleeping).** `railway.json` sets `deploy.sleepApplication`. Railway
+- **Serverless (App Sleeping).** `.railway/railway.ts` sets `deploy.sleepApplication`. Railway
   treats a service as idle when it sends no outbound packets for about 5 minutes
   and sleeps it; the next request wakes it. The first request after a sleep can
   return a 502 or be slow, so a client may need to retry once.
@@ -31,17 +31,24 @@ only the HTTP transport and Railway.
   are re-fetched on demand.
 - **Deploys and restarts drain.** On SIGTERM the server stops accepting new
   connections and lets in-flight requests (a checkout, a booking) finish for up to
-  25 s before cutting them. `railway.json` sets `drainingSeconds: 30` to match.
-  Keep it above 25.
+  25 s before cutting them. `.railway/railway.ts` sets `drainingSeconds: 30` to
+  match. Keep it above 25.
 
 ## Deploy
 
-1. New Railway project from this repo (it builds `Dockerfile`; Railway injects `PORT`,
-   which wins over `MCP_PORT`).
+1. New Railway project with a service named `mindbody-mcp` (it builds `Dockerfile`;
+   Railway injects `PORT`, which wins over `MCP_PORT`).
 2. Variables: `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME`,
    `MINDBODY_SOURCE_PASSWORD`, plus the Cloudflare variables below. Start on the
    `-99` sandbox. Do not import `.env.example` wholesale.
-3. `/health` is the healthcheck path.
+3. Apply the service settings with `railway link`, then `railway config plan` and
+   `railway config apply` (needs `bun install` for the `railway` dev dependency).
+   `.railway/railway.ts` sets the `/health` healthcheck, App Sleeping, the 30 s drain
+   and the restart policy; it manages no variables or domains. Railway ignores
+   `railway.json` for new services and stops reading it on 2026-12-01, so do not
+   add one. Check that the settings took: `railway status --json` shows
+   `sleepApplication`, `drainingSeconds` and `healthcheckPath` on the latest
+   deployment.
 4. Pricing map: attach a volume at e.g. `/data`, set `MINDBODY_PRICING_MAP_DIR=/data`,
    and set `RAILWAY_RUN_UID=0` (the image runs as non-root). Run one replica.
    Whether a volume works with Serverless is not confirmed; test a sleep/wake cycle.
@@ -65,14 +72,22 @@ Cloudflare does sign-in and the MCP OAuth flow; the server only verifies the
    `CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com`, `CF_ACCESS_AUD=<tag>`,
    `MCP_ALLOWED_HOSTS=<your hostname>`.
 5. **Remove the Railway-generated `*.up.railway.app` domain.** Until then the origin
-   is reachable directly (it still returns 401 without a valid JWT, but it can keep
-   the service awake, and `MCP_ALLOWED_HOSTS` turns such requests into 403).
+   is reachable directly: `/health` answers 200 and `/mcp` answers 403 (its Host is
+   not in `MCP_ALLOWED_HOSTS`), and those replies can keep the service awake.
 6. Connect a client to `https://<hostname>/mcp`.
 
+Verified on 2026-11-17 against a throwaway Railway project, a test hostname and the
+`-99` sandbox: the `/health` healthcheck, the SIGTERM drain, App Sleeping (asleep
+after about 5 idle minutes; the first request woke it with a 200 in about 2 s),
+Cloudflare Access
+refusing requests without credentials (403 at the edge, `/health` included), and a
+service token reaching `initialize`, `tools/list` and `getSites`. Service-token JWTs
+carry `common_name` (the token's client ID), which the server logs.
+
 Not verified: that claude.ai connectors complete Access's Managed OAuth flow
-(Cloudflare documents it for AI agents and CLIs generally), and the exact claims in
-service-token JWTs. Test both before rolling out. Cloudflare's proxy times out
-requests after roughly 100 s (HTTP 524), which a very large `getSales` range could hit.
+(Cloudflare documents it for AI agents and CLIs generally), and Google Workspace
+sign-in. Test both before rolling out. Cloudflare's proxy times out requests after
+roughly 100 s (HTTP 524), which a very large `getSales` range could hit.
 
 ## Local use
 
