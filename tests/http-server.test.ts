@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
-import { createAccessJwtVerifier, createHttpServer, gracefulClose, type HttpServerOptions } from '../src/httpServer';
+import { createAccessJwtVerifier, createHttpServer, gracefulClose, trackConnections, type HttpServerOptions } from '../src/httpServer';
 
 const TEAM = 'studio.cloudflareaccess.com';
 const AUD = 'aud-tag-123';
@@ -238,7 +238,7 @@ describe('gracefulClose', () => {
   });
 
   it('cuts a request that outlives the grace period', async () => {
-    const server = http.createServer(() => { /* never answers */ });
+    const server = trackConnections(http.createServer(() => { /* never answers */ }));
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const port = (server.address() as AddressInfo).port;
     const inflight = fetch(`http://127.0.0.1:${port}/`).then(() => 'answered', () => 'cut');

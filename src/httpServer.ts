@@ -85,7 +85,7 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
     throw new Error(`MCP_ALLOW_UNAUTHENTICATED requires binding to a loopback host (got ${opts.host}); it would expose the studio's Mindbody login`);
   }
 
-  return http.createServer(async (req, res) => {
+  return trackConnections(http.createServer(async (req, res) => {
     const path = (req.url ?? '').split('?')[0];
 
     // Railway's healthcheck sends its own Host, so this stays unauthenticated and minimal.
@@ -134,7 +134,24 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
         json(res, 500, { jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
       }
     }
+  }));
+}
+
+const openSockets = new WeakMap<http.Server, Set<import('node:net').Socket>>();
+
+/**
+ * Record a server's open sockets so `gracefulClose` can destroy them. Bun's
+ * `closeAllConnections()` does not cut a request whose handler has not answered
+ * (Bun 1.4.0), so the grace-period cut must destroy the sockets itself.
+ */
+export function trackConnections(httpServer: http.Server): http.Server {
+  const sockets = new Set<import('node:net').Socket>();
+  openSockets.set(httpServer, sockets);
+  httpServer.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
   });
+  return httpServer;
 }
 
 /**
@@ -145,7 +162,10 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
  */
 export function gracefulClose(httpServer: http.Server, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => httpServer.closeAllConnections(), timeoutMs);
+    const timer = setTimeout(() => {
+      httpServer.closeAllConnections();
+      for (const socket of openSockets.get(httpServer) ?? []) socket.destroy();
+    }, timeoutMs);
     httpServer.close(() => {
       clearTimeout(timer);
       resolve();
