@@ -47,11 +47,16 @@ export interface ClientBooking {
   staffName?: string;
   locationId?: number;
   locationName?: string;
+  /** The client's purchase that pays for the visit (Visit.ServiceId). */
   serviceId?: number;
   serviceName?: string;
+  /** The pricing option itself (Visit.ProductId); what a late-cancel rule's serviceId matches. */
+  productId?: number;
   /** From the class's ClassDescription.Program; undefined for appointments and unresolved classes. */
   programId?: number;
   programName?: string;
+  /** From the class's ClassDescription.SessionType; undefined for appointments and unresolved classes. */
+  sessionTypeId?: number;
   signedIn: boolean;
   lateCancelled: boolean;
   /** Mindbody's `Missed` flag. The sandbox sets it on future, not-yet-attended enrollment visits too. */
@@ -135,8 +140,10 @@ export async function getClientScheduleTool(
       locationName: nameFor(locations, visit?.LocationId),
       serviceId: optionalNumber(visit?.ServiceId),
       serviceName: visit?.ServiceName ?? undefined,
+      productId: optionalNumber(visit?.ProductId),
       programId: optionalNumber(program?.Id),
       programName: program?.Name ?? undefined,
+      sessionTypeId: optionalNumber(cls?.ClassDescription?.SessionType?.Id),
       signedIn: Boolean(visit?.SignedIn),
       lateCancelled: Boolean(visit?.LateCancelled),
       missed: Boolean(visit?.Missed),

@@ -8,7 +8,7 @@ import {
   siteLocalToEpochMs,
   withDefaultDates,
 } from '../utils/siteTime.js';
-import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
+import { lateCancelConfig, lateCancelConfigRefusal, lateCancelRefusalFor, positiveIdOrUndefined, type LateCancelConfig } from '../utils/lateCancel.js';
 
 /**
  * The name on an embedded `AppointmentStaff`: `DisplayName` if present, else
@@ -642,7 +642,7 @@ function cancellationRejectionReason(
   row: any,
   nowMs: number,
   timeZone: string,
-  lateCancelWindowHrs?: number
+  lateConfig?: LateCancelConfig
 ): string | null {
   // Mindbody returns StartDateTime as site-local wall time with no UTC offset.
   // It is converted to a UTC instant using the SITE's IANA zone (never this
@@ -659,7 +659,11 @@ function cancellationRejectionReason(
       : '';
     return `appointment status is ${row.Status}, which cannot be cancelled${hint}`;
   }
-  return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
+  if (!lateConfig) return null;
+  // The spec's Appointment has no pricing-option id (only the client's pass,
+  // ClientServiceId), so serviceId stays unknown and rules key on program/session type.
+  const context = { programId: positiveIdOrUndefined(row.ProgramId), sessionTypeId: positiveIdOrUndefined(row.SessionTypeId) };
+  return lateCancelRefusalFor(context, lateConfig, startMs, nowMs);
 }
 
 /**
@@ -689,12 +693,14 @@ export async function cancelAppointmentsTool(
 
   // `lateCancel` forfeits the service, so it is honoured only inside the site's
   // late-cancel window, which the spec does not expose. Unknown window: refuse.
-  const lateWindowHours = lateCancel ? lateCancelWindowHours() : undefined;
-  if (lateCancel && lateWindowHours === undefined) {
+  const loaded = lateCancel ? lateCancelConfig() : undefined;
+  const configRefusal = loaded ? lateCancelConfigRefusal(loaded) : null;
+  const lateConfig = loaded && 'config' in loaded ? loaded.config : undefined;
+  if (configRefusal) {
     return {
       success: false,
       cancelled: [],
-      rejected: [{ id: -1, reason: LATE_CANCEL_WINDOW_UNKNOWN }],
+      rejected: [{ id: -1, reason: configRefusal }],
       message: 'Late-cancel window unknown; no appointments were cancelled.',
     };
   }
@@ -722,7 +728,7 @@ export async function cancelAppointmentsTool(
       rejected.push({ id, reason: owned.reason });
       continue;
     }
-    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone, lateWindowHours);
+    const reason = cancellationRejectionReason(owned.row, Date.now(), timeZone, lateConfig);
     if (reason) {
       rejected.push({ id, reason });
     } else {

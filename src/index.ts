@@ -237,7 +237,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           properties: {
             clientId: { type: 'string', description: 'Client ID' },
             classId: { type: 'number', description: 'Class ID' },
-            lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for a class starting within that window' },
+            lateCancel: { type: 'boolean', description: 'Mark as late cancel (default false). Refused unless a late-cancel window applies to it (MINDBODY_LATE_CANCEL_WINDOW_RULES first match, else MINDBODY_LATE_CANCEL_WINDOW_HOURS), and then only for a class starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'classId'],
@@ -893,7 +893,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
               items: { type: 'number' },
               description: `1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs to cancel`,
             },
-            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for sessions starting within that window' },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless a late-cancel window applies to each (MINDBODY_LATE_CANCEL_WINDOW_RULES first match, else MINDBODY_LATE_CANCEL_WINDOW_HOURS), and then only for sessions starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
           },
           required: ['clientId', 'appointmentIds'],
@@ -906,8 +906,8 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           'visitId, or startDateTime (site-local, optionally narrowed by classScheduleId). The client\'s schedule is read ' +
           '(the locator\'s day for startDateTime, otherwise today through 30 days) and only booked, non-waitlisted, ' +
           'non-signed-in, future rows are kept; zero or several matches refuse with the candidates and write nothing. ' +
-          'lateCancel omitted: late when the start is inside MINDBODY_LATE_CANCEL_WINDOW_HOURS, normal otherwise (normal when unset). ' +
-          'lateCancel true: refused outside the window or when it is unset. The write goes through cancelAppointments, ' +
+          'lateCancel omitted: late when the start is inside the booking\'s window (first matching MINDBODY_LATE_CANCEL_WINDOW_RULES entry, else MINDBODY_LATE_CANCEL_WINDOW_HOURS), normal otherwise (normal when no window applies; refused when a rule cannot be decided or the rules are invalid). ' +
+          'lateCancel true: refused outside the window or when none applies. The write goes through cancelAppointments, ' +
           'cancelEnrollmentVisits or removeClientFromClass by kind, so all their guards apply; waitlist entries are refused. ' +
           'Never retried: if the POST fails the schedule is re-read once and outcome is cancelled, still-booked or unknown. ' +
           'observeBalance true: the paying service\'s Remaining and the account balance are read before and after the write ' +
@@ -1032,7 +1032,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           properties: {
             clientId: { type: 'string', description: 'Client ID who owns every visit' },
             visitIds: { type: 'array', items: { type: 'number' }, description: `1 to ${MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST} visit IDs, no duplicates` },
-            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless MINDBODY_LATE_CANCEL_WINDOW_HOURS is configured, and then only for sessions starting within that window' },
+            lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless a late-cancel window applies to each (MINDBODY_LATE_CANCEL_WINDOW_RULES first match, else MINDBODY_LATE_CANCEL_WINDOW_HOURS), and then only for sessions starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
           },
           required: ['clientId', 'visitIds'],

@@ -13,7 +13,7 @@ import {
   getEnrollmentsTool,
 } from "../src/tools/enrollmentManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
-import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
+import { LATE_CANCEL_RULES_ENV, LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import {
   SITE_TIMEZONE_ENV,
   epochMsToSiteLocal,
@@ -613,5 +613,53 @@ describe("cancelEnrollmentVisitsTool — writes", () => {
     clientWithEnrollment(client);
     const result = await cancelEnrollmentVisitsTool(CLIENT, [100002], false, false, client, client.cache);
     expect(result.success).toBe(true);
+  });
+});
+
+describe("cancelEnrollmentVisitsTool — per-service late-cancel rules (issue #21)", () => {
+  afterEach(() => delete process.env[LATE_CANCEL_RULES_ENV]);
+
+  it("applies a matching programId rule: inside its 100h window although outside the 24h default", async () => {
+    const client = new RecordingClient();
+    clientWithEnrollment(client);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: ENROLLMENT_PROGRAM.Id, hours: 100 }]);
+    const result = await cancelEnrollmentVisitsTool(CLIENT, [100002], true, false, client, client.cache); // 72h out
+    expect(result.success).toBe(true);
+    expect(client.posts[0].data.LateCancel).toBe(true);
+  });
+
+  it("matches serviceId on the visit's ProductId (the pricing option), not its ServiceId", async () => {
+    const client = new RecordingClient();
+    const { a } = clientWithEnrollment(client);
+    client.visits = [visitRow(100002, 25202, a, { ServiceId: 55, ProductId: 66 })];
+    process.env[LATE_CANCEL_WINDOW_ENV] = "100";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ serviceId: 66, hours: 2 }, { serviceId: 55, hours: 100 }]);
+    const result = await cancelEnrollmentVisitsTool(CLIENT, [100002], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain(`${LATE_CANCEL_RULES_ENV}[0] (serviceId 66)`);
+    expect(client.posts).toEqual([]);
+  });
+
+  it("falls back to the default window when no rule matches", async () => {
+    const client = new RecordingClient();
+    clientWithEnrollment(client);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 999, hours: 100 }]);
+    const result = await cancelEnrollmentVisitsTool(CLIENT, [100002], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain("outside the site's late-cancel window");
+  });
+
+  it("refuses lateCancel with no call on malformed rules; lateCancel: false is unaffected", async () => {
+    const client = new RecordingClient();
+    clientWithEnrollment(client);
+    process.env[LATE_CANCEL_WINDOW_ENV] = "300";
+    process.env[LATE_CANCEL_RULES_ENV] = '[{"programId":10,"hours":-1}]';
+    const refused = await cancelEnrollmentVisitsTool(CLIENT, [100002], true, false, client, client.cache);
+    expect(refused.rejected[0].reason).toContain('rule 0 {"programId":10,"hours":-1}');
+    expect(client.callCount).toBe(0);
+    const plain = await cancelEnrollmentVisitsTool(CLIENT, [100002], false, false, client, client.cache);
+    expect(plain.success).toBe(true);
   });
 });

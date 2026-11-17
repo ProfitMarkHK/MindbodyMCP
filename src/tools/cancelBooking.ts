@@ -4,7 +4,7 @@
  *
  * The resolver owns the decision and none of the writing. It finds the booking
  * on the client's schedule (`getClientScheduleTool`), picks late or normal from
- * the site's single late-cancel window (`src/utils/lateCancel.ts`), and hands
+ * the late-cancel window that applies to it (`src/utils/lateCancel.ts`), and hands
  * the write to the existing guarded tool for the booking's kind:
  *
  *   appointment -> cancelAppointmentsTool      (POST /appointment/updateappointment)
@@ -27,9 +27,20 @@ import type { AxiosRequestConfig } from 'axios';
 import { mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
 import { errorMessage } from '../utils/errors.js';
-import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
+import {
+  LATE_CANCEL_WINDOW_ENV,
+  LATE_CANCEL_WINDOW_UNKNOWN,
+  lateCancelConfig,
+  lateCancelConfigRefusal,
+  lateCancelWindowRefusal,
+  positiveIdOrUndefined,
+  resolveLateCancelWindow,
+  type LateCancelConfig,
+  type LateCancelContext,
+  type LateCancelWindow,
+} from '../utils/lateCancel.js';
 import { getSiteTimeZone, siteDateString, siteDateStringPlusDays, siteLocalToEpochMs } from '../utils/siteTime.js';
-import { cancelAppointmentsTool } from './appointmentManagement.js';
+import { cancelAppointmentsTool, lookupAppointmentsForClient, ownedAppointmentRow } from './appointmentManagement.js';
 import { buildImpact, readSnapshot, resolvePayingService, type CancelImpact } from './cancelImpact.js';
 import { removeClientFromClassTool } from './classManagement.js';
 import { DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS, getClientScheduleTool, type ClientBooking } from './clientSchedule.js';
@@ -61,8 +72,10 @@ export interface CancelDecision {
   mode: CancelMode;
   /** The caller's `lateCancel`, unchanged; undefined when omitted. */
   requested?: boolean;
-  /** MINDBODY_LATE_CANCEL_WINDOW_HOURS; undefined when unset. */
+  /** The window that applied, in hours; undefined when none did. */
   windowHours?: number;
+  /** Where `windowHours` came from: MINDBODY_LATE_CANCEL_WINDOW_HOURS or a MINDBODY_LATE_CANCEL_WINDOW_RULES entry. */
+  windowSource?: string;
   /** From the decision instant to the booking's start, site zone. */
   hoursUntilStart: number;
   reason: string;
@@ -218,41 +231,96 @@ function stillBooked(row: ClientBooking | null): boolean {
   return !(row.appointmentStatus && RELEASED_APPOINTMENT_STATUSES.has(row.appointmentStatus));
 }
 
+/**
+ * The booking's window: resolved, none configured for it (`unmatched`), or a
+ * refusal that a late cancel must not get past.
+ */
+type WindowResolution = { window: LateCancelWindow } | { refusal: string; unmatched?: true };
+
+/**
+ * Rule context for the booking. Class and enrollment rows carry it; an
+ * appointment's program and session type need its row (one GET), read only
+ * when rules are configured. A failed read leaves them unknown.
+ */
+async function bookingContext(
+  booking: ClientBooking,
+  clientId: string,
+  client: IMindbodyClient,
+  cache: SimpleCache
+): Promise<LateCancelContext> {
+  if (booking.kind !== 'appointment') {
+    return { serviceId: booking.productId, programId: booking.programId, sessionTypeId: booking.sessionTypeId };
+  }
+  const lookup = await lookupAppointmentsForClient(client, cache, clientId, [booking.appointmentId!], 0);
+  if (!lookup.ok) return {};
+  const owned = ownedAppointmentRow(lookup.rows ?? [], booking.appointmentId!, clientId);
+  if ('reason' in owned) return {};
+  return { programId: positiveIdOrUndefined(owned.row?.ProgramId), sessionTypeId: positiveIdOrUndefined(owned.row?.SessionTypeId) };
+}
+
+async function windowFor(
+  booking: ClientBooking,
+  clientId: string,
+  config: LateCancelConfig,
+  client: IMindbodyClient,
+  cache: SimpleCache
+): Promise<WindowResolution> {
+  // No rules: the default alone, with no extra read (the behaviour before rules existed).
+  if (config.rules.length === 0) {
+    return config.defaultHours === undefined
+      ? { refusal: LATE_CANCEL_WINDOW_UNKNOWN, unmatched: true }
+      : { window: { hours: config.defaultHours, source: LATE_CANCEL_WINDOW_ENV } };
+  }
+  return resolveLateCancelWindow(await bookingContext(booking, clientId, client, cache), config);
+}
+
 /** Late or normal, or a refusal message. */
 function decide(
   req: CancelClientBookingRequest,
   startMs: number,
   nowMs: number,
-  windowHours: number | undefined
+  resolution: WindowResolution,
+  rulesConfigured: boolean
 ): { decision: CancelDecision } | { refusal: string; decision: CancelDecision } {
   const hoursUntilStart = Math.round(((startMs - nowMs) / 3_600_000) * 100) / 100;
-  const base = { requested: req.lateCancel, windowHours, hoursUntilStart };
+  const window = 'window' in resolution ? resolution.window : undefined;
+  const base = { requested: req.lateCancel, windowHours: window?.hours, windowSource: window?.source, hoursUntilStart };
   if (req.lateCancel === false) {
     return { decision: { ...base, mode: 'normal', reason: 'lateCancel: false was requested' } };
   }
   if (req.lateCancel === true) {
-    // windowHours is defined here: an unset window is refused before any read.
-    const refusal = lateCancelWindowRefusal(startMs, nowMs, windowHours!);
+    // With nothing configured, lateCancel: true is refused before any read; here a window, or a rule refusal.
+    const refusal = window
+      ? lateCancelWindowRefusal(startMs, nowMs, window.hours, window.source)
+      : (resolution as { refusal: string }).refusal;
     const decision: CancelDecision = { ...base, mode: 'late', reason: 'lateCancel: true was requested' };
     return refusal ? { refusal, decision } : { decision };
   }
-  if (windowHours === undefined) {
-    return {
-      decision: {
-        ...base,
-        mode: 'normal',
-        reason: 'MINDBODY_LATE_CANCEL_WINDOW_HOURS is unset, so no cancellation is treated as late',
-      },
-    };
+  if (!window) {
+    if ('unmatched' in resolution && resolution.unmatched) {
+      return {
+        decision: {
+          ...base,
+          mode: 'normal',
+          reason: rulesConfigured
+            ? `no rule in MINDBODY_LATE_CANCEL_WINDOW_RULES matches and ${LATE_CANCEL_WINDOW_ENV} is unset, so the cancellation is not treated as late`
+            : 'MINDBODY_LATE_CANCEL_WINDOW_HOURS is unset, so no cancellation is treated as late',
+        },
+      };
+    }
+    // A rule might apply but cannot be decided: neither late nor normal is safe to guess.
+    const refusal = `${(resolution as { refusal: string }).refusal} (lateCancel was omitted, and neither late nor normal can be chosen safely: pass lateCancel explicitly)`;
+    return { refusal, decision: { ...base, mode: 'normal', reason: 'the late-cancel window could not be decided' } };
   }
-  const inside = lateCancelWindowRefusal(startMs, nowMs, windowHours) === null;
+  const inside = lateCancelWindowRefusal(startMs, nowMs, window.hours, window.source) === null;
+  const of = window.source === LATE_CANCEL_WINDOW_ENV ? '' : ` of ${window.source}`;
   return {
     decision: {
       ...base,
       mode: inside ? 'late' : 'normal',
       reason: inside
-        ? `starts in ${hoursUntilStart}h, inside the ${windowHours}h late-cancel window`
-        : `starts in ${hoursUntilStart}h, outside the ${windowHours}h late-cancel window`,
+        ? `starts in ${hoursUntilStart}h, inside the ${window.hours}h late-cancel window${of}`
+        : `starts in ${hoursUntilStart}h, outside the ${window.hours}h late-cancel window${of}`,
     },
   };
 }
@@ -268,14 +336,16 @@ function delegateMessage(result: any): string {
 /**
  * Cancel one booking for one client, choosing late or normal.
  *
- * 1. Validate the request; `lateCancel: true` with no configured window is
- *    refused here, before any read.
+ * 1. Validate the request; `lateCancel: true` with no configured window, or
+ *    any lateCancel other than `false` with invalid rules, is refused here,
+ *    before any read.
  * 2. Resolve the site zone (fail closed) and read the client's schedule: the
  *    locator's day for `startDateTime`, otherwise today through
  *    DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS.
  * 3. Match the locator, keep booked, non-waitlisted, non-signed-in, future rows.
  *    Exactly one proceeds; zero or several refuse with the candidates.
- * 4. Decide late vs normal, then delegate the write. Never retried.
+ * 4. Resolve the booking's window (the default, or the first matching rule),
+ *    decide late vs normal, then delegate the write. Never retried.
  * 5. If the POST failed, re-read the schedule once: `cancelled` when the
  *    booking is gone, `still-booked` when present, `unknown` when the read fails.
  */
@@ -287,10 +357,13 @@ export async function cancelClientBookingTool(
   const errors = requestErrors(req);
   if (errors.length > 0) return refused(`Request rejected; nothing was cancelled: ${errors.join('; ')}.`);
 
-  const windowHours = lateCancelWindowHours();
-  if (req.lateCancel === true && windowHours === undefined) {
-    return refused(`${LATE_CANCEL_WINDOW_UNKNOWN}. Nothing was cancelled.`);
+  const loaded = lateCancelConfig();
+  if (req.lateCancel !== false) {
+    // Invalid rules refuse an omitted lateCancel too: the decision would rest on a configuration that cannot be read.
+    const configRefusal = 'error' in loaded ? loaded.error : req.lateCancel === true ? lateCancelConfigRefusal(loaded) : null;
+    if (configRefusal) return refused(`${configRefusal}. Nothing was cancelled.`);
   }
+  const lateConfig: LateCancelConfig = 'config' in loaded ? loaded.config : { rules: [] };
 
   let timeZone: string;
   try {
@@ -329,7 +402,10 @@ export async function cancelClientBookingTool(
 
   const booking = cancellable[0];
   const startMs = siteLocalToEpochMs(String(booking.startDateTime), timeZone);
-  const decided = decide(req, startMs, nowMs, windowHours);
+  const resolution: WindowResolution = req.lateCancel === false
+    ? { refusal: LATE_CANCEL_WINDOW_UNKNOWN, unmatched: true }
+    : await windowFor(booking, req.clientId, lateConfig, client, cache);
+  const decided = decide(req, startMs, nowMs, resolution, lateConfig.rules.length > 0);
   const { decision } = decided;
   const mode = decision.mode;
   if ('refusal' in decided) {

@@ -71,6 +71,7 @@ MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services). Unset disables the checkout resolver
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless this is set; then only within N hours of the start
+# MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24}]'  # Optional per-service windows, first match wins, falling back to the default
 CACHE_TTL_MINUTES=5
 MCP_SERVER_NAME=mindbody-mcp
 MCP_SERVER_VERSION=2.0.0
@@ -186,7 +187,7 @@ The server provides 52 tools across 6 categories:
 - `getActiveSessionTimes` - List the active session start times per session type (the business-hours increments a session can start on). This is not bookable availability; use `getBookableItems` for that. The endpoint documents no day-of-week filter, so there is no `days` parameter
 - `getScheduleItems` - View schedules. Returns three lists — `appointments`, `availabilities` and `unavailabilities` — because the API keeps them separate
 
-**Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). `lateCancel: true` is refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set (the Mindbody API does not expose the site's late-cancel window), and then only for appointments starting within that many hours. Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed, NoShow or Arrived. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
+**Cancelling appointments:** `cancelAppointments` takes a `clientId`, 1 to 3 `appointmentIds` (no duplicates), and optional `lateCancel` and `sendEmail` (both default to false). `lateCancel: true` is refused unless a late-cancel window applies (the Mindbody API does not expose the site's late-cancel windows), and then only for appointments starting within that many hours. The window is the first matching rule in `MINDBODY_LATE_CANCEL_WINDOW_RULES` (per service, program or session type), else `MINDBODY_LATE_CANCEL_WINDOW_HOURS`; see "Late-cancel windows" in [CLAUDE.md](CLAUDE.md). Before anything is cancelled, every appointment must belong to that client, start in the future, and not already be Cancelled, LateCancelled, Completed, NoShow or Arrived. If any appointment fails a check, none are cancelled and the response's `rejected` list gives the reasons. The full parameter reference is in [CLAUDE.md](CLAUDE.md).
 
 ### 🎓 Enrollments
 - `getEnrollments` - List courses/workshops/series (class schedules whose program is an Enrollment program); the `id` is what `addClientToEnrollment` takes
