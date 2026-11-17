@@ -41,6 +41,9 @@ bun run dev
 # Run with SSE transport (production-like)
 bun run dev:sse
 
+# Run with Streamable HTTP transport (production-like; needs CF_ACCESS_* or MCP_ALLOW_UNAUTHENTICATED=true)
+bun run dev:http
+
 # Run tests
 bun test
 

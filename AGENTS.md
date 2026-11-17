@@ -27,6 +27,7 @@ bun run typecheck
 ### Development
 - `bun run dev` - Run in STDIO mode against **production** via 1Password (for local Claude Desktop testing; see Environment Variables)
 - `bun run dev:sse` - Run in SSE mode against **production** via 1Password (web-based, production-like)
+- `bun run dev:http` - Run in Streamable HTTP mode against **production** via 1Password (for hosted use; see [`docs/RAILWAY.md`](docs/RAILWAY.md))
 
 ### Testing
 - `bun test` - Run all tests (discovery is scoped to `tests/` by `bunfig.toml`;
@@ -44,7 +45,7 @@ bun run typecheck
   checklist: [`docs/quality-gates.md`](docs/quality-gates.md)
 
 ### Build
-- `bun run build` - Compile to `dist/` (required before publishing)
+- `bun run build` - Compile to `dist/` (not needed to run: Bun runs `src/` directly. Used by the optional Node.js path and before publishing)
 
 ## Architecture
 
@@ -64,10 +65,14 @@ Mindbody API
 ### Layers and Responsibilities
 
 **MCP Server (`src/index.ts`)**
-- Implements MCP protocol (STDIO and SSE transports)
+- Implements MCP protocol (STDIO, SSE and Streamable HTTP transports)
 - Routes `ListTools` and `CallTool` requests
 - Registers all tools and their schemas
 - Validates required environment variables
+
+**Transport Modules**
+- `src/sseAuth.ts` - Bearer-token gate for the SSE transport (`MCP_AUTH_TOKEN`)
+- `src/httpServer.ts` - Stateless Streamable HTTP at `/mcp` plus `/health`, gated by a Cloudflare Access JWT
 
 **Tools Layer (`src/tools/` - 7 domains)**
 - `classManagement.ts` - Class scheduling, bookings, waitlists, substitutions
@@ -166,7 +171,7 @@ export async function getClassesTool(
 - The four variables below must be set in the shell environment as `op://` references to the item the operator chooses. The references are not secrets, but they name the vault layout, so they are never committed.
 - Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items: the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
 - `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and ignores any `MINDBODY_SITE_ID` in the environment. Use it for all local work and tests against the sandbox.
-- `bun run dev`, `start`, `start:sse`, `start:prod` and `node:*` select production through the same references. Run them only on purpose. If a task truly needs a live site, state that explicitly before running one.
+- `bun run dev`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` select production through the same references. Run them only on purpose. If a task truly needs a live site, state that explicitly before running one.
 - The live E2E tier (`scripts/live-e2e.sh`, `tests/live/`) still reads `MINDBODY_TEST_*` names. The npm dev scripts do not.
 
 **Required environment variables (as `op://` references in the shell):**
@@ -295,7 +300,7 @@ describe('classManagement', () => {
 
 ### Integration Testing
 Test with Claude Desktop:
-1. Run `bun run dev` or `bun run dev:sse` (these use production credentials; see Environment Variables)
+1. Run `bun run dev`, `bun run dev:sse` or `bun run dev:http` (these use production credentials; see Environment Variables)
 2. Update Claude Desktop config to point to local server
 3. Test natural language queries
 

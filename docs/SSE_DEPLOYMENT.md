@@ -50,7 +50,7 @@ bun run src/index.ts --transport sse --host 127.0.0.1
 
 ### Docker Deployment
 
-The container runs `bun run dist/index.js` directly, so the `op`-wrapped scripts and 1Password setup do not apply here. Pass the `MINDBODY_*` values as shown below.
+The container runs `bun src/index.ts` directly (Bun executes the TypeScript source; there is no build step), so the `op`-wrapped scripts and 1Password setup do not apply here. Pass the `MINDBODY_*` values as shown below.
 
 ```bash
 # Build the image
@@ -118,7 +118,7 @@ sudo useradd -r -s /bin/false mcp-service
 
 # Install application
 sudo mkdir -p /opt/mindbody-mcp
-sudo cp -r dist package.json node_modules /opt/mindbody-mcp/
+sudo cp -r src package.json tsconfig.json node_modules /opt/mindbody-mcp/
 sudo chown -R mcp-service:mcp-service /opt/mindbody-mcp
 
 # Configure environment. The unit binds 0.0.0.0, so MCP_AUTH_TOKEN is required.

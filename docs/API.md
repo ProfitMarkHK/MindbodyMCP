@@ -191,7 +191,7 @@ The use case is a booking made under the wrong service (for example "Extensions 
 | `Completed`, `NoShow` | refused: the appointment has been checked out or has taken place |
 | `Cancelled`, `LateCancelled` | refused: final for every update |
 
-Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check. If the staff member is not set up for the new session type, Mindbody's error is returned unchanged as `success: false`.
+Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check (on the -99 sandbox, 30-minute type 23 changed to 60-minute type 200 kept the old end time). Mindbody's errors are returned unchanged as `success: false`. A type the staff member does not offer fails with the generic `Something went wrong. Please try again. (Code: Unknown)`, so check `getBookableItems` filtered by `staffIds` first. An appointment with a payment applied refuses any type change (`Payment found. Session type can't be updated when payment already applied.`).
 
 #### Examples
 
