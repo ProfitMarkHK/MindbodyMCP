@@ -1117,6 +1117,64 @@ describe('live tier — clients', () => {
 
 // ── 4. Service definitions ────────────────────────────────────────────────────
 
+/** How many future classes the resolver test tries to book before a loud skip. */
+const RESOLVER_CLASS_CANDIDATES = 5;
+const CANCEL_RESOLVER_TEST = 'cancelClientBooking resolves a class booking by classId and normal-cancels it';
+
+describe('live tier — booking-cancel resolver', () => {
+  itLive('cancelClientBooking refuses a bad locator and an unmatched one without writing', async () => {
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const twoLocators = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 1, visitId: 1 });
+    expect(twoLocators).toMatchObject({ success: false, outcome: 'refused' });
+    expect(twoLocators.message).toContain('exactly one of');
+
+    const unmatched = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 999999999 });
+    expect(unmatched).toMatchObject({ success: false, outcome: 'refused' });
+    expect(unmatched.receipt).toBeUndefined();
+  });
+
+  itLive(CANCEL_RESOLVER_TEST, async () => {
+    // Books the run's own client into a future class (RequirePayment false, so
+    // no pass is consumed), then cancels it through the resolver with
+    // lateCancel: false, so nothing is forfeited whatever the site window is.
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const listed = await callTool('getClasses', { startDate: day(2), endDate: day(9) });
+    const candidates = listed.classes
+      .filter((cls: any) => !cls.isCanceled && cls.spotsAvailable > 0)
+      .slice(0, RESOLVER_CLASS_CANDIDATES);
+
+    let booked: { classId: number; message?: string } | undefined;
+    const failures: string[] = [];
+    for (const cls of candidates) {
+      const result = await callTool('addClientToClass', { clientId: createdClientId, classId: cls.id, requirePayment: false });
+      if (result.success) {
+        booked = { classId: cls.id };
+        break;
+      }
+      failures.push(`class ${cls.id}: ${result.message}`);
+    }
+    if (!booked) {
+      announceLoudSkip(CANCEL_RESOLVER_TEST, [
+        `reason: could not book the run's client into any of ${candidates.length} future class(es) with space`,
+        ...failures,
+      ]);
+      return;
+    }
+
+    const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId: booked.classId, lateCancel: false });
+    expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal', booking: { classId: booked.classId } });
+    expect(['removeClientFromClass', 'cancelEnrollmentVisits']).toContain(result.receipt.tool);
+    expect(result.receipt).toMatchObject({ endpoint: '/class/removeclientfromclass', request: { ClassId: booked.classId, LateCancel: false } });
+
+    // Read back: the booking is no longer a live seat on the client's schedule.
+    const after = await callTool('getClientSchedule', { clientId: createdClientId, startDate: day(0), endDate: day(10) });
+    const still = after.bookings.filter((b: any) => b.classId === booked!.classId && !b.lateCancelled);
+    expect(still).toEqual([]);
+    console.log(`\n LIVE cancel resolver: class ${booked.classId} booked then cancelled via ${result.receipt.tool}.\n`);
+  }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
+});
+
 describe('live tier — service definitions', () => {
   itLive('getSites yields the site time zone every site-local date is computed in', async () => {
     const result = await callTool('getSites', {});
