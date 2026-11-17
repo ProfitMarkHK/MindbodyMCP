@@ -69,7 +69,7 @@ import {
   ROOT,
   scanFile,
   scanFiles,
-} from "./support/api-call-scanner";
+} from "./support/api-call-scanner.js";
 
 /**
  * Every directory the scan covers, with the tsconfig its imports resolve under

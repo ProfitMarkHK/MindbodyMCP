@@ -5,9 +5,9 @@ const startTime = process.hrtime.bigint();
 
 // Simulate MCP server startup
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import '@modelcontextprotocol/sdk/server/stdio.js';
 import dotenv from 'dotenv';
-import axios from 'axios';
+import 'axios';
 
 // Time various operations
 const markers: Record<string, bigint> = {
@@ -23,7 +23,7 @@ const { getTeacherScheduleTool } = await import('../src/tools/teacherSchedule.js
 markers.toolsLoaded = process.hrtime.bigint();
 
 // Create server instance
-const server = new Server(
+new Server(
   { name: 'perf-test', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );

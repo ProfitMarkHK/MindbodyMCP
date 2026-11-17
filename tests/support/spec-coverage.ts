@@ -27,7 +27,7 @@ import {
   relPosix,
   ROOT,
   scanFile,
-} from "./api-call-scanner";
+} from "./api-call-scanner.js";
 
 const HTTP_VERBS = ["get", "post", "put", "patch", "delete"] as const;
 

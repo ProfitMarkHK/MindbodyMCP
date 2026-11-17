@@ -11,6 +11,7 @@
 #   Gate 16 sha256(docs/openapi.json) == docs/openapi.lock — offline, fail-closed,
 #                                 runs second: Gates 1 and 13 both reason against
 #                                 the spec, so its identity is settled first
+#   Gate 3  bun run lint        — oxlint --deny-warnings (complexity budget 3b not wired)
 #   Gate 6  bun run typecheck   — tsc --noEmit
 #   Gate 1  bun test            — full suite (tests + hermetic E2E tier)
 #   Gate 2  (derived from Gate 1)— end-to-end acceptance suite, see below
@@ -18,8 +19,8 @@
 #                                 scanning src/
 #   Gate 7  bun run build       — tsc && chmod +x dist/index.js  (writes dist/, gitignored)
 #
-# Gates 3, 4, 5, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
-# need human judgement. Gate 3 is a gap (no linter or complexity rule is wired).
+# Gates 4, 5, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
+# need human judgement. Gate 3's complexity budget (3b) is a gap.
 # Gate 12 is green but deliberately not yet wired in; it is documented in
 # docs/quality-gates.md rather than run here. Gate 8 is wired, but only its
 # offline half: `npm audit --audit-level=moderate` needs the registry, so it is
@@ -259,6 +260,15 @@ else
   else
     pass "Gate 13 mandatory pagination (${PAGINATION_SITES} API GET call sites across src/ and scripts/; every paginated endpoint goes through fetchAllPages)"
   fi
+fi
+
+# ── Gate 3: lint ─────────────────────────────────────────────────────────────
+echo
+echo "=== Gate 3: bun run lint ==="
+if bun run lint; then
+  pass "Gate 3  bun run lint"
+else
+  fail "Gate 3  bun run lint"
 fi
 
 # ── Gate 6: type checking ────────────────────────────────────────────────────

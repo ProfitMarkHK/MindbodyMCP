@@ -1,5 +1,5 @@
 import axios from "axios";
-import { fetchAllPages as pageAll, mindbodyClient as client } from "../../../src/api/client";
+import { fetchAllPages as pageAll, mindbodyClient as client } from "../../../src/api/client.js";
 
 export async function stillCaught(dynamicPath: string) {
   await axios.get("/class/classes");

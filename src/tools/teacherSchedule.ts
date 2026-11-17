@@ -9,9 +9,7 @@ import {
 import {
   getWeekFromDate,
   getDayOfWeek,
-  formatTime,
   getDurationInMinutes,
-  getDateOnly,
 } from '../utils/dates.js';
 import { resolveReadTimeZone, siteDateString } from '../utils/siteTime.js';
 

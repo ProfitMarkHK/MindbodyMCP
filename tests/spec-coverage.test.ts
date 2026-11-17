@@ -7,7 +7,7 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { listSourceFiles, ROOT } from "./support/api-call-scanner";
+import { listSourceFiles, ROOT } from "./support/api-call-scanner.js";
 import {
   buildCoverage,
   computeCoverage,
@@ -16,7 +16,7 @@ import {
   mapToolsToSites,
   matchSpecPath,
   parseThreshold,
-} from "./support/spec-coverage";
+} from "./support/spec-coverage.js";
 
 const FIXTURE_DIR = join(ROOT, "tests/fixtures/spec-coverage");
 const specPaths = loadSpecPaths();

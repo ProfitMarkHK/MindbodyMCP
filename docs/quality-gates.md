@@ -91,7 +91,7 @@ its output so the side effect is never a surprise.
 |---|------|-------|----------------|
 | 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] root = "./tests"`, so discovery never walks nested worktrees or scratch checkouts in the repo root (Bun ignores `.gitignore` for discovery) — see gate 1 below. It also sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. |
 | 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
-| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured. See gaps 3a and 3b below. |
+| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **partial** | `bun run lint` (`oxlint --deny-warnings src tests scripts`, default rules) — exits 0. Run by the runner and by CI. No formatter and no complexity budget yet: see 3a and 3b below. |
 | 4 | New code covered by non-trivial tests | applies | manual review — the change's tests must exercise real logic paths, assert on outputs or state, and cover error paths, not just "returns without error". |
 | 5 | Documentation updated | applies | manual review — `README.md`, `Claude.md`, `AGENTS.md`, and `docs/` (notably `docs/quality-gates.md`) stay in sync with the change. |
 | 6 | Type checking passes | applies | `bun run typecheck` (`tsc --noEmit`) — currently exits 0. Run by the runner. |
@@ -417,20 +417,18 @@ and not needed" from "forgotten":
     exposed either, and a return is a second record, not a deletion. Nothing in
     v6 deletes a ClientContract, so `purchaseContract`'s leftover stands until it
     is removed by hand.
-- **Gate 3a — no linter (gap).** There is no `eslint`, `prettier`, or `biome`
-  configuration in the repo. `bun run lint` is `tsc --noEmit --strict`, which is
-  Gate 6 run again, not a linter — it cannot catch style or static-analysis
-  drift. `shellcheck` 0.11.0 is installed, but the only two tracked `.sh` files
-  are vendored skill scripts under `.agents/skills/`, not project code, so it has
-  nothing to check here. To close it: `bun add -d eslint prettier`, add a config
-  with `prettier --check src tests` and `eslint src --ext .ts`, and repoint
-  `lint` in `package.json` at the real linter instead of `tsc --strict`.
+- **Gate 3a — linter (applies); no formatter (gap).** `bun run lint` runs
+  oxlint with its default rules over `src`, `tests` and `scripts`, with
+  `--deny-warnings`, so any finding fails. It replaced `tsc --noEmit --strict`,
+  which was Gate 6 run again rather than a linter. There is no config file: add
+  `.oxlintrc.json` only to turn rules on. No formatter is wired.
 - **Gate 3b — no complexity budget (gap).** The budget is strict McCabe
-  complexity ≤ 10 per function, tests excluded, no grandfathering. Nothing
-  enforces it: there is no eslint config, so the `complexity` rule does not
-  exist. To close it, after 3a: add `"complexity": ["error", 10]` to the
-  eslint config and run it scoped to source (`eslint src --ext .ts`) so `tests/`
-  is excluded. Do not raise the threshold or grandfather existing functions.
+  complexity ≤ 10 per function, tests excluded, no grandfathering. oxlint has
+  the rule (`eslint/complexity`), but turning it on at 10 over `src` reports 33
+  functions today, so it is not enabled. To close it: bring those functions under
+  10, then add `"eslint/complexity": ["error", 10]` to an `.oxlintrc.json`
+  override scoped to `src/`. Do not raise the threshold or grandfather existing
+  functions.
 - **Gate 8 — security and secret scan (applies; secret scan passes).**
   - **Audit.** `npm audit --audit-level=moderate` → **`found 0 vulnerabilities`**,
     exit 0. The 12 advisories that made this gate red were **lockfile staleness,
@@ -851,13 +849,13 @@ and not needed" from "forgotten":
   "fix it upstream" is not available for 2 of the 5.
 - **Not in the runner, and why.** Gates 4, 5, 9, 10 and 11 need human judgement
   and are enforced by the done-done block in `AGENTS.md`, `Claude.md`, and
-  `.github/copilot-instructions.md` pointing at this file. Gates 3 and 12 are
-  excluded for different reasons: Gate 3 is still red (no linter, no complexity
-  budget); Gate 12's check needs `npx --yes` network access and, for
+  `.github/copilot-instructions.md` pointing at this file. Gate 3b and Gate 12 are
+  excluded for different reasons: Gate 3's complexity budget (3b) is not wired;
+  Gate 12's check needs `npx --yes` network access and, for
   the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
   is **half** in: its secret scan and staged-`.env` guard run as the first gate of
   the runner, so every commit is covered; only `npm audit` is left out, because it
-  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13
+  needs the registry and CI runs it. The runner covers Gates 1, 2, 3 (lint only), 6, 7, 8, 13
   and 16. Gates 2
   and 13 are executed by Gate 1's single `bun test` run and their verdicts read
   out of that run's log; see the Gate 2 and Gate 13 entries for why neither is

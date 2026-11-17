@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
-import { createAccessJwtVerifier, createHttpServer, gracefulClose, trackConnections, type HttpServerOptions } from '../src/httpServer';
+import { createAccessJwtVerifier, createHttpServer, gracefulClose, trackConnections, type HttpServerOptions } from '../src/httpServer.js';
 
 const TEAM = 'studio.cloudflareaccess.com';
 const AUD = 'aud-tag-123';

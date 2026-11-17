@@ -1,5 +1,5 @@
 // Fixture for tests/spec-coverage.test.ts: a miniature src/index.ts.
-import { listClasses as listClassesTool, bookClass, localOnly } from './tools';
+import { listClasses as listClassesTool, bookClass, localOnly } from './tools.js';
 
 declare const client: any;
 

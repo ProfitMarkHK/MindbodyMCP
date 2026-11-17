@@ -1,4 +1,4 @@
-import { mindbodyClient } from "../../../src/api/client";
+import { mindbodyClient } from "../../../src/api/client.js";
 
 export class Reader {
   private mindbody = mindbodyClient;

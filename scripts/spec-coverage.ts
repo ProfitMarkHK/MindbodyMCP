@@ -8,7 +8,7 @@
  * a floor: the script exits 1 when coverage is below it, 2 on a bad threshold.
  * The logic lives in tests/support/spec-coverage.ts, built on Gate 13's scanner.
  */
-import { computeCoverage, formatReport, parseThreshold } from "../tests/support/spec-coverage";
+import { computeCoverage, formatReport, parseThreshold } from "../tests/support/spec-coverage.js";
 
 let threshold: number;
 try {

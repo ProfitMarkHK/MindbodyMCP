@@ -49,7 +49,7 @@ class CountingClient implements IMindbodyClient {
   }
 
   async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    this.gets.push({ url, params: { ...(config?.params ?? {}) } });
+    this.gets.push({ url, params: { ...config?.params } });
     const listKey = url === '/class/classdescriptions' ? 'ClassDescriptions' : 'Classes';
     const row = listKey === 'Classes' ? classRow : { Id: 10, Name: 'Hot Yoga' };
     return { [listKey]: [row], PaginationResponse: { TotalResults: 1 } } as T;
