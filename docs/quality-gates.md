@@ -231,7 +231,7 @@ and not needed" from "forgotten":
   | Tool registration: the exact 40-name set from `index.ts`, unique, well-formed names, non-empty descriptions | `tools/list` |
   | Schema conformance: every `inputSchema` parses as JSON Schema, is `type: "object"`, every `required` entry exists in `properties`, every property has a `type` | `tools/list` |
   | Real dispatch across four domains: clients (`getClients`, `addClient`, `updateClient`, `getClientVisits`, `getClientAccountBalances`, `addClientArrival`), orders (`getPackages`, `getProducts`, `getContracts`, `checkoutShoppingCart`, `purchaseContract`), appointments (`getStaffAppointments`, `getBookableItems`, `getActiveSessionTimes`, `addAppointment`, `updateAppointment`, `cancelAppointments`), and the site and service-definition reads (`getSites`, `getServices`, `getSessionTypes`) | `domain — clients`, `domain — orders`, `domain — appointments`, `domain — site`, `domain — service definitions` |
-  | Pagination end to end: `getClasses` reads all 7 classes over three capped pages (`Offset` 0, 3, 6, each `Limit=200`); `getTeacherSchedule` finds a teacher who is only on staff page two and reads both pages of her classes; `getClassDescriptions`, `getWaitlistEntries`, `getClassSchedules`, `getLocations`, `getPrograms`, `getClientMemberships` and `getClientEnrollments` (via `/client/clientschedule`) each go through the pager; every GET in the session carried `Limit=200` and an `Offset` | `pagination — multi-page walks through the real server`, `process health` |
+  | Pagination end to end: `getClasses` reads all 7 classes over three capped pages (`Offset` 0, 3, 6, each `Limit=200`); `getTeacherSchedule` finds a teacher who is only on staff page two and reads both pages of her classes; `getClassDescriptions`, `getWaitlistEntries`, `getClassSchedules`, `getLocations`, `getPrograms`, `getClientMemberships` `getClientEnrollments` and `getClientSchedule` (via `/client/clientschedule`) each go through the pager; every GET in the session carried `Limit=200` and an `Offset` | `pagination — multi-page walks through the real server`, `process health` |
 | OAuth user token: issue and attach, 60s expiry skew, 23-hour fallback when `Expires` is absent, fail closed on refusal or missing source credentials (no API-key-only requests), concurrent callers share one issue | `OAuth user token — …`, `tests/auth-fail-closed.test.ts` |
   | Error paths: unknown tool name → `isError` result, missing required argument → Mindbody error message + code, upstream 4xx → error result then recovery | `tools/call — error handling` |
   | Process health: still alive and answering after every call above, and every outbound request landed on the loopback stub | `process health` |
@@ -285,8 +285,18 @@ and not needed" from "forgotten":
     opt-in live tier targets exactly this gap (see the live-tier entry below). It
     has now been run against the sandbox, but its last recorded run is not all
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
-  - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
-    manual script needing a server already listening.
+  - **SSE transport.** Everything here is STDIO. The SSE transport is covered
+    outside Gate 2, still inside Gate 1's `bun test`: `tests/sse-routing.test.ts`
+    runs the routing in-process and the real `src/index.ts` with
+    `--transport sse` against this stub (`initialize`, `tools/list` compared
+    with STDIO, one tool call, with and without `MCP_AUTH_TOKEN`), and
+    `tests/sse-auth.test.ts` covers the bearer check. `bun run test:sse` remains
+    a manual script for a server that is already listening.
+  - **Streamable HTTP transport.** `tests/http-server.test.ts` covers the server
+    in-process: the `/health` and `/mcp` routes, the Cloudflare Access JWT check
+    (issuer, audience, expiry, RS256), the loopback-only rule for
+    `MCP_ALLOW_UNAUTHENTICATED`, `MCP_ALLOWED_HOSTS`, and the SIGTERM drain. It
+    does not spawn the real process or exercise a live Access application.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)

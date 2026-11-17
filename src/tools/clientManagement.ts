@@ -8,6 +8,7 @@
  *   - `clientActivity.ts` — visits, arrival (attendance)
  *   - `clientNotes.ts`    — formula notes
  *   - `clientCompleteInfo.ts` — the one-read wallet snapshot
+ *   - `clientSchedule.ts` — upcoming bookings for cancellation resolution
  *   - `clientPurchases.ts` — purchase history with prices
  *
  * Re-exports are explicit rather than `export *`: a new export in a sub-file is
@@ -25,4 +26,5 @@ export {
 export { getClientVisitsTool, addClientArrivalTool } from './clientActivity.js';
 export { getClientFormulaNotesTool } from './clientNotes.js';
 export { getClientCompleteInfoTool } from './clientCompleteInfo.js';
+export { getClientScheduleTool } from './clientSchedule.js';
 export { getClientPurchasesTool } from './clientPurchases.js';

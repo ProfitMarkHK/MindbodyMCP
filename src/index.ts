@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -20,7 +19,9 @@ dotenv.config();
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
-import { resolveSseAuthToken, withBearerAuth } from './sseAuth.js';
+import { resolveSseAuthToken } from './sseAuth.js';
+import { createSseRequestHandler, resolveDnsRebindingSettings } from './sseServer.js';
+import { startHttpServer, createAccessJwtVerifier } from './httpServer.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -42,6 +43,7 @@ import {
   getClientContractsTool,
   getClientFormulaNotesTool,
   getClientCompleteInfoTool,
+  getClientScheduleTool,
   getClientPurchasesTool,
 } from './tools/clientManagement.js';
 import {
@@ -82,6 +84,7 @@ import {
   getActiveSessionTimesTool,
   getScheduleItemsTool,
 } from './tools/appointmentManagement.js';
+import { cancelClientBookingTool } from './tools/cancelBooking.js';
 import {
   getEnrollmentsTool,
   addClientToEnrollmentTool,
@@ -97,12 +100,18 @@ const USAGE = `Mindbody MCP Server v2.0
 Usage: mindbody-mcp [options]
 
 Options:
-  -t, --transport <stdio|sse>  Transport to serve (default: stdio)
-  -p, --port <number>          Port for the SSE transport (default: 3000)
-      --host <hostname>        Host to bind for SSE (default: 0.0.0.0)
-      --ssl-cert <path>        TLS certificate; requires --ssl-key
-      --ssl-key <path>         TLS private key; requires --ssl-cert
+  -t, --transport <stdio|sse|http>  Transport to serve (default: stdio)
+  -p, --port <number>          Port for the sse/http transport (default: 3000)
+      --host <hostname>        Host to bind for sse/http (default: 0.0.0.0)
+      --ssl-cert <path>        TLS certificate (sse only); requires --ssl-key
+      --ssl-key <path>         TLS private key (sse only); requires --ssl-cert
   -h, --help                   Show this help and exit
+
+Transports:
+  stdio  Local MCP clients over stdin/stdout (default).
+  sse    Server-Sent Events at /sse, guarded by a bearer token (MCP_AUTH_TOKEN).
+  http   Streamable HTTP at /mcp, guarded by a Cloudflare Access JWT
+         (CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD).
 
 See README.md for full setup and tool documentation.`;
 
@@ -345,6 +354,19 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             clientId: { type: 'string', description: 'Client ID' },
             startDate: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
             endDate: { type: 'string', description: 'End date in YYYY-MM-DD format' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
+        name: 'getClientSchedule',
+        description: 'A client\'s bookings in a window, one flat row per booking, for resolving which booking to cancel. Reads GET /client/clientschedule (every page, waitlist entries included) and, for class rows, GET /class/classes to learn the program. Each row has `kind`: `waitlist` (has waitlistEntryId), `appointment` (appointmentId, for cancelAppointments), `enrollment` (class in an Enrollment program; visitId for cancelEnrollmentVisits) or `class` (classId for removeClientFromClass), checked in that order. Rows carry visitId, classId, appointmentId, start/end (site-local), name, staff, location, service, program, signedIn, lateCancelled, missed and isWaitlisted. Staff and location names come from the cached catalogues and are undefined when the id is not in them. Read-only, and it does not say whether a cancellation would be late. Without dates: today through 30 days ahead in the site timezone.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID' },
+            startDate: { type: 'string', description: 'Start date (YYYY-MM-DD); default today at the site' },
+            endDate: { type: 'string', description: 'End date (YYYY-MM-DD); default 30 days after today at the site' },
           },
           required: ['clientId'],
         },
@@ -876,6 +898,33 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         },
       },
       {
+        name: 'cancelClientBooking',
+        description:
+          'Cancel one booking for one client and choose late or normal. Give exactly one locator: classId, appointmentId, ' +
+          'visitId, or startDateTime (site-local, optionally narrowed by classScheduleId). The client\'s schedule is read ' +
+          '(the locator\'s day for startDateTime, otherwise today through 30 days) and only booked, non-waitlisted, ' +
+          'non-signed-in, future rows are kept; zero or several matches refuse with the candidates and write nothing. ' +
+          'lateCancel omitted: late when the start is inside MINDBODY_LATE_CANCEL_WINDOW_HOURS, normal otherwise (normal when unset). ' +
+          'lateCancel true: refused outside the window or when it is unset. The write goes through cancelAppointments, ' +
+          'cancelEnrollmentVisits or removeClientFromClass by kind, so all their guards apply; waitlist entries are refused. ' +
+          'Never retried: if the POST fails the schedule is re-read once and outcome is cancelled, still-booked or unknown. ' +
+          'Returns { success, outcome, mode, booking, decision, receipt: { tool, endpoint, request (exact body), response, error }, message }.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            clientId: { type: 'string', description: 'Client ID who owns the booking' },
+            classId: { type: 'number', description: 'Locator: the class ID of a drop-in or enrollment session' },
+            appointmentId: { type: 'number', description: 'Locator: an appointment ID' },
+            visitId: { type: 'number', description: 'Locator: a visit ID from getClientSchedule' },
+            startDateTime: { type: 'string', description: 'Locator: site-local start, YYYY-MM-DDTHH:MM[:SS], no offset' },
+            classScheduleId: { type: 'number', description: 'Narrows a startDateTime match to one class schedule' },
+            lateCancel: { type: 'boolean', description: 'Omit to let the resolver decide; true forces late (refused outside the window); false forces normal' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
+          },
+          required: ['clientId'],
+        },
+      },
+      {
         name: 'getBookableItems',
         description: 'Get available appointment slots',
         inputSchema: {
@@ -1121,6 +1170,14 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
         );
         return { content: [{ type: 'text', text: JSON.stringify(visitsResult, null, 2) }] };
       
+      case 'getClientSchedule':
+        const clientScheduleResult = await getClientScheduleTool(
+          args.clientId as string,
+          args.startDate as string | undefined,
+          args.endDate as string | undefined
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(clientScheduleResult, null, 2) }] };
+
       case 'getClientMemberships':
         const membershipsResult = await getClientMembershipsTool(
           args.clientId as string,
@@ -1378,6 +1435,19 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.sendEmail as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(cancelAppointmentsResult, null, 2) }] };
+
+      case 'cancelClientBooking':
+        const cancelBookingResult = await cancelClientBookingTool({
+          clientId: args.clientId as string,
+          classId: args.classId as number | undefined,
+          appointmentId: args.appointmentId as number | undefined,
+          visitId: args.visitId as number | undefined,
+          startDateTime: args.startDateTime as string | undefined,
+          classScheduleId: args.classScheduleId as number | undefined,
+          lateCancel: args.lateCancel as boolean | undefined,
+          sendEmail: args.sendEmail as boolean | undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(cancelBookingResult, null, 2) }] };
       
       case 'getBookableItems':
         const bookableResult = await getBookableItemsTool(
@@ -1492,10 +1562,12 @@ function createMcpServer(): Server {
   return server;
 }
 
-// Parse command-line arguments
-function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string, sslCert?: string, sslKey?: string } {
+type TransportKind = 'stdio' | 'sse' | 'http';
+
+// Parse command-line arguments, falling back to environment variables.
+function parseArgs(): { transport: TransportKind, port?: number, host?: string, sslCert?: string, sslKey?: string } {
   const args = process.argv.slice(2);
-  let transport: 'stdio' | 'sse' = 'stdio';
+  let rawTransport: string | undefined;
   let port: number | undefined;
   let host: string | undefined;
   let sslCert: string | undefined;
@@ -1504,10 +1576,7 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--transport' || arg === '-t') {
-      const value = args[++i];
-      if (value === 'sse' || value === 'stdio') {
-        transport = value;
-      }
+      rawTransport = args[++i];
     } else if (arg === '--port' || arg === '-p') {
       port = parseInt(args[++i], 10);
     } else if (arg === '--host') {
@@ -1520,130 +1589,26 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
     }
   }
 
-  // Check environment variables as fallback
-  if (!transport && process.env.MCP_TRANSPORT) {
-    transport = process.env.MCP_TRANSPORT.toLowerCase() as 'stdio' | 'sse';
-  }
-  if (!port && process.env.MCP_PORT) {
-    port = parseInt(process.env.MCP_PORT, 10);
-  }
-  if (!host && process.env.MCP_HOST) {
-    host = process.env.MCP_HOST;
-  }
-  if (!sslCert && process.env.MCP_SSL_CERT) {
-    sslCert = process.env.MCP_SSL_CERT;
-  }
-  if (!sslKey && process.env.MCP_SSL_KEY) {
-    sslKey = process.env.MCP_SSL_KEY;
+  // MCP_TRANSPORT was declared but never read: `transport` was always truthy,
+  // so the old `if (!transport && process.env.MCP_TRANSPORT)` could not fire.
+  // `||`, not `??`: an empty MCP_TRANSPORT= must mean "unset", as it always did.
+  rawTransport = (rawTransport || process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+  if (rawTransport !== 'stdio' && rawTransport !== 'sse' && rawTransport !== 'http') {
+    console.error(`Unknown transport "${rawTransport}"; expected stdio, sse or http.`);
+    process.exit(1);
   }
 
-  return { transport, port, host, sslCert, sslKey };
-}
+  // PORT is what Railway (and most PaaS hosts) route to, so it wins for the
+  // HTTP transport. SSE keeps its existing MCP_PORT behaviour.
+  const envPort = rawTransport === 'http'
+    ? process.env.PORT || process.env.MCP_PORT
+    : process.env.MCP_PORT;
+  port ??= parseInt(envPort || '', 10) || undefined;
+  host ??= process.env.MCP_HOST;
+  sslCert ??= process.env.MCP_SSL_CERT;
+  sslKey ??= process.env.MCP_SSL_KEY;
 
-// Hosts that are always safe for local development. Note these are compared as
-// full `Host` header values, so they are listed with and without the default
-// port because the SDK does an exact string match on the header.
-const LOCAL_DEV_HOSTS = [
-  'localhost',
-  'localhost:3000',
-  '127.0.0.1',
-  '127.0.0.1:3000',
-  '[::1]',
-  '[::1]:3000',
-];
-
-/**
- * Enforce DNS rebinding protection at the HTTP layer.
- *
- * This exists because the SDK's own `validateRequestHeaders()` is only reachable
- * from `SSEServerTransport.handlePostMessage()`, which this server never calls -
- * the POST route below only sets CORS headers. So setting the transport options
- * alone provides NO protection here. We validate the GET ourselves, which is the
- * request that actually opens the stream.
- *
- * Semantics deliberately mirror the SDK exactly (see validateRequestHeaders in
- * SDK 1.32.1): Host is compared by exact string match against the allowlist, and
- * Origin is only checked when an origin allowlist is configured.
- *
- * @returns an error string when the request must be rejected, else undefined.
- */
-function checkDnsRebinding(
-  req: http.IncomingMessage,
-  settings: { enableDnsRebindingProtection: boolean; allowedHosts: string[]; allowedOrigins: string[] }
-): string | undefined {
-  if (!settings.enableDnsRebindingProtection) {
-    return undefined;
-  }
-
-  if (settings.allowedHosts.length > 0) {
-    const hostHeader = req.headers.host;
-    if (!hostHeader || !settings.allowedHosts.includes(hostHeader)) {
-      return `Invalid Host header: ${hostHeader}`;
-    }
-  }
-
-  if (settings.allowedOrigins.length > 0) {
-    const originHeader = req.headers.origin;
-    if (originHeader && !settings.allowedOrigins.includes(originHeader)) {
-      return `Invalid Origin header: ${originHeader}`;
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Resolve DNS rebinding protection settings for the SSE transport.
- *
- * Security posture: protection is ON by default.
- *
- * Evidence from SDK 1.32.1 (`dist/esm/server/sse.js`, validateRequestHeaders):
- *   - if `enableDnsRebindingProtection` is falsy, validation is skipped entirely;
- *   - the Host header is only checked when `allowedHosts` is non-empty;
- *   - the Origin header is only checked when `allowedOrigins` is non-empty.
- *
- * So enabling protection with an empty allowlist is a no-op (it does not reject
- * everything), and enabling it with a localhost allowlist keeps local dev
- * working. We therefore default `allowedHosts` to loopback names rather than
- * leaving it undefined.
- */
-function resolveDnsRebindingSettings(port: number): {
-  enableDnsRebindingProtection: boolean;
-  allowedHosts: string[];
-  allowedOrigins: string[];
-} {
-  // Opt-out escape hatch. Anything other than an explicit falsy value keeps
-  // protection enabled.
-  const rawOptOut = process.env.MCP_DNS_REBINDING_PROTECTION?.trim().toLowerCase();
-  const enabled = rawOptOut !== 'false' && rawOptOut !== '0' && rawOptOut !== 'no' && rawOptOut !== 'off';
-
-  const parseList = (value: string | undefined): string[] | undefined => {
-    const items = value
-      ?.split(',')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return items && items.length > 0 ? items : undefined;
-  };
-
-  const configuredHosts = parseList(process.env.MCP_ALLOWED_HOSTS);
-
-  // When the operator has not set an explicit allowlist, fall back to loopback
-  // plus the port we are actually listening on, so a non-default MCP_PORT in
-  // local development still works with zero configuration.
-  const allowedHosts = configuredHosts ?? [
-    ...LOCAL_DEV_HOSTS,
-    `localhost:${port}`,
-    `127.0.0.1:${port}`,
-    `[::1]:${port}`,
-  ];
-
-  return {
-    enableDnsRebindingProtection: enabled,
-    allowedHosts: enabled ? allowedHosts : [],
-    // Origins are only checked when explicitly configured; the SSE endpoint is
-    // normally driven by native MCP clients that send no Origin header at all.
-    allowedOrigins: parseList(process.env.MCP_ALLOWED_ORIGINS) ?? [],
-  };
+  return { transport: rawTransport, port, host, sslCert, sslKey };
 }
 
 // Start SSE server
@@ -1671,10 +1636,6 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error('DNS rebinding protection: DISABLED (MCP_DNS_REBINDING_PROTECTION opt-out set)');
   }
 
-  // Every SSE connection gets its own Server instance so that concurrent
-  // sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
-  const activeServers = new Set<Server>();
-  
   // Create HTTP/HTTPS server based on SSL configuration
   let httpServer: http.Server | https.Server;
   
@@ -1698,131 +1659,20 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error(`Starting HTTP SSE server on ${host}:${port}`);
   }
 
-  // Handle HTTP requests. withBearerAuth runs first, so an unauthenticated
-  // request is refused before the DNS-rebinding guard or any route below.
-  httpServer.on('request', withBearerAuth(authToken, async (req, res) => {
-    // Set CORS headers for all requests
-    const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
-    
-    // Handle OPTIONS preflight requests
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': corsOrigin,
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Max-Age': '86400'
-      });
-      res.end();
-      return;
-    }
-    
-    // Health check endpoint
-    if (req.url === '/health' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({ 
-        status: 'healthy',
-        server: 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        transport: 'sse',
-        timestamp: new Date().toISOString()
-      }));
-      return;
-    }
-    
-    // Server info endpoint
-    if (req.url === '/info' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({
-        name: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        description: 'Comprehensive MCP server for Mindbody API',
-        capabilities: {
-          tools: true,
-          resources: false,
-          prompts: false
-        },
-        transport: {
-          type: 'sse',
-          endpoint: '/sse',
-          cors: true
-        }
-      }));
-      return;
-    }
-    
-    // SSE endpoint - create transport for each connection
-    if (req.url === '/sse' && req.method === 'GET') {
-      // DNS rebinding protection. Must run before any header is written,
-      // otherwise the response is already committed and we cannot send a 403.
-      const rebindingError = checkDnsRebinding(req, dnsRebinding);
-      if (rebindingError) {
-        console.error(`Rejected SSE connection: ${rebindingError}`);
-        res.writeHead(403, { 'Content-Type': 'text/plain' });
-        res.end(rebindingError);
-        return;
-      }
+  // Routing lives in src/sseServer.ts: bearer auth first, then /health, /info,
+  // GET /sse (open a stream) and POST /sse?sessionId= (one message for the
+  // session that owns that id). Every connection gets its own Server instance
+  // so concurrent sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
+  const sse = createSseRequestHandler({
+    createMcpServer,
+    authToken,
+    dnsRebinding,
+    corsOrigin: process.env.MCP_CORS_ORIGIN || '*',
+    serverName: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
+    serverVersion: process.env.MCP_SERVER_VERSION || '2.0.0',
+  });
+  httpServer.on('request', sse.listener);
 
-      // Set SSE headers.
-      // These must be set via setHeader (not writeHead) because the SDK's
-      // SSEServerTransport.start() issues its own res.writeHead(200, ...) when
-      // connect() runs. Calling writeHead here first throws
-      // ERR_HTTP_HEADERS_SENT and kills the SSE endpoint. setHeader values are
-      // merged into that writeHead, with the SDK's own Content-Type winning.
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
-
-      // Create SSE transport for this connection
-      const transport = new SSEServerTransport('/sse', res as any, {
-        // DNS rebinding protection - ON by default, env-driven.
-        enableDnsRebindingProtection: dnsRebinding.enableDnsRebindingProtection,
-        allowedHosts: dnsRebinding.allowedHosts,
-        allowedOrigins: dnsRebinding.allowedOrigins,
-      });
-
-      // Give this connection its own Server with its own tool handlers.
-      const connectionServer = createMcpServer();
-      activeServers.add(connectionServer);
-
-      // Connect the server to this transport
-      await connectionServer.connect(transport);
-
-      // Handle connection close
-      req.on('close', () => {
-        activeServers.delete(connectionServer);
-        transport.close();
-      });
-      
-      return;
-    }
-    
-    // Handle POST requests to SSE endpoint (for sending messages back)
-    if (req.url === '/sse' && req.method === 'POST') {
-      // This will be handled by the SSE transport
-      // Just pass through with CORS headers
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      return;
-    }
-    
-    // 404 for other paths
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not Found');
-  }));
-  
   // Start the HTTP server
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(port, host, () => {
@@ -1837,14 +1687,7 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     console.error(`\nShutting down SSE server gracefully (${signal})...`);
-    for (const active of activeServers) {
-      try {
-        await active.close();
-      } catch {
-        // Connection already torn down; nothing to do.
-      }
-    }
-    activeServers.clear();
+    await sse.closeAll();
     httpServer.close(() => {
       console.error('Server closed');
       process.exit(0);
@@ -1854,6 +1697,37 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+}
+
+// Start Streamable HTTP server (stateless, hosted use).
+async function startHttp(config: { port?: number, host?: string }) {
+  const env = process.env;
+  const parseList = (value: string | undefined) =>
+    value?.split(',').map((s) => s.trim()).filter(Boolean);
+
+  // Half-configured auth must not quietly fall through to "no auth" or "no access".
+  if (Boolean(env.CF_ACCESS_TEAM_DOMAIN) !== Boolean(env.CF_ACCESS_AUD)) {
+    console.error('Set both CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD, or neither.');
+    process.exit(1);
+  }
+  const allowUnauthenticated = env.MCP_ALLOW_UNAUTHENTICATED?.toLowerCase() === 'true';
+
+  try {
+    await startHttpServer({
+      createServer: createMcpServer,
+      port: config.port || 3000,
+      host: config.host || (allowUnauthenticated ? '127.0.0.1' : '0.0.0.0'),
+      verifyAccessJwt: env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD
+        ? createAccessJwtVerifier({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud: env.CF_ACCESS_AUD })
+        : undefined,
+      allowUnauthenticated,
+      allowedHosts: parseList(env.MCP_ALLOWED_HOSTS),
+      version: env.MCP_SERVER_VERSION || '2.0.0',
+    });
+  } catch (error) {
+    console.error(errorMessage(error));
+    process.exit(1);
+  }
 }
 
 // Start STDIO server
@@ -1872,7 +1746,9 @@ async function main() {
   console.error('Starting Mindbody MCP Server v2.0');
   console.error(`Transport: ${config.transport.toUpperCase()}`);
   
-  if (config.transport === 'sse') {
+  if (config.transport === 'http') {
+    await startHttp(config);
+  } else if (config.transport === 'sse') {
     await startSSEServer(config);
   } else {
     await startStdioServer();

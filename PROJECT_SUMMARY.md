@@ -38,7 +38,6 @@ mindbody-mcp/
 ├── LICENSE              # MIT license
 ├── package.json         # Project dependencies
 ├── README.md           # Main documentation
-├── switch.bat          # Runtime switcher (Windows)
 └── tsconfig.json       # TypeScript configuration
 ```
 

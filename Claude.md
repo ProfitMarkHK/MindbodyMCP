@@ -41,6 +41,9 @@ bun run dev
 # Run with SSE transport (production-like)
 bun run dev:sse
 
+# Run with Streamable HTTP transport (production-like; needs CF_ACCESS_* or MCP_ALLOW_UNAUTHENTICATED=true)
+bun run dev:http
+
 # Run tests
 bun test
 
@@ -157,7 +160,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (51 tools)
+## Available Tools (52 tools)
 
 ### 📅 Class Management
 
@@ -268,6 +271,21 @@ Get client's attendance history.
 - `endDate` (optional): End date
 
 **Returns:** Visit history with attendance stats, no-shows, late cancels
+
+#### `getClientSchedule`
+A client's bookings in a window, one flat row per booking, for working out which booking to cancel. Read-only. Reads `GET /client/clientschedule` (every page, `IncludeWaitlistEntries: true`). When some rows have a `ClassId`, it also reads `GET /class/classes` for those classes, to learn their program. It does not decide whether a cancellation would be late: that is the cancel path's job. This tool reports timestamps only.
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, sent unchanged. Default: today through 30 days ahead in the site's zone (`DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS`)
+
+**`kind`**, checked in this order:
+1. `waitlist`: `WaitlistInfo.WaitlistId` is set. Not a seat; `waitlistEntryId` is the entry
+2. `appointment`: `AppointmentId > 0`. Cancel with `cancelAppointments`
+3. `enrollment`: the class's program has `ScheduleType: Enrollment`. Cancel with `cancelEnrollmentVisits` (`visitId`)
+4. `class`: any other class visit, including a class `/class/classes` did not return. Cancel with `removeClientFromClass` (`classId`)
+
+**Returns:** `{ bookings: [{ kind, visitId, classId, classScheduleId, appointmentId, appointmentStatus, startDateTime, endDateTime, name, staffId, staffName, locationId, locationName, serviceId, serviceName, programId, programName, signedIn, lateCancelled, missed, isWaitlisted, waitlistEntryId }], totalBookings }`, sorted by start. `classId` is `undefined` on appointments and `appointmentId` on class rows. Staff and location names come from the cached catalogues, and a name is `undefined` when the catalogue does not hold the id. `programId`/`programName`/`classScheduleId` are `undefined` on appointments. The exported function is `getClientScheduleTool(clientId, startDate?, endDate?, client?, cache?)` in `src/tools/clientSchedule.ts`.
 
 #### `getClientMemberships`
 View client's active memberships.
@@ -546,6 +564,23 @@ All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` giv
 
 **Returns:** `{ success, cancelled: [{ id, status, startDateTime }], rejected: [{ id, reason }], message }`
 
+#### `cancelClientBooking`
+Cancel one booking for one client and choose late or normal. A resolver: it finds the booking and decides, then hands the write to `cancelAppointments`, `cancelEnrollmentVisits` or `removeClientFromClass`, so every guard of those tools still applies. It never calls a write endpoint itself. Code: `cancelClientBookingTool(request, client?, cache?)` in `src/tools/cancelBooking.ts`.
+
+**Parameters:**
+- `clientId` (required)
+- Exactly one locator: `classId`, `appointmentId`, `visitId`, or `startDateTime` (site-local `YYYY-MM-DDTHH:MM[:SS]`, optionally narrowed by `classScheduleId`)
+- `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset (before any read); `false` forces a normal cancel
+- `sendEmail` (optional, default false). Passed to whichever tool does the write
+
+**Resolution.** Reads `getClientSchedule` over the locator's day for `startDateTime`, otherwise today through 30 days (a booking further out is not found). Matched rows that are waitlist entries, signed in, already late-cancelled or cancelled, or already started are not cancellable. Exactly one cancellable match proceeds. None, or more than one, is refused with `candidates` and no write; the message names why each matched row was not cancellable. Routing: `appointment` → `cancelAppointments`, `enrollment` → `cancelEnrollmentVisits` (`visitId`), `class` → `removeClientFromClass` (`classId`), `waitlist` refused.
+
+**Decision.** With `lateCancel` omitted: late when the start is within `MINDBODY_LATE_CANCEL_WINDOW_HOURS` of now (site zone), normal otherwise, and normal when the variable is unset. Per-service windows are #21.
+
+**Failures.** The POST is never retried. If it fails, the schedule is re-read once: `outcome: 'cancelled'` when the booking is gone or released, `still-booked` when it is still there, `unknown` when the re-read fails. The re-read is returned as `reconcile`.
+
+**Returns:** `{ success, outcome: 'cancelled'|'still-booked'|'unknown'|'refused', mode?: 'late'|'normal', booking?, candidates?, decision?: { mode, requested, windowHours, hoursUntilStart, reason }, receipt?: { tool, endpoint, request, response, error, sentAt, toolResult }, reconcile?: { readAt, booking, error }, message }`. `receipt.request` is the exact POST body (including `LateCancel`, and `Execute` for appointments); it is `undefined` when the delegate refused before writing. See `docs/API.md` for the field reference.
+
 #### `getBookableItems`
 Find availability windows in which a session could be booked — **windows, not slots**. Each row spans a range (typically 120–750 minutes), so a start must still be validated against `getActiveSessionTimes` before it can be booked.
 
@@ -738,6 +773,10 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
 # MCP_AUTH_TOKEN=...  # SSE only: bearer token clients must send; required unless MCP_HOST is loopback
+# MCP_ALLOWED_HOSTS=mcp.example.com  # SSE only: Host values accepted (403 otherwise); unset = loopback only
+# MCP_ALLOWED_ORIGINS=https://app.example.com  # SSE only: Origin values accepted; unset = not checked
+# MCP_CORS_ORIGIN=*  # SSE only: Access-Control-Allow-Origin, one origin or *; no Allow-Credentials is sent
+# MCP_DNS_REBINDING_PROTECTION=false  # SSE only: opt out of the Host/Origin check
 ```
 
 ### Dates and timezones

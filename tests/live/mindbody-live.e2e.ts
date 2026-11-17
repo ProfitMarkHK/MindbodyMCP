@@ -82,6 +82,8 @@ const BUN_BINARY = process.execPath;
 const CALL_TIMEOUT_MS = 60_000;
 /** How many clients the read-only formula note test checks before giving up. */
 const FORMULA_NOTE_CLIENT_SCAN = 40;
+/** Clients getClientSchedule walks before it reports a loud skip (a booking-less site cannot run long). */
+const SCHEDULE_CLIENT_SCAN = 40;
 /** How many clients the read-only purchase history test checks before giving up. */
 const PURCHASE_CLIENT_SCAN = 20;
 const CONNECT_TIMEOUT_MS = 60_000;
@@ -988,6 +990,55 @@ describe('live tier — clients', () => {
     );
   }, FORMULA_NOTE_CLIENT_SCAN * CALL_TIMEOUT_MS);
 
+  itLive("getClientSchedule lists a client's bookings as flat, typed rows, read-only", async () => {
+    const name = "getClientSchedule lists a client's bookings as flat, typed rows, read-only";
+    // Read-only. The default window (today through 30 days out) may be empty
+    // for every sandbox client, so the scan starts a year back to find a client
+    // with bookings and exercise the field mapping on real rows.
+    const yearBack = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, SCHEDULE_CLIENT_SCAN);
+    expect(candidates.length).toBeGreaterThan(0);
+
+    const byDefault = await callTool('getClientSchedule', { clientId: String(candidates[0].id) });
+    expect(Array.isArray(byDefault.bookings)).toBe(true);
+    expect(byDefault.totalBookings).toBe(byDefault.bookings.length);
+
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientSchedule', { clientId: String(candidate.id), startDate: yearBack });
+      expect(result.totalBookings).toBe(result.bookings.length);
+      if (result.totalBookings > 0) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a booking since ${yearBack}, so the`,
+        'row mapping is untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    const kinds = new Set(['waitlist', 'appointment', 'enrollment', 'class']);
+    for (const booking of found.result.bookings) {
+      expect(kinds.has(booking.kind)).toBe(true);
+      expect(Number.isInteger(booking.visitId)).toBe(true);
+      expect(booking.startDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(booking.startDateTime.slice(0, 10) >= yearBack).toBe(true);
+      if (booking.kind === 'appointment') expect(Number.isInteger(booking.appointmentId)).toBe(true);
+      if (booking.kind === 'class' || booking.kind === 'enrollment') expect(Number.isInteger(booking.classId)).toBe(true);
+      if (booking.kind === 'waitlist') expect(booking.isWaitlisted).toBe(true);
+      for (const flag of ['signedIn', 'lateCancelled', 'missed', 'isWaitlisted']) expect(typeof booking[flag]).toBe('boolean');
+    }
+    const counts = [...kinds].map((kind) => `${kind} ${found!.result.bookings.filter((b: any) => b.kind === kind).length}`);
+    console.log(
+      `\n LIVE client schedule: client ${found.clientId} has ${found.result.totalBookings} booking(s) since ${yearBack} ` +
+        `(${counts.join(', ')}); default window for client ${candidates[0].id}: ${byDefault.totalBookings}.\n`
+    );
+  }, (SCHEDULE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
+
   itLive('getClientPurchases reads a client\'s purchase history and one sale back by saleId, read-only', async () => {
     const name = "getClientPurchases reads a client's purchase history and one sale back by saleId, read-only";
     // Read-only: walk existing clients until one has a purchase in the default
@@ -1050,6 +1101,64 @@ describe('live tier — clients', () => {
 });
 
 // ── 4. Service definitions ────────────────────────────────────────────────────
+
+/** How many future classes the resolver test tries to book before a loud skip. */
+const RESOLVER_CLASS_CANDIDATES = 5;
+const CANCEL_RESOLVER_TEST = 'cancelClientBooking resolves a class booking by classId and normal-cancels it';
+
+describe('live tier — booking-cancel resolver', () => {
+  itLive('cancelClientBooking refuses a bad locator and an unmatched one without writing', async () => {
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const twoLocators = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 1, visitId: 1 });
+    expect(twoLocators).toMatchObject({ success: false, outcome: 'refused' });
+    expect(twoLocators.message).toContain('exactly one of');
+
+    const unmatched = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 999999999 });
+    expect(unmatched).toMatchObject({ success: false, outcome: 'refused' });
+    expect(unmatched.receipt).toBeUndefined();
+  });
+
+  itLive(CANCEL_RESOLVER_TEST, async () => {
+    // Books the run's own client into a future class (RequirePayment false, so
+    // no pass is consumed), then cancels it through the resolver with
+    // lateCancel: false, so nothing is forfeited whatever the site window is.
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const listed = await callTool('getClasses', { startDate: day(2), endDate: day(9) });
+    const candidates = listed.classes
+      .filter((cls: any) => !cls.isCanceled && cls.spotsAvailable > 0)
+      .slice(0, RESOLVER_CLASS_CANDIDATES);
+
+    let booked: { classId: number; message?: string } | undefined;
+    const failures: string[] = [];
+    for (const cls of candidates) {
+      const result = await callTool('addClientToClass', { clientId: createdClientId, classId: cls.id, requirePayment: false });
+      if (result.success) {
+        booked = { classId: cls.id };
+        break;
+      }
+      failures.push(`class ${cls.id}: ${result.message}`);
+    }
+    if (!booked) {
+      announceLoudSkip(CANCEL_RESOLVER_TEST, [
+        `reason: could not book the run's client into any of ${candidates.length} future class(es) with space`,
+        ...failures,
+      ]);
+      return;
+    }
+
+    const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId: booked.classId, lateCancel: false });
+    expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal', booking: { classId: booked.classId } });
+    expect(['removeClientFromClass', 'cancelEnrollmentVisits']).toContain(result.receipt.tool);
+    expect(result.receipt).toMatchObject({ endpoint: '/class/removeclientfromclass', request: { ClassId: booked.classId, LateCancel: false } });
+
+    // Read back: the booking is no longer a live seat on the client's schedule.
+    const after = await callTool('getClientSchedule', { clientId: createdClientId, startDate: day(0), endDate: day(10) });
+    const still = after.bookings.filter((b: any) => b.classId === booked!.classId && !b.lateCancelled);
+    expect(still).toEqual([]);
+    console.log(`\n LIVE cancel resolver: class ${booked.classId} booked then cancelled via ${result.receipt.tool}.\n`);
+  }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
+});
 
 describe('live tier — service definitions', () => {
   itLive('getSites yields the site time zone every site-local date is computed in', async () => {
