@@ -310,9 +310,14 @@ Configure via environment variables:
 - `MCP_AUTH_TOKEN` - Bearer token clients must send. Required unless `MCP_HOST` is loopback
 - `MCP_PORT=3000` - Server port
 - `MCP_HOST=0.0.0.0` - Server host
-- `MCP_CORS_ORIGIN=https://yourdomain.com` - CORS configuration
+- `MCP_ALLOWED_HOSTS=mcp.yourdomain.com` - Comma-separated `Host` values accepted (DNS-rebinding protection, on by default). Unset means loopback only, so set it whenever remote clients connect
+- `MCP_ALLOWED_ORIGINS=https://app.yourdomain.com` - Comma-separated `Origin` values accepted. Unset means Origin is not checked; requests without an Origin always pass
+- `MCP_CORS_ORIGIN=https://app.yourdomain.com` - Sent as `Access-Control-Allow-Origin`: one origin or `*` (default). Tells browsers who may read responses; refuses nothing on the server
+- `MCP_DNS_REBINDING_PROTECTION=false` - Turns the Host/Origin check off (opt-out; the bearer token still applies)
 - `MCP_SSL_CERT=/path/to/cert.pem` - SSL certificate (optional)
 - `MCP_SSL_KEY=/path/to/key.pem` - SSL private key (optional)
+
+The bearer token is checked first: a request without it gets `401` before the Host/Origin check, which answers `403`. The server sends no `Access-Control-Allow-Credentials` header, because it authenticates with the `Authorization` header and reads no cookies. See [Host, Origin and CORS](docs/SSE_DEPLOYMENT.md#host-origin-and-cors).
 
 ### Endpoints
 

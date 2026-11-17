@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Typed the client domain against the OpenAPI spec: `fetchAllPages<any>` and ad-hoc `(row: any)` mappers are now spec-derived types (`Client`, `Visit`, `ClientMembership`, `ClientContract`, and the POST response wrappers).
 
 ### Fixed
+- The SSE transport now routes message POSTs. `POST /sse?sessionId=<id>` used to answer `404` and a bare `POST /sse` hung, so no client could complete `initialize`. Each POST now reaches the session that owns the id (`202`), and is refused with `400` (no `sessionId`), `404` (unknown or closed session), `403` (DNS-rebinding check) or `401` (no bearer token). An automated SSE round trip now runs in `bun test`.
 - Non-idempotent POST requests are no longer retried. A POST that fails transiently is reported for reconciliation, because the v6 API has no idempotency key. Retries apply only to GET, HEAD and OPTIONS.
 - The pager fails loudly instead of truncating a result: it throws on an empty page before the server's total is reached, on a total that contradicts the rows received, and on a server that ignores `Offset`.
 - Corrected how the OAuth token expiry is read, and made user token authentication optional, which resolves `DeniedAccess` errors on the sandbox.

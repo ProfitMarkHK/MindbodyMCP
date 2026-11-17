@@ -753,6 +753,10 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
 # MCP_AUTH_TOKEN=...  # SSE only: bearer token clients must send; required unless MCP_HOST is loopback
+# MCP_ALLOWED_HOSTS=mcp.example.com  # SSE only: Host values accepted (403 otherwise); unset = loopback only
+# MCP_ALLOWED_ORIGINS=https://app.example.com  # SSE only: Origin values accepted; unset = not checked
+# MCP_CORS_ORIGIN=*  # SSE only: Access-Control-Allow-Origin, one origin or *; no Allow-Credentials is sent
+# MCP_DNS_REBINDING_PROTECTION=false  # SSE only: opt out of the Host/Origin check
 ```
 
 ### Dates and timezones

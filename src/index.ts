@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -22,7 +21,8 @@ dotenv.config();
 // Import all tools
 import { getTeacherScheduleTool } from './tools/teacherSchedule.js';
 import { errorMessage } from './utils/errors.js';
-import { resolveSseAuthToken, withBearerAuth } from './sseAuth.js';
+import { resolveSseAuthToken } from './sseAuth.js';
+import { createSseRequestHandler, resolveDnsRebindingSettings } from './sseServer.js';
 import {
   getClassesTool,
   getClassDescriptionsTool,
@@ -1564,112 +1564,6 @@ function parseArgs(): { transport: 'stdio' | 'sse', port?: number, host?: string
   return { transport, port, host, sslCert, sslKey };
 }
 
-// Hosts that are always safe for local development. Note these are compared as
-// full `Host` header values, so they are listed with and without the default
-// port because the SDK does an exact string match on the header.
-const LOCAL_DEV_HOSTS = [
-  'localhost',
-  'localhost:3000',
-  '127.0.0.1',
-  '127.0.0.1:3000',
-  '[::1]',
-  '[::1]:3000',
-];
-
-/**
- * Enforce DNS rebinding protection at the HTTP layer.
- *
- * This exists because the SDK's own `validateRequestHeaders()` is only reachable
- * from `SSEServerTransport.handlePostMessage()`, which this server never calls -
- * the POST route below only sets CORS headers. So setting the transport options
- * alone provides NO protection here. We validate the GET ourselves, which is the
- * request that actually opens the stream.
- *
- * Semantics deliberately mirror the SDK exactly (see validateRequestHeaders in
- * SDK 1.32.1): Host is compared by exact string match against the allowlist, and
- * Origin is only checked when an origin allowlist is configured.
- *
- * @returns an error string when the request must be rejected, else undefined.
- */
-function checkDnsRebinding(
-  req: http.IncomingMessage,
-  settings: { enableDnsRebindingProtection: boolean; allowedHosts: string[]; allowedOrigins: string[] }
-): string | undefined {
-  if (!settings.enableDnsRebindingProtection) {
-    return undefined;
-  }
-
-  if (settings.allowedHosts.length > 0) {
-    const hostHeader = req.headers.host;
-    if (!hostHeader || !settings.allowedHosts.includes(hostHeader)) {
-      return `Invalid Host header: ${hostHeader}`;
-    }
-  }
-
-  if (settings.allowedOrigins.length > 0) {
-    const originHeader = req.headers.origin;
-    if (originHeader && !settings.allowedOrigins.includes(originHeader)) {
-      return `Invalid Origin header: ${originHeader}`;
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Resolve DNS rebinding protection settings for the SSE transport.
- *
- * Security posture: protection is ON by default.
- *
- * Evidence from SDK 1.32.1 (`dist/esm/server/sse.js`, validateRequestHeaders):
- *   - if `enableDnsRebindingProtection` is falsy, validation is skipped entirely;
- *   - the Host header is only checked when `allowedHosts` is non-empty;
- *   - the Origin header is only checked when `allowedOrigins` is non-empty.
- *
- * So enabling protection with an empty allowlist is a no-op (it does not reject
- * everything), and enabling it with a localhost allowlist keeps local dev
- * working. We therefore default `allowedHosts` to loopback names rather than
- * leaving it undefined.
- */
-function resolveDnsRebindingSettings(port: number): {
-  enableDnsRebindingProtection: boolean;
-  allowedHosts: string[];
-  allowedOrigins: string[];
-} {
-  // Opt-out escape hatch. Anything other than an explicit falsy value keeps
-  // protection enabled.
-  const rawOptOut = process.env.MCP_DNS_REBINDING_PROTECTION?.trim().toLowerCase();
-  const enabled = rawOptOut !== 'false' && rawOptOut !== '0' && rawOptOut !== 'no' && rawOptOut !== 'off';
-
-  const parseList = (value: string | undefined): string[] | undefined => {
-    const items = value
-      ?.split(',')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return items && items.length > 0 ? items : undefined;
-  };
-
-  const configuredHosts = parseList(process.env.MCP_ALLOWED_HOSTS);
-
-  // When the operator has not set an explicit allowlist, fall back to loopback
-  // plus the port we are actually listening on, so a non-default MCP_PORT in
-  // local development still works with zero configuration.
-  const allowedHosts = configuredHosts ?? [
-    ...LOCAL_DEV_HOSTS,
-    `localhost:${port}`,
-    `127.0.0.1:${port}`,
-    `[::1]:${port}`,
-  ];
-
-  return {
-    enableDnsRebindingProtection: enabled,
-    allowedHosts: enabled ? allowedHosts : [],
-    // Origins are only checked when explicitly configured; the SSE endpoint is
-    // normally driven by native MCP clients that send no Origin header at all.
-    allowedOrigins: parseList(process.env.MCP_ALLOWED_ORIGINS) ?? [],
-  };
-}
-
 // Start SSE server
 async function startSSEServer(config: { port?: number, host?: string, sslCert?: string, sslKey?: string }) {
   const port = config.port || 3000;
@@ -1695,10 +1589,6 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error('DNS rebinding protection: DISABLED (MCP_DNS_REBINDING_PROTECTION opt-out set)');
   }
 
-  // Every SSE connection gets its own Server instance so that concurrent
-  // sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
-  const activeServers = new Set<Server>();
-  
   // Create HTTP/HTTPS server based on SSL configuration
   let httpServer: http.Server | https.Server;
   
@@ -1722,131 +1612,20 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
     console.error(`Starting HTTP SSE server on ${host}:${port}`);
   }
 
-  // Handle HTTP requests. withBearerAuth runs first, so an unauthenticated
-  // request is refused before the DNS-rebinding guard or any route below.
-  httpServer.on('request', withBearerAuth(authToken, async (req, res) => {
-    // Set CORS headers for all requests
-    const corsOrigin = process.env.MCP_CORS_ORIGIN || '*';
-    
-    // Handle OPTIONS preflight requests
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': corsOrigin,
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Max-Age': '86400'
-      });
-      res.end();
-      return;
-    }
-    
-    // Health check endpoint
-    if (req.url === '/health' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({ 
-        status: 'healthy',
-        server: 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        transport: 'sse',
-        timestamp: new Date().toISOString()
-      }));
-      return;
-    }
-    
-    // Server info endpoint
-    if (req.url === '/info' && req.method === 'GET') {
-      res.writeHead(200, { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': corsOrigin
-      });
-      res.end(JSON.stringify({
-        name: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
-        version: process.env.MCP_SERVER_VERSION || '2.0.0',
-        description: 'Comprehensive MCP server for Mindbody API',
-        capabilities: {
-          tools: true,
-          resources: false,
-          prompts: false
-        },
-        transport: {
-          type: 'sse',
-          endpoint: '/sse',
-          cors: true
-        }
-      }));
-      return;
-    }
-    
-    // SSE endpoint - create transport for each connection
-    if (req.url === '/sse' && req.method === 'GET') {
-      // DNS rebinding protection. Must run before any header is written,
-      // otherwise the response is already committed and we cannot send a 403.
-      const rebindingError = checkDnsRebinding(req, dnsRebinding);
-      if (rebindingError) {
-        console.error(`Rejected SSE connection: ${rebindingError}`);
-        res.writeHead(403, { 'Content-Type': 'text/plain' });
-        res.end(rebindingError);
-        return;
-      }
+  // Routing lives in src/sseServer.ts: bearer auth first, then /health, /info,
+  // GET /sse (open a stream) and POST /sse?sessionId= (one message for the
+  // session that owns that id). Every connection gets its own Server instance
+  // so concurrent sessions cannot observe each other's state (GHSA-345p-7cg4-v4c7).
+  const sse = createSseRequestHandler({
+    createMcpServer,
+    authToken,
+    dnsRebinding,
+    corsOrigin: process.env.MCP_CORS_ORIGIN || '*',
+    serverName: process.env.MCP_SERVER_NAME || 'mindbody-mcp',
+    serverVersion: process.env.MCP_SERVER_VERSION || '2.0.0',
+  });
+  httpServer.on('request', sse.listener);
 
-      // Set SSE headers.
-      // These must be set via setHeader (not writeHead) because the SDK's
-      // SSEServerTransport.start() issues its own res.writeHead(200, ...) when
-      // connect() runs. Calling writeHead here first throws
-      // ERR_HTTP_HEADERS_SENT and kills the SSE endpoint. setHeader values are
-      // merged into that writeHead, with the SDK's own Content-Type winning.
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
-
-      // Create SSE transport for this connection
-      const transport = new SSEServerTransport('/sse', res as any, {
-        // DNS rebinding protection - ON by default, env-driven.
-        enableDnsRebindingProtection: dnsRebinding.enableDnsRebindingProtection,
-        allowedHosts: dnsRebinding.allowedHosts,
-        allowedOrigins: dnsRebinding.allowedOrigins,
-      });
-
-      // Give this connection its own Server with its own tool handlers.
-      const connectionServer = createMcpServer();
-      activeServers.add(connectionServer);
-
-      // Connect the server to this transport
-      await connectionServer.connect(transport);
-
-      // Handle connection close
-      req.on('close', () => {
-        activeServers.delete(connectionServer);
-        transport.close();
-      });
-      
-      return;
-    }
-    
-    // Handle POST requests to SSE endpoint (for sending messages back)
-    if (req.url === '/sse' && req.method === 'POST') {
-      // This will be handled by the SSE transport
-      // Just pass through with CORS headers
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
-      return;
-    }
-    
-    // 404 for other paths
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not Found');
-  }));
-  
   // Start the HTTP server
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(port, host, () => {
@@ -1861,14 +1640,7 @@ async function startSSEServer(config: { port?: number, host?: string, sslCert?: 
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     console.error(`\nShutting down SSE server gracefully (${signal})...`);
-    for (const active of activeServers) {
-      try {
-        await active.close();
-      } catch {
-        // Connection already torn down; nothing to do.
-      }
-    }
-    activeServers.clear();
+    await sse.closeAll();
     httpServer.close(() => {
       console.error('Server closed');
       process.exit(0);
