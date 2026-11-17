@@ -914,7 +914,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             startDateTime: { type: 'string', description: 'Locator: site-local start, YYYY-MM-DDTHH:MM[:SS], no offset' },
             classScheduleId: { type: 'number', description: 'Narrows a startDateTime match to one class schedule' },
             lateCancel: { type: 'boolean', description: 'Omit to let the resolver decide; true forces late (refused outside the window); false forces normal' },
-            sendEmail: { type: 'boolean', description: 'Email the client (default false). Not supported for drop-in classes' },
+            sendEmail: { type: 'boolean', description: 'Email the client (default false)' },
           },
           required: ['clientId'],
         },

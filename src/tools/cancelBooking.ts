@@ -331,12 +331,6 @@ export async function cancelClientBookingTool(
 
   const late = mode === 'late';
   const sendEmail = req.sendEmail ?? false;
-  if (booking.kind === 'class' && sendEmail) {
-    return refused(
-      'sendEmail is not supported for a drop-in class: removeClientFromClass sends no SendEmail. Cancel without sendEmail; nothing was cancelled.',
-      { mode, booking, decision }
-    );
-  }
 
   const recorder = recordingClient(client);
   let tool: CancelDelegate;
@@ -349,7 +343,7 @@ export async function cancelClientBookingTool(
     toolResult = await cancelEnrollmentVisitsTool(req.clientId, [booking.visitId], late, sendEmail, recorder.client, cache);
   } else {
     tool = 'removeClientFromClass';
-    toolResult = await removeClientFromClassTool(req.clientId, booking.classId!, late, recorder.client, cache);
+    toolResult = await removeClientFromClassTool(req.clientId, booking.classId!, late, recorder.client, cache, sendEmail);
   }
 
   const post = recorder.posts.at(-1);

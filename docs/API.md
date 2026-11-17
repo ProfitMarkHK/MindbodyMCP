@@ -309,7 +309,7 @@ Cancels one booking for one client and chooses late or normal. It resolves and d
 | `startDateTime` | string | One locator | Site-local `YYYY-MM-DDTHH:MM[:SS]`, no offset | - |
 | `classScheduleId` | number | No | Narrows a `startDateTime` match; only with `startDateTime` | - |
 | `lateCancel` | boolean | No | Omitted: decided from the window. `true`: refused outside it. `false`: normal | omitted |
-| `sendEmail` | boolean | No | Email the client. Refused for a drop-in class (`removeClientFromClass` has no `SendEmail`) | false |
+| `sendEmail` | boolean | No | Email the client. Passed to whichever tool does the write | false |
 
 #### Steps
 

@@ -157,7 +157,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (51 tools)
+## Available Tools (52 tools)
 
 ### 📅 Class Management
 
@@ -568,7 +568,7 @@ Cancel one booking for one client and choose late or normal. A resolver: it find
 - `clientId` (required)
 - Exactly one locator: `classId`, `appointmentId`, `visitId`, or `startDateTime` (site-local `YYYY-MM-DDTHH:MM[:SS]`, optionally narrowed by `classScheduleId`)
 - `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset (before any read); `false` forces a normal cancel
-- `sendEmail` (optional, default false). Refused for a drop-in class, because `removeClientFromClass` sends no `SendEmail`
+- `sendEmail` (optional, default false). Passed to whichever tool does the write
 
 **Resolution.** Reads `getClientSchedule` over the locator's day for `startDateTime`, otherwise today through 30 days (a booking further out is not found). Matched rows that are waitlist entries, signed in, already late-cancelled or cancelled, or already started are not cancellable. Exactly one cancellable match proceeds. None, or more than one, is refused with `candidates` and no write; the message names why each matched row was not cancellable. Routing: `appointment` → `cancelAppointments`, `enrollment` → `cancelEnrollmentVisits` (`visitId`), `class` → `removeClientFromClass` (`classId`), `waitlist` refused.
 

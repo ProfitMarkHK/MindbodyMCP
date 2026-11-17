@@ -126,7 +126,7 @@ Or run a local clone:
 
 ## 🛠️ Available Tools
 
-The server provides 51 tools across 6 categories:
+The server provides 52 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
