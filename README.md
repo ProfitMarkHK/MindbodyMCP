@@ -133,7 +133,7 @@ The server provides 51 tools across 6 categories:
 - `getClassDescriptions` - List class types
 - `getClassSchedules` - View recurring schedules
 - `addClientToClass` - Book clients into classes
-- `removeClientFromClass` - Cancel bookings
+- `removeClientFromClass` - Cancel bookings. Optional `sendEmail` (default `false`) asks Mindbody to email the client, as `cancelAppointments` and `cancelEnrollmentVisits` do
 - `getWaitlistEntries` - Manage waitlists. **At least one of `classScheduleIds`, `classIds` or `clientIds` is required**: the API rejects a request with none of them. Entries carry no queue position — the endpoint has no such field
 - `substituteClassTeacher` - Handle substitutions. Takes the **incoming** teacher's staff id as `substituteTeacherId`; the original teacher is implied by the class. The response shape is unverified against the sandbox (the endpoint has no `Test` flag)
 - `getClassVisits` - Attendance and sign-in status for a class. Returns client ids, not client names: the endpoint returns no client object
@@ -149,6 +149,7 @@ The server provides 51 tools across 6 categories:
 - `getClientAccountBalances` - View account balances
 - `getClientContracts` - View contracts
 - `getClientFormulaNotes` - Read a client's formula notes, by client and/or appointment (read-only)
+- `getClientPurchases` - A client's purchase history with prices (read-only): price, amount paid, discount, tax, account-payment flag, and the sale's items and payments. Default window: the last 365 days through today in the site timezone; `saleId` reads one sale back
 - `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals. Optional sandbox-verified parameters: `requiredClientData` (subset of collections), `showActiveOnly` (services that can pay now), `startDate` (include expired purchase history)
 
 ### 💰 Sales & Commerce
@@ -163,7 +164,7 @@ The server provides 51 tools across 6 categories:
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
 - `getCustomPaymentMethods` - List the site's custom payment methods with their ids (needed for a `Custom` payment)
 - `getSales` - Read-only sales history (default: month to date, site-local) with a per-sales-rep summary of retail product sales (tips excluded); `productsOnly`, `salesRepIds`, `clientIds` filters; `matchAppointments` adds a best-effort same-day appointment-staff match
-- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
+- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged); `test: true` is a dry run that records no sale and, because Mindbody does not check payments in test mode, checks that the payments sum to the cart total itself. `item.metadata` takes only `id` (or `amount` for a `Tip`); other keys are dropped. An item can carry a non-negative `discountAmount` and `appointmentBookingRequests` to book and pay in one call. There is no per-sale price override: the API sells at the catalogue price, so a sale at another price (such as a 0-priced, hourly-billed option) must be made in the Mindbody web app ([details](docs/API.md#no-per-sale-price-override))
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
@@ -179,7 +180,7 @@ The server provides 51 tools across 6 categories:
 ### 📆 Appointments
 - `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client. Session-type and location **names** are resolved from the cached site catalogue; the client name, email and phone are not returned by this endpoint, so only `clientId` is available
 - `addAppointment` - Book appointments. Returns `sessionTypeId`/`locationId` rather than names — the response carries ids, not objects
-- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
+- `updateAppointment` - Reschedule (new `startDateTime`), change staff, notes or session type (`sessionTypeId`, on Booked, Confirmed or Arrived appointments only), or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `cancelClientBooking` - Cancel one booking (appointment, enrollment session or drop-in class) found by `classId`, `appointmentId`, `visitId` or `startDateTime`, choosing late or normal from `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. The write goes through the guarded tool for the booking's kind, is never retried, and returns a receipt with the exact request body
 - `getBookableItems` - Find available slots
@@ -271,6 +272,12 @@ MindbodyMCP/
 
 The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
 
+**Client authentication.** Every SSE tool call runs with the server's Mindbody credentials, so the SSE transport requires a shared bearer token, `MCP_AUTH_TOKEN`. Clients send `Authorization: Bearer <token>` on every request except `GET /health`; anything else gets `401`. When the server binds to anything other than `127.0.0.1`, `::1` or `localhost` (the default host is `0.0.0.0`), it refuses to start without the token. On loopback the token may be left unset for local development, with a warning. STDIO needs no token.
+
+```bash
+export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+```
+
 ### Quick Start with SSE
 
 The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
@@ -294,13 +301,14 @@ docker-compose up -d
 
 # Or manually
 docker build -t mindbody-mcp .
-docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse mindbody-mcp
+docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse -e MCP_AUTH_TOKEN mindbody-mcp
 ```
 
 ### Production Configuration
 
 Configure via environment variables:
 - `MCP_TRANSPORT=sse` - Enable SSE transport
+- `MCP_AUTH_TOKEN` - Bearer token clients must send. Required unless `MCP_HOST` is loopback
 - `MCP_PORT=3000` - Server port
 - `MCP_HOST=0.0.0.0` - Server host
 - `MCP_CORS_ORIGIN=https://yourdomain.com` - CORS configuration
@@ -309,9 +317,9 @@ Configure via environment variables:
 
 ### Endpoints
 
-- `/health` - Health check endpoint
-- `/info` - Server information
-- `/sse` - SSE event stream for MCP communication
+- `/health` - Health check endpoint (no token needed)
+- `/info` - Server information (token required)
+- `/sse` - SSE event stream for MCP communication (token required)
 
 For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOYMENT.md).
 
@@ -321,8 +329,8 @@ For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOY
 # Run all tests
 bun test
 
-# Test SSE connection
-bun run test:sse
+# Test SSE connection (pass the server's token if it has one)
+MCP_AUTH_TOKEN=... bun run test:sse
 
 # Test specific tool
 bun run test:tool
@@ -332,7 +340,12 @@ bun run benchmark
 
 # Type checking
 bun run typecheck
+
+# Which docs/openapi.json paths the tools call, grouped by API tag (offline)
+bun run spec:coverage
 ```
+
+`spec:coverage` is informational and exits 0; pass `-- --min <percent>` (or set `SPEC_COVERAGE_MIN`) to make it exit 1 below that share of spec paths. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Quality gates
 

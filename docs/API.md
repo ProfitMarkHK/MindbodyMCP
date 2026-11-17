@@ -132,7 +132,7 @@ interface StaffAppointmentsResponse {
 
 ### updateAppointment
 
-Updates an existing appointment: reschedule it (new `startDateTime`), change staff or notes, or apply one status action with `execute`. It does not cancel. Use `cancelAppointments`.
+Updates an existing appointment: reschedule it (new `startDateTime`), change staff, session type or notes, or apply one status action with `execute`. It does not cancel. Use `cancelAppointments`.
 
 Ownership, status and timing are verified before anything is written, and none of the guards can be skipped by omitting an argument. An appointment that fails a guard is reported in `rejected` and nothing is sent.
 
@@ -145,6 +145,7 @@ Ownership, status and timing are verified before anything is written, and none o
 | `startDateTime` | string | No | New start date/time (reschedule) | - |
 | `endDateTime` | string | No | New end date/time | - |
 | `staffId` | number | No | Change staff | - |
+| `sessionTypeId` | number | No | Change the session type (service), sent as `SessionTypeId`. A positive integer. Allowed on `Booked`, `Confirmed` and `Arrived`; refused on `Completed`, `NoShow`, `Cancelled` and `LateCancelled`. Not a reschedule, so it may be combined with `applyPayment`. | - |
 | `resourceIds` | number[] | No | Resource IDs | - |
 | `notes` | string | No | Notes | - |
 | `execute` | string | No | One of `confirm`, `unconfirm`, `arrive`, `unarrive`, `complete`. `cancel` and `latecancel` are refused client-side with no API call. `complete` additionally requires the appointment to have started. | - |
@@ -156,10 +157,10 @@ Ownership, status and timing are verified before anything is written, and none o
 
 | Guard | Rule |
 |-------|------|
-| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer. No API call is made if either fails. |
+| Request shape | `clientId` is a non-empty string, `appointmentId` a positive integer, and `sessionTypeId`, when given, a positive integer. No API call is made if any fails. |
 | Ownership | The appointment must belong to `clientId`, looked up with `GET /appointment/staffappointments`. Someone else's appointment — or one outside the window, one year back through two years ahead — is reported as `not found for this client`, which never names the real owner. |
 | Terminal status | A `Cancelled` or `LateCancelled` appointment is final: no update of any kind is accepted. |
-| Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment` and no reschedule. Notes, staff and resources are still accepted. |
+| Attendance-final status | A `Completed` or `NoShow` appointment accepts no status action, no `applyPayment`, no reschedule and no `sessionTypeId` change: a completed appointment has been checked out, so changing its service would desync it from the sale. Notes, staff and resources are still accepted. |
 | Timing | `execute: complete` requires the appointment to have started, compared in the site's timezone. `arrive` and `unarrive` are not time-gated, because arrival is recorded against a booked appointment. |
 | Timezone | If the site timezone cannot be resolved, nothing is looked up and nothing is written. |
 
@@ -174,10 +175,23 @@ interface UpdateAppointmentResponse {
     startDateTime: string;
     endDateTime: string;
     staffName: string;
+    sessionTypeId?: number; // as Mindbody returns it after the update
   };
   message: string;
 }
 ```
+
+#### Session type changes
+
+The use case is a booking made under the wrong service (for example "Extensions – Application" when the client had "Extensions – Removal"), corrected before checkout so the sale uses the right pricing option. The appointment is usually already `Arrived`. Cancelling and rebooking is not an alternative: an `Arrived` appointment cannot be cancelled here (see "Arrived appointments"), and a rebooked appointment loses its history.
+
+| Status | Session type change |
+|---|---|
+| `Booked`, `Confirmed`, `Arrived` | allowed |
+| `Completed`, `NoShow` | refused: the appointment has been checked out or has taken place |
+| `Cancelled`, `LateCancelled` | refused: final for every update |
+
+Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check. If the staff member is not set up for the new session type, Mindbody's error is returned unchanged as `success: false`.
 
 #### Examples
 
@@ -187,6 +201,10 @@ interface UpdateAppointmentResponse {
 
 ```json
 { "appointmentId": 987654, "execute": "arrive" }
+```
+
+```json
+{ "clientId": "100015", "appointmentId": 987654, "sessionTypeId": 88 }
 ```
 
 #### Error Handling
@@ -241,6 +259,8 @@ A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbo
 - `lateCancel: false` (the default) is unaffected.
 
 `cancelEnrollmentVisits` applies the same bound to enrollment sessions, and so does `removeClientFromClass` (drop-in classes). With `lateCancel: true` the latter, before any write: refuses if the window is unset or invalid (no lookup, no write); resolves the site timezone (refuses if it cannot); looks the class up with `GET /class/classes` filtered by `ClassIds`, from now through two years ahead in the site's zone; and refuses if the class is not found (including one that has already started), is returned more than once, or starts more than the window from now. It returns `{ success: false, message }` with the same refusal texts as above. `lateCancel: false` (the default) makes no extra read.
+
+`removeClientFromClass` also takes `sendEmail` (default `false`), sent as `SendEmail` on `POST /class/removeclientfromclass`. As above, it is not a dry run: `true` can email a real client. A late cancel that the window refuses makes no POST, so no email is sent.
 
 #### Response
 
@@ -373,20 +393,66 @@ Processes a shopping cart checkout. A cart item can carry `appointmentIds` to re
 | Parameter | Type | Required | Description | Default |
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Client ID | - |
-| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the item; a `Tip` uses `item.metadata.amount`. | - |
+| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. See "Cart items" below. | - |
 | `payments` | array | Yes | Payment methods: `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`. | - |
 | `inStore` | boolean | No | In-store purchase | false |
 | `promotionCode` | string | No | Promotion code | - |
 | `sendEmail` | boolean | No | Send email receipt | true |
 | `locationId` | number | No | Location ID | - |
+| `test` | boolean | No | Dry run, sent as `Test: true`: Mindbody validates the cart and computes its totals but records no sale. See "Dry run" below. Omitted or false, `Test` is not sent. | false |
+
+#### Cart items
+
+The tool builds each cart item's `Item.Metadata` itself; it does not pass the caller's `metadata` through. The accepted keys are:
+
+| `item.type` | `item.metadata` | Sent as |
+|---|---|---|
+| `Service` | `{ id }`: the pricing option ID | `Item: { Type: 'Service', Metadata: { Id } }` |
+| `Product` | `{ id }`: the product ID | `Item: { Type: 'Product', Metadata: { Id } }` |
+| `Package` | `{ id }`: the package ID | `Item: { Type: 'Package', Metadata: { Id } }` |
+| `Tip` | `{ amount }` | `Item: { Type: 'Tip', Metadata: { Amount } }` |
+
+Any other key (`price`, `name`, a second `id` on a tip, ...) is dropped without error. `docs/openapi.json` types `CheckoutItem.Metadata` as a bare `object` and points to Mindbody's "Cart Item Metadata" page for its contents, so the table above is this tool's contract, not a schema the spec publishes.
+
+Per-item fields beside `item` and `quantity`, all optional. Each maps to a property of `CheckoutItemWrapper` in the spec:
+
+- `appointmentIds` → `AppointmentIds`: existing appointments this item reconciles. See "Guards".
+- `discountAmount` → `DiscountAmount`: amount taken off the item. It must be a non-negative number, or the checkout is refused before any request. Omitted, no `DiscountAmount` key is sent. The spec says it "is ignored for packages". The discount shows only in the cart's `discountTotal` and `grandTotal`: on `-99` (2026-11-16) a 5 discount on a 30 service gave `DiscountTotal` 5 and `GrandTotal` 25, but the line's `DiscountAmount` came back 0. So a result line's `discountAmount` is passed through as reported, and its `total` is `price × quantity` before discount.
+- `appointmentBookingRequests` → `AppointmentBookingRequests`: new appointments to book and pay for with this item. The spec says it "applies only to pricing option items" (`Service`). Each entry is `{ staffId, locationId, sessionTypeId, startDateTime, notes? }`, sent as `StaffId`, `LocationId`, `SessionTypeId`, `StartDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and `Notes`. Mindbody ignores `Notes`: the spec's `CheckoutAppointmentBookingRequest` has no such property, and on `-99` (2026-11-16) an appointment booked with notes came back with `Notes: null`, in the checkout response and on a read-back. Set notes afterwards with `updateAppointment`. Its `EndDateTime`, `Resources` and `ProviderId` are not exposed. Unlike `appointmentIds`, these entries pass no ownership guard: they create appointments rather than pay for existing ones.
+
+The spec's other wrapper fields (`SalesNotes`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds`, `Id`) are not exposed.
+
+#### No per-sale price override
+
+Every item sells at its catalogue price. The REST API has no field that sets a different price for one sale, and `DiscountAmount` only lowers one. A sale that needs another price, including any 0-priced option billed by the hour, must be recorded in the Mindbody web app. A client purchases read (`GET /client/clientpurchases`, the `getClientPurchases` tool where this server has it) can then confirm it.
+
+The evidence, from `Test: true` probes on the `-99` sandbox on 2026-10-28 (issue #32). The sandbox currently refuses user tokens, so none of this could be re-run for this write-up:
+
+- `CheckoutItemWrapper` in `docs/openapi.json` has no price field. Its properties are `Item`, `Quantity`, `DiscountAmount`, `SalesNotes`, `AppointmentIds`, `AppointmentBookingRequests`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds` and `Id`.
+- 68 checkouts placed 22 candidate keys at three levels: inside `Item.Metadata`, on `Item`, and on the cart item. The keys were `Price`, `price`, `UnitPrice`, `SalePrice`, `CustomPrice`, `OverridePrice`, `PriceOverride`, `ItemPrice`, `NewItemPrice`, `NewPrice`, `ManualPrice`, `OnlinePrice`, `PricePaid`, `Total`, `TotalAmount`, `Subtotal`, `SubTotal`, `Cost`, `Rate`, `Value`, `Amount` and `amount`. Every one was ignored without an error.
+- A committed (`Test: false`) checkout carrying several of those keys, with a payment matching the intended price, was refused: `The input payment total (107) does not match the calculated total (100)`.
+- A negative `DiscountAmount` on a 0-priced service left the total at 0.
+- The web app's override is a form field (`newItemPrice`) posted to the classic ASP Point of Sale page, not to the REST API. A sale at an overridden price reads back through `GET /client/clientpurchases` and `GET /sale/sales` as `PurchasedItems[].UnitPrice`, with no override flag. So the API can read an overridden price but cannot write one.
+
+Changing the catalogue price around a sale (`PUT /sale/services`) was rejected: it changes the price for every concurrent sale, and it changes the pricing option rather than overriding one checkout.
 
 #### Guards
 
+Every guard below runs on a dry run exactly as on a real checkout, and refuses before any request.
+
+A `discountAmount` that is negative or not a finite number refuses the checkout.
+
 Every `appointmentIds` entry (across all items) is verified before the sale is sent, all-or-nothing: if any one fails, nothing is charged and no partial cart is built. The check is the same ownership lookup `cancelAppointments` and `updateAppointment` use (`GET /appointment/staffappointments` filtered by `ClientId`, a year back through two years ahead). An appointment that belongs to another client, or is outside that window, is reported as `not found for this client`; the owner is never named. If the site timezone or the lookup fails, the checkout is refused (fail closed). A request with no `appointmentIds` makes no lookup.
+
+#### Dry run (`test: true`)
+
+Mindbody's test mode does **not** check payments. On the `-99` sandbox (2026-10-28) a Cash payment of 107 against a cart total of 100 passed with `Test: true`, while the same cart with `Test: false` was refused (`The input payment total (107) does not match the calculated total (100) for the entire cart.`). So the tool checks payments itself: it sums `payments[].metadata.amount` and compares it with the returned `GrandTotal` in whole cents. On a mismatch it returns `success: false` with both figures, as the real call would.
+
+A dry-run result carries `dryRun: true`. The response's `ShoppingCart.SaleId` is never returned: in test mode the sandbox still hands one back, but no such sale exists (`GET /sale/sales` by that id returns no rows). `shoppingCart.id` is the cart id, not a sale id.
 
 #### Response
 
-The response has `success`, a `shoppingCart` with totals and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled.
+The response has `success`, a `shoppingCart` with totals (`subTotal`, `discountTotal`, `taxTotal`, `grandTotal`) and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled. A dry run adds `dryRun: true`.
 
 #### Examples
 
@@ -405,8 +471,11 @@ The response has `success`, a `shoppingCart` with totals and `items`, and a top-
 | Error | Description | Solution |
 |-------|-------------|----------|
 | `Appointment(s) failed verification (<id>: not found for this client; ...); nothing was charged.` | An `appointmentIds` entry is not this client's. Nothing is charged. | Check the appointment ID and `clientId` |
+| `discountAmount must be a non-negative number (got ...); nothing was charged.` | A negative or non-numeric `discountAmount`. Nothing is sent. | Pass a number of 0 or more; a higher price must be sold in the web app |
 | `Appointment id(s) ... are not positive integers; nothing was charged.` | A malformed ID. Nothing is charged. | Fix the ID |
 | `Could not verify the appointments (site timezone unavailable: ... / appointment lookup failed: ...); nothing was charged.` | The ownership lookup could not run. Nothing is charged. | Retry; check the site record's `TimeZone` |
+| `Dry run: the payment total (<sum>) does not match the calculated total (<GrandTotal>); ...` | `test: true` and the payments do not sum to the cart total. The real checkout would be refused. | Fix the payment amounts |
+| `Dry run: Mindbody returned no GrandTotal, ...` | `test: true` and the response had no cart total, so payments could not be checked | Retry; check the items |
 | Mindbody error | Returned as `success: false` with Mindbody's message | Check item IDs, payment amounts and the appointment IDs |
 
 ### getActiveSessionTimes
@@ -685,7 +754,54 @@ interface CancelEnrollmentVisitsResponse {
 { "clientId": "12345", "visitIds": [100002, 100003] }
 ```
 
-### getClientCompleteInfo
+### getClientPurchases
+
+Returns a client's purchase history with prices. It wraps `GET /client/clientpurchases` and reads every page through `fetchAllPages` on the `Purchases` key. Read-only: it makes no POST.
+
+Use it to:
+- value what a client bought (`ClientService` from `getClientCompleteInfo` has no price field);
+- check whether a client already has a sale on a day before recording one with `checkoutShoppingCart` (pass the same date as `startDate` and `endDate`);
+- read a sale back afterwards by `saleId`. A sale made in the Mindbody web app at an overridden price reads back as plain `price` and `purchasedItems[].unitPrice` (sandbox sale 100170630: a 10 Class Card at 77 instead of 100 reads `price: 77`, `totalAmount: 83.16`). There is no override flag.
+
+The endpoint's own defaults are `StartDate: now` and `EndDate: end of today`, so a request that omits them returns almost nothing. The tool always sends both.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to read | - |
+| `startDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `StartDate` `T00:00:00` | 365 days before today, site zone |
+| `endDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `EndDate` `T23:59:59` | Today, site zone |
+| `saleId` | number | No | Sent as `SaleId`: only the record for that sale | - |
+
+#### Response
+
+```json
+{
+  "purchases": [
+    {
+      "description": "10 Class Card", "price": 77, "amountPaid": 83.16, "discount": 0, "tax": 6.16,
+      "returned": false, "quantity": 1, "accountPayment": false,
+      "sale": {
+        "id": 100170630, "saleDateTime": "2026-10-28T10:15:00", "locationId": 1,
+        "purchasedItems": [
+          { "id": 1192, "isService": true, "description": "10 Class Card", "unitPrice": 77, "quantity": 1,
+            "totalAmount": 83.16, "returned": false, "contractId": 0,
+            "expDate": "2027-10-28T00:00:00", "activeDate": "2026-10-28T00:00:00" }
+        ],
+        "payments": [{ "id": 77001, "amount": 83.16, "method": 1, "type": "Cash", "transactionId": 555 }]
+      }
+    }
+  ],
+  "totalPurchases": 1
+}
+```
+
+- Every key exists on `ClientPurchaseRecord`, `Sale`, `PurchasedItem` or `SalePayment` in `docs/openapi.json`. Nothing is computed, and no per-session value is derived.
+- A record with `AccountPayment: true` is a payment onto the client's account. It is kept and reported as `accountPayment: true`.
+- `sale.saleDateTime` is site-local. A trailing `Z`, which the API appends spuriously, is stripped (D-11).
+- `UniqueClientId` is not exposed: `clientId` reads the same records.
+
 
 Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination (sandbox-verified: `Limit`/`Offset` are ignored silently and no `PaginationResponse` envelope exists), so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
 

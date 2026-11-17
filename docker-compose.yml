@@ -14,6 +14,8 @@ services:
       MCP_SERVER_NAME: ${MCP_SERVER_NAME:-mindbody-mcp}
       MCP_SERVER_VERSION: ${MCP_SERVER_VERSION:-2.0.0}
       MCP_CORS_ORIGIN: ${MCP_CORS_ORIGIN:-*}
+      # Required off loopback; the server refuses to start without it.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?set MCP_AUTH_TOKEN (e.g. openssl rand -hex 32)}
       
       # Mindbody API Configuration
       MINDBODY_API_KEY: ${MINDBODY_API_KEY}

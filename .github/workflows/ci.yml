@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  # Every branch, so a feature branch is tested before it reaches a PR.
+  # Tags are excluded: releases run release.yml.
   push:
-    branches: [main, master, develop]
+    branches: ['**']
+  # PRs into any base branch, including stacked PRs.
   pull_request:
-    branches: [main, master, develop]
 
 # Least privilege: this workflow only reads the repo. Without this block the
 # GITHUB_TOKEN inherits the repository default (often contents: write).

@@ -98,6 +98,7 @@ const EXPECTED_TOOL_NAMES = [
   'getClientContracts',
   'getClientFormulaNotes',
   'getClientCompleteInfo',
+  'getClientPurchases',
   'getServices',
   'resolveCheckoutService',
   'getPricingMap',
@@ -1246,7 +1247,8 @@ describe('domain — orders (read and write)', () => {
       taxTotal: 0,
       discountTotal: 20,
       grandTotal: 260,
-      // `price`/`name` come from `Item`; `total` is price × quantity − discount.
+      // `price`/`name` come from `Item`; `total` is price × quantity before
+      // discount (the discount is in `discountTotal`/`grandTotal` only).
       // `appointments` is empty here because this cart reconciled nothing.
       items: [
         {
@@ -1256,7 +1258,7 @@ describe('domain — orders (read and write)', () => {
           quantity: 1,
           discountAmount: 20,
           taxRate: 0,
-          total: 200,
+          total: 220,
           appointments: [],
         },
         {
@@ -2418,6 +2420,25 @@ describe('domain — enrollments', () => {
     expect(stub.requestsTo('/public/v6/class/classes', 'GET')).toHaveLength(0);
   });
 
+  itE2E('removeClientFromClass passes sendEmail through as SendEmail, documented as default false', async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'removeClientFromClass');
+    const sendEmail = (tool?.inputSchema.properties as Record<string, { type: string; description: string }>)?.sendEmail;
+    expect(sendEmail?.type).toBe('boolean');
+    expect(sendEmail?.description).toContain('default false');
+
+    stub.resetLog();
+    const result = await client.callTool({
+      name: 'removeClientFromClass',
+      arguments: { clientId: STUB_FIXTURES.clientId, classId: 101, sendEmail: true },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(resultJson(result).success).toBe(true);
+    expect(stub.requestsTo('/public/v6/class/removeclientfromclass', 'POST').map((write) => write.body)).toEqual([
+      { ClientId: STUB_FIXTURES.clientId, ClassId: 101, LateCancel: false, SendEmail: true },
+    ]);
+  });
+
   itE2E('removeClientFromClass bounds lateCancel to a configured 24-hour window', async () => {
     // A second server, because the shared one deliberately has no window. This is
     // the inside-window success path that unit tests alone covered before: the
@@ -2446,6 +2467,7 @@ describe('domain — enrollments', () => {
           ClientId: STUB_FIXTURES.clientId,
           ClassId: LATE_CANCEL_FIXTURES.insideWindowClassId,
           LateCancel: true,
+          SendEmail: false,
         },
       ]);
 
