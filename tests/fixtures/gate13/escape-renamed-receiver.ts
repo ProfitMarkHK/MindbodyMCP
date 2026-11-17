@@ -1,4 +1,4 @@
-import type { IMindbodyClient } from "../../../src/api/client";
+import type { IMindbodyClient } from "../../../src/api/client.js";
 
 // A renamed receiver parameter, with the path hoisted to a module constant.
 const CLASSES_PATH = "/class/classes";

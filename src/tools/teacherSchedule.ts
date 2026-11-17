@@ -9,13 +9,17 @@ import {
 import {
   getWeekFromDate,
   getDayOfWeek,
-  formatTime,
   getDurationInMinutes,
-  getDateOnly,
 } from '../utils/dates.js';
 import { resolveReadTimeZone, siteDateString } from '../utils/siteTime.js';
 
-async function findTeacherByName(
+/**
+ * The staff member whose `Name`, or `FirstName LastName`, equals `name`
+ * case-insensitively; `null` when none does. Matching is exact on the whole
+ * name, so a first name alone matches only a staff member whose whole name is
+ * that first name. Exported for tests.
+ */
+export async function findTeacherByName(
   name: string,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = teacherCache

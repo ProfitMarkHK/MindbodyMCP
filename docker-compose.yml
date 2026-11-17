@@ -4,16 +4,19 @@ services:
   mindbody-mcp-sse:
     build: .
     container_name: mindbody-mcp-sse
+    # The image defaults to MCP_TRANSPORT=http; select SSE explicitly here.
+    command: ["--transport", "sse"]
     ports:
       - "${MCP_PORT:-3000}:3000"
     environment:
       # MCP Server Configuration
-      MCP_TRANSPORT: sse
       MCP_PORT: 3000
       MCP_HOST: 0.0.0.0
       MCP_SERVER_NAME: ${MCP_SERVER_NAME:-mindbody-mcp}
       MCP_SERVER_VERSION: ${MCP_SERVER_VERSION:-2.0.0}
       MCP_CORS_ORIGIN: ${MCP_CORS_ORIGIN:-*}
+      # Required off loopback; the server refuses to start without it.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?set MCP_AUTH_TOKEN (e.g. openssl rand -hex 32)}
       
       # Mindbody API Configuration
       MINDBODY_API_KEY: ${MINDBODY_API_KEY}
@@ -31,7 +34,8 @@ services:
     
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      # oven/bun:alpine has no curl; wget ships with BusyBox.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -54,6 +58,56 @@ services:
         max-size: "10m"
         max-file: "3"
     
+    networks:
+      - mcp-network
+
+  # Streamable HTTP transport. Needs a Cloudflare Access application in front of
+  # it: the container cannot bind loopback, so MCP_ALLOW_UNAUTHENTICATED is not
+  # an option here. See docs/RAILWAY.md for the Access setup.
+  mindbody-mcp-http:
+    build: .
+    container_name: mindbody-mcp-http
+    ports:
+      - "${HTTP_PORT:-3001}:3000"
+    environment:
+      MCP_TRANSPORT: http
+      MCP_SERVER_NAME: ${MCP_SERVER_NAME:-mindbody-mcp}
+      MCP_SERVER_VERSION: ${MCP_SERVER_VERSION:-2.0.0}
+      # The Host header the proxy forwards; without it the DNS-rebinding guard
+      # rejects everything that is not loopback.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?set MCP_ALLOWED_HOSTS to the public hostname}
+
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:?set CF_ACCESS_TEAM_DOMAIN}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:?set CF_ACCESS_AUD}
+
+      MINDBODY_API_KEY: ${MINDBODY_API_KEY}
+      MINDBODY_SITE_ID: ${MINDBODY_SITE_ID}
+      MINDBODY_SOURCE_NAME: ${MINDBODY_SOURCE_NAME}
+      MINDBODY_SOURCE_PASSWORD: ${MINDBODY_SOURCE_PASSWORD}
+      MINDBODY_API_URL: ${MINDBODY_API_URL:-https://api.mindbodyonline.com/public/v6}
+
+      CACHE_TTL_MINUTES: ${CACHE_TTL_MINUTES:-5}
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
     networks:
       - mcp-network
 

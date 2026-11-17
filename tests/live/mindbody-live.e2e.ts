@@ -82,6 +82,10 @@ const BUN_BINARY = process.execPath;
 const CALL_TIMEOUT_MS = 60_000;
 /** How many clients the read-only formula note test checks before giving up. */
 const FORMULA_NOTE_CLIENT_SCAN = 40;
+/** Clients getClientSchedule walks before it reports a loud skip (a booking-less site cannot run long). */
+const SCHEDULE_CLIENT_SCAN = 40;
+/** How many clients the read-only purchase history test checks before giving up. */
+const PURCHASE_CLIENT_SCAN = 20;
 const CONNECT_TIMEOUT_MS = 60_000;
 
 /**
@@ -208,9 +212,6 @@ interface BookingCandidate {
   startDateTime: string;
   alternativeStart: string | null;
 }
-
-/** What the raw `/usertoken/issue` probe saw: true issued, false not, null not run. */
-let userTokenIssuedByProbe: boolean | null = null;
 
 /**
  * The contract this run bought, and the id of the ClientContract it created.
@@ -624,17 +625,6 @@ async function rawApiCall(
   }
 }
 
-/** Poll the subprocess's stderr until `predicate` matches, or give up. */
-async function waitForStderr(predicate: (text: string) => boolean, timeoutMs = 15_000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const text = serverStderr.join('');
-    if (predicate(text)) return text;
-    await new Promise((done) => setTimeout(done, 200));
-  }
-  return serverStderr.join('');
-}
-
 /**
  * Tear a connection down promptly.
  *
@@ -821,7 +811,6 @@ describe('live tier — user token flow', () => {
     });
 
     const tokenIssued = typeof response.body?.AccessToken === 'string' && response.body.AccessToken.length > 0;
-    userTokenIssuedByProbe = tokenIssued;
 
     // Never print the token itself. The shape and the status are the finding.
     console.log(
@@ -1002,6 +991,108 @@ describe('live tier — clients', () => {
     );
   }, FORMULA_NOTE_CLIENT_SCAN * CALL_TIMEOUT_MS);
 
+  itLive("getClientSchedule lists a client's bookings as flat, typed rows, read-only", async () => {
+    const name = "getClientSchedule lists a client's bookings as flat, typed rows, read-only";
+    // Read-only. The default window (today through 30 days out) may be empty
+    // for every sandbox client, so the scan starts a year back to find a client
+    // with bookings and exercise the field mapping on real rows.
+    const yearBack = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, SCHEDULE_CLIENT_SCAN);
+    expect(candidates.length).toBeGreaterThan(0);
+
+    const byDefault = await callTool('getClientSchedule', { clientId: String(candidates[0].id) });
+    expect(Array.isArray(byDefault.bookings)).toBe(true);
+    expect(byDefault.totalBookings).toBe(byDefault.bookings.length);
+
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientSchedule', { clientId: String(candidate.id), startDate: yearBack });
+      expect(result.totalBookings).toBe(result.bookings.length);
+      if (result.totalBookings > 0) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a booking since ${yearBack}, so the`,
+        'row mapping is untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    const kinds = new Set(['waitlist', 'appointment', 'enrollment', 'class']);
+    for (const booking of found.result.bookings) {
+      expect(kinds.has(booking.kind)).toBe(true);
+      expect(Number.isInteger(booking.visitId)).toBe(true);
+      expect(booking.startDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(booking.startDateTime.slice(0, 10) >= yearBack).toBe(true);
+      if (booking.kind === 'appointment') expect(Number.isInteger(booking.appointmentId)).toBe(true);
+      if (booking.kind === 'class' || booking.kind === 'enrollment') expect(Number.isInteger(booking.classId)).toBe(true);
+      if (booking.kind === 'waitlist') expect(booking.isWaitlisted).toBe(true);
+      for (const flag of ['signedIn', 'lateCancelled', 'missed', 'isWaitlisted']) expect(typeof booking[flag]).toBe('boolean');
+    }
+    const counts = [...kinds].map((kind) => `${kind} ${found!.result.bookings.filter((b: any) => b.kind === kind).length}`);
+    console.log(
+      `\n LIVE client schedule: client ${found.clientId} has ${found.result.totalBookings} booking(s) since ${yearBack} ` +
+        `(${counts.join(', ')}); default window for client ${candidates[0].id}: ${byDefault.totalBookings}.\n`
+    );
+  }, (SCHEDULE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
+
+  itLive('getClientPurchases reads a client\'s purchase history and one sale back by saleId, read-only', async () => {
+    const name = "getClientPurchases reads a client's purchase history and one sale back by saleId, read-only";
+    // Read-only: walk existing clients until one has a purchase in the default
+    // window (365 days through today, site zone). Bounded like the formula notes scan.
+    const clients = await callTool('getClients', {});
+    const candidates = clients.clients.slice(0, PURCHASE_CLIENT_SCAN);
+    let found: { clientId: string; result: any } | undefined;
+    for (const candidate of candidates) {
+      const result = await callTool('getClientPurchases', { clientId: String(candidate.id) });
+      expect(Array.isArray(result.purchases)).toBe(true);
+      expect(result.totalPurchases).toBe(result.purchases.length);
+      if (result.purchases.some((p: any) => Number.isInteger(p.sale?.id))) {
+        found = { clientId: String(candidate.id), result };
+        break;
+      }
+    }
+    if (!found) {
+      announceLoudSkip(name, [
+        `reason: none of the first ${candidates.length} clients has a purchase in the last 365 days, so the`,
+        'field mapping and saleId read-back are untested this run. Empty results were well-formed.',
+      ]);
+      return;
+    }
+
+    for (const purchase of found.result.purchases) {
+      expect(typeof purchase.accountPayment).toBe('boolean');
+      if (purchase.sale) {
+        // Site-local, no offset: a spurious `Z` is stripped (D-11).
+        expect(purchase.sale.saleDateTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        expect(purchase.sale.saleDateTime.endsWith('Z')).toBe(false);
+        expect(Array.isArray(purchase.sale.purchasedItems)).toBe(true);
+        expect(Array.isArray(purchase.sale.payments)).toBe(true);
+      }
+    }
+
+    // The duplicate-checkout check and the read-back: a one-day window on the
+    // sale's own date, narrowed by saleId, returns that sale.
+    const target = found.result.purchases.find((p: any) => Number.isInteger(p.sale?.id));
+    const day = target.sale.saleDateTime.slice(0, 10);
+    const one = await callTool('getClientPurchases', {
+      clientId: found.clientId,
+      startDate: day,
+      endDate: day,
+      saleId: target.sale.id,
+    });
+    expect(one.totalPurchases).toBeGreaterThan(0);
+    for (const purchase of one.purchases) expect(purchase.sale?.id).toBe(target.sale.id);
+    console.log(
+      `\n LIVE purchases: client ${found.clientId} has ${found.result.totalPurchases} in the default window; ` +
+        `sale ${target.sale.id} on ${day} reads back ${one.totalPurchases} record(s).\n`
+    );
+  }, (PURCHASE_CLIENT_SCAN + 2) * CALL_TIMEOUT_MS);
+
   itLive('getClientFormulaNotes with neither id is refused', async () => {
     if (!client) throw new Error('MCP client is not connected; the live tier did not start.');
     const result = await client.callTool({ name: 'getClientFormulaNotes', arguments: {} });
@@ -1011,6 +1102,105 @@ describe('live tier — clients', () => {
 });
 
 // ── 4. Service definitions ────────────────────────────────────────────────────
+
+/** How many future classes the resolver test tries to book. */
+const RESOLVER_CLASS_CANDIDATES = 5;
+
+/**
+ * Mindbody refusals of an addClientToClass request that the class listing
+ * cannot predict, so the resolver test moves on to the next class. Every other
+ * refusal is a failure. Empty on purpose: a dry-run probe (2026-11-17, `Test:
+ * true`) accepted all 60 future classes with space on -99, so no such refusal
+ * has been seen. Add a message here only after a run shows it.
+ */
+const CLASS_BOOKING_REFUSALS_TO_SKIP_PAST: RegExp[] = [];
+const CANCEL_RESOLVER_TEST = 'cancelClientBooking resolves a class booking by classId and normal-cancels it';
+const CANCEL_IMPACT_TEST = 'cancelClientBooking with observeBalance reads the wallet before and after a normal cancel';
+
+describe('live tier — booking-cancel resolver', () => {
+  itLive('cancelClientBooking refuses a bad locator and an unmatched one without writing', async () => {
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const twoLocators = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 1, visitId: 1 });
+    expect(twoLocators).toMatchObject({ success: false, outcome: 'refused' });
+    expect(twoLocators.message).toContain('exactly one of');
+
+    const unmatched = await callTool('cancelClientBooking', { clientId: createdClientId, classId: 999999999 });
+    expect(unmatched).toMatchObject({ success: false, outcome: 'refused' });
+    expect(unmatched.receipt).toBeUndefined();
+  });
+
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
+  /**
+   * Books the run's own client into a future class (RequirePayment false, so
+   * no pass is consumed). Returns the class id, or undefined after a loud skip.
+   */
+  async function bookFutureClass(testName: string): Promise<number | undefined> {
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+    const listed = await callTool('getClasses', { startDate: day(2), endDate: day(9) });
+    const candidates = listed.classes
+      .filter((cls: any) => !cls.isCanceled && cls.spotsAvailable > 0)
+      .slice(0, RESOLVER_CLASS_CANDIDATES);
+    const failures: string[] = [];
+    for (const cls of candidates) {
+      const result = await callTool('addClientToClass', { clientId: createdClientId, classId: cls.id, requirePayment: false });
+      if (result.success) return cls.id;
+      const known = CLASS_BOOKING_REFUSALS_TO_SKIP_PAST.some((pattern) => pattern.test(String(result.message)));
+      expect(known, `addClientToClass refused class ${cls.id}: ${result.message}`).toBe(true);
+      failures.push(`class ${cls.id}: ${result.message}`);
+    }
+    announceLoudSkip(testName, [
+      `reason: no future class with space to book the run's client into (${candidates.length} tried)`,
+      ...failures,
+    ]);
+    return undefined;
+  }
+
+  itLive(CANCEL_RESOLVER_TEST, async () => {
+    // Cancels with lateCancel: false, so nothing is forfeited whatever the site window is.
+    const classId = await bookFutureClass(CANCEL_RESOLVER_TEST);
+    if (classId === undefined) return;
+    const booked = { classId };
+
+    const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId: booked.classId, lateCancel: false });
+    expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal', booking: { classId: booked.classId } });
+    expect(['removeClientFromClass', 'cancelEnrollmentVisits']).toContain(result.receipt.tool);
+    expect(result.receipt).toMatchObject({ endpoint: '/class/removeclientfromclass', request: { ClassId: booked.classId, LateCancel: false } });
+
+    // Read back: the booking is no longer a live seat on the client's schedule.
+    const after = await callTool('getClientSchedule', { clientId: createdClientId, startDate: day(0), endDate: day(10) });
+    const still = after.bookings.filter((b: any) => b.classId === booked!.classId && !b.lateCancelled);
+    expect(still).toEqual([]);
+    console.log(`\n LIVE cancel resolver: class ${booked.classId} booked then cancelled via ${result.receipt.tool}.\n`);
+  }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
+
+  itLive(CANCEL_IMPACT_TEST, async () => {
+    // Same booking as above, cancelled normally with observeBalance: true. The
+    // booking is unpaid (RequirePayment false), so the visit normally carries no
+    // ServiceId and impact.observed is false; either way the reads must land,
+    // be timestamped, and leave the cancel's outcome untouched.
+    const classId = await bookFutureClass(CANCEL_IMPACT_TEST);
+    if (classId === undefined) return;
+
+    const result = await callTool('cancelClientBooking', { clientId: createdClientId, classId, lateCancel: false, observeBalance: true });
+    expect(result, result.message).toMatchObject({ success: true, outcome: 'cancelled', mode: 'normal' });
+    const impact = result.impact;
+    expect(impact, 'impact block').toBeDefined();
+    expect(typeof impact.observed).toBe('boolean');
+    expect(Date.parse(impact.readAtBefore)).not.toBeNaN();
+    expect(Date.parse(impact.readAtAfter)).not.toBeNaN();
+    expect(impact.caveats.length).toBeGreaterThan(0);
+    if (impact.observed) expect(Number.isInteger(impact.consumed)).toBe(true);
+    else expect(typeof impact.reason).toBe('string');
+    if (impact.accountBalanceBefore !== undefined && impact.accountBalanceAfter !== undefined) {
+      expect(impact.accountBalanceDelta).toBe(Math.round((impact.accountBalanceAfter - impact.accountBalanceBefore) * 100) / 100);
+    }
+    console.log(
+      `\n LIVE cancel impact: class ${classId}, observed ${impact.observed}` +
+        `${impact.observed ? `, consumed ${impact.consumed}` : ` (${impact.reason})`}, balance delta ${impact.accountBalanceDelta}.\n`
+    );
+  }, (RESOLVER_CLASS_CANDIDATES + 4) * CALL_TIMEOUT_MS);
+});
 
 describe('live tier — service definitions', () => {
   itLive('getSites yields the site time zone every site-local date is computed in', async () => {
@@ -1573,15 +1763,40 @@ describe('live tier — appointments', () => {
     const before = await readBackCreatedAppointment();
     const original: number = before.sessionTypeId ?? discovered.sessionTypeId!;
 
-    // Prefer a type availability already pairs with this staff member; then the
-    // other Appointment types. Mindbody refuses a type the staff cannot teach,
-    // and a refusal writes nothing, so trying the next one is free.
-    const paired = (discovered.bookingCandidates ?? [])
-      .filter((candidate) => candidate.staffId === discovered.staffId)
-      .map((candidate) => candidate.sessionTypeId);
-    const targets = [...new Set([...paired, ...discovered.appointmentSessionTypeIds!])]
+    // Try only the types this staff member offers. Mindbody answers a type the
+    // staff cannot take with a generic "Something went wrong (Code: Unknown)",
+    // so blind guessing over the site's Appointment types reads as an outage
+    // (PR #56). `/appointment/bookableitems` filtered by the staff member is the
+    // one read that says which types they offer; same-length types come first.
+    const zone = siteZone();
+    const startDate = siteLocalDate(zone, BOOKABLE_START_OFFSET_DAYS);
+    const endDate = siteLocalDate(zone, BOOKABLE_START_OFFSET_DAYS + BOOKABLE_WINDOW_DAYS);
+    const allTypes = discovered.appointmentSessionTypeIds!;
+    const offered = new Set<number>();
+    for (let i = 0; i < allTypes.length; i += BOOKABLE_SESSION_TYPE_LIMIT) {
+      const offeredItems = await callTool('getBookableItems', {
+        sessionTypeIds: allTypes.slice(i, i + BOOKABLE_SESSION_TYPE_LIMIT),
+        staffIds: [discovered.staffId],
+        startDate,
+        endDate,
+      });
+      for (const item of offeredItems.bookableItems ?? []) {
+        if (item.staffId === discovered.staffId && typeof item.sessionTypeId === 'number') offered.add(item.sessionTypeId);
+      }
+    }
+    const minutes = (id: number) => discovered.sessionTypeMinutes?.get(id);
+    const targets = [...offered]
       .filter((id) => id !== original)
+      .sort((a, b) => Number(minutes(b) === minutes(original)) - Number(minutes(a) === minutes(original)))
       .slice(0, MAX_SESSION_TYPE_CHANGE_ATTEMPTS);
+    if (targets.length === 0) {
+      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
+        `reason: staff ${discovered.staffId} offers no Appointment session type other than ${original}`,
+        `(bookable items ${startDate} to ${endDate}), so there is no type to change appointment ${createdAppointmentId} to.`,
+      ]);
+      return;
+    }
+    console.log(`\n LIVE session type change: staff ${discovered.staffId} offers types ${[...offered].join(', ')}.\n`);
 
     const refusals: string[] = [];
     let changed: any = null;
@@ -1611,13 +1826,9 @@ describe('live tier — appointments', () => {
           '\n'
       );
     }
-    if (changed === null) {
-      announceLoudSkip(SESSION_TYPE_CHANGE_TEST, [
-        `reason: Mindbody refused every other session type tried (${targets.join(', ') || 'none available'})`,
-        `for staff ${discovered.staffId}, so there is no type to change appointment ${createdAppointmentId} to.`,
-      ]);
-      return;
-    }
+    // Every target is a type this staff member offers, so refusing all of them is a failure.
+    expect(changed, `Mindbody refused every session type staff ${discovered.staffId} offers (${targets.join(', ')})`)
+      .not.toBeNull();
 
     expect(changed.appointment.sessionTypeId).toBe(target);
     const afterChange = await readBackCreatedAppointment();
@@ -1876,6 +2087,41 @@ describe('live tier — comp-paid checkout', () => {
       `\n LIVE financial write: sale ${result.shoppingCart?.id ?? 'unknown'} paid with custom method ` +
         `${discovered.customPaymentMethodId} committed. NOT reversible.\n`
     );
+  });
+
+  // Issue #31: `test: true` must record nothing, and the tool, not Mindbody,
+  // must catch a payment that does not match the cart total. Writes nothing.
+  const DRY_RUN_CHECKOUT_TEST = 'checkoutShoppingCart test: true records no sale and checks payments';
+
+  itLive(DRY_RUN_CHECKOUT_TEST, async () => {
+    const name = DRY_RUN_CHECKOUT_TEST;
+    if (!requireDiscovered(name, ['locationId', 'appointmentServiceId'])) return;
+    if (!createdClientId) {
+      throw new Error('No client was created this run, so there is no one to dry-run a sale for. See the earlier failure.');
+    }
+    const cart = (amount: number) => ({
+      clientId: createdClientId,
+      items: [{ item: { type: 'Service', metadata: { id: discovered.appointmentServiceId } }, quantity: 1 }],
+      payments: [{ type: 'Comp', metadata: { amount } }],
+      inStore: true,
+      sendEmail: false,
+      locationId: discovered.locationId,
+      test: true,
+    });
+    const salesFor = async () => (await callTool('getSales', { clientIds: [createdClientId] })).sales.map((sale: any) => sale.id);
+
+    const before = await salesFor();
+    const amount = discovered.appointmentServicePrice ?? 0;
+    const ok = await callTool('checkoutShoppingCart', cart(amount));
+    expect(ok.success, `dry run failed: ${ok.message}`).toBe(true);
+    expect(ok.dryRun).toBe(true);
+    expect(JSON.stringify(ok).toLowerCase()).not.toContain('saleid');
+
+    const mismatch = await callTool('checkoutShoppingCart', cart(amount + 7));
+    expect(mismatch.success).toBe(false);
+    expect(mismatch.message).toContain('does not match');
+
+    expect(await salesFor()).toEqual(before);
   });
 
   // ── purchaseContract: runs, funded by account credit ───────────────────────

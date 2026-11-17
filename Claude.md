@@ -41,6 +41,9 @@ bun run dev
 # Run with SSE transport (production-like)
 bun run dev:sse
 
+# Run with Streamable HTTP transport (production-like; needs CF_ACCESS_* or MCP_ALLOW_UNAUTHENTICATED=true)
+bun run dev:http
+
 # Run tests
 bun test
 
@@ -68,7 +71,10 @@ src/
 │   ├── appointmentManagement.ts
 │   ├── enrollmentManagement.ts
 │   ├── siteManagement.ts
-│   ├── salesManagement.ts
+│   ├── salesManagement.ts    # sales barrel (catalogue / contracts / checkout)
+│   ├── salesCatalogue.ts     # getServices, getPackages, getProducts
+│   ├── salesContracts.ts     # getContracts, purchaseContract
+│   ├── salesCheckout.ts      # checkoutShoppingCart, getCustomPaymentMethods
 │   ├── salesHistory.ts       # getSales (read-only sales history)
 │   └── teacherSchedule.ts
 ├── cache/               # In-memory caching system
@@ -92,7 +98,12 @@ bun run test:sse
 
 # Run performance benchmarks
 bun run benchmark
+
+# Report which docs/openapi.json paths the tools call (offline, informational)
+bun run spec:coverage            # add -- --min <percent> to exit 1 below a floor
 ```
+
+`spec:coverage` reuses Gate 13's scanner (`tests/support/api-call-scanner.ts`) and maps each tool registered in `src/index.ts` to the spec paths it reaches. It is not part of `bun run check`. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Adding a New Tool
 
@@ -149,7 +160,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (50 tools)
+## Available Tools (52 tools)
 
 ### 📅 Class Management
 
@@ -194,7 +205,8 @@ Cancel a client's class booking.
 **Parameters:**
 - `clientId` (required): Client ID
 - `classId` (required): Class ID
-- `lateCancel` (optional): Mark as late cancellation. Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused)
+- `lateCancel` (optional): Mark as late cancellation. Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for a class starting within that many hours (the class is looked up first; an unknown or already-started class is refused). When a rule keys on `serviceId`, the client's schedule for that day is also read to find the visit's pricing option
+- `sendEmail` (optional): Email the client about the cancellation (default false), sent as `SendEmail`. Not a dry run: `true` can email a real client. A refused late cancel sends nothing, so no email
 
 #### `getWaitlistEntries`
 View waitlist entries for classes.
@@ -260,6 +272,23 @@ Get client's attendance history.
 
 **Returns:** Visit history with attendance stats, no-shows, late cancels
 
+#### `getClientSchedule`
+A client's bookings in a window, one flat row per booking, for working out which booking to cancel. Read-only. Reads `GET /client/clientschedule` (every page, `IncludeWaitlistEntries: true`). When some rows have a `ClassId`, it also reads `GET /class/classes` for those classes, to learn their program. It does not decide whether a cancellation would be late: that is the cancel path's job. This tool reports timestamps only.
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, sent unchanged. Default: today through 30 days ahead in the site's zone (`DEFAULT_CLIENT_SCHEDULE_WINDOW_DAYS`)
+
+`productId` (the visit's pricing option) and `sessionTypeId` (from the class) are also returned; late-cancel rules match on them.
+
+**`kind`**, checked in this order:
+1. `waitlist`: `WaitlistInfo.WaitlistId` is set. Not a seat; `waitlistEntryId` is the entry
+2. `appointment`: `AppointmentId > 0`. Cancel with `cancelAppointments`
+3. `enrollment`: the class's program has `ScheduleType: Enrollment`. Cancel with `cancelEnrollmentVisits` (`visitId`)
+4. `class`: any other class visit, including a class `/class/classes` did not return. Cancel with `removeClientFromClass` (`classId`)
+
+**Returns:** `{ bookings: [{ kind, visitId, classId, classScheduleId, appointmentId, appointmentStatus, startDateTime, endDateTime, name, staffId, staffName, locationId, locationName, serviceId, serviceName, programId, programName, signedIn, lateCancelled, missed, isWaitlisted, waitlistEntryId }], totalBookings }`, sorted by start. `classId` is `undefined` on appointments and `appointmentId` on class rows. Staff and location names come from the cached catalogues, and a name is `undefined` when the catalogue does not hold the id. `programId`/`programName`/`classScheduleId` are `undefined` on appointments. The exported function is `getClientScheduleTool(clientId, startDate?, endDate?, client?, cache?)` in `src/tools/clientSchedule.ts`.
+
 #### `getClientMemberships`
 View client's active memberships.
 
@@ -294,6 +323,16 @@ Read a client's formula notes (`GET /client/clientformulanotes`, every page fetc
 - `appointmentId` (optional): Only notes tied to this appointment
 
 **Returns:** `{ formulaNotes: [{ id, clientId, appointmentId, entryDate, note, siteId, siteName, staffName }], totalFormulaNotes }`. Notes are cross-regional, so a note's `clientId` is the client's ID at the site the note came from and can differ from the requested one. `staffName` is set only for notes tied to an appointment.
+
+#### `getClientPurchases`
+A client's purchase history with prices (`GET /client/clientpurchases`, every page fetched, list key `Purchases`). Read-only. Use it to value what a client bought, to check for an existing sale before a `checkoutShoppingCart` (a one-day window), or to read a sale back afterwards by `saleId`, including a web-app sale at an overridden price (it reads back as plain `price`/`unitPrice`; there is no override flag).
+
+**Parameters:**
+- `clientId` (required): Client ID
+- `startDate`, `endDate` (optional): YYYY-MM-DD, site-local, sent as `StartDate` `T00:00:00` and `EndDate` `T23:59:59`. Both are always sent, because the endpoint's own defaults (`now` through end of today) return almost nothing. Default: 365 days back through today in the site's zone.
+- `saleId` (optional): Only the record for this sale
+
+**Returns:** `{ purchases: [{ description, price, amountPaid, discount, tax, returned, quantity, accountPayment, sale: { id, saleDateTime, locationId, purchasedItems: [{ id, isService, description, unitPrice, quantity, totalAmount, returned, contractId, expDate, activeDate }], payments: [{ id, amount, method, type, transactionId }] } }], totalPurchases }`. An `AccountPayment: true` record (a payment onto the account) is kept and reported as `accountPayment: true`. `saleDateTime` is site-local with the API's spurious `Z` stripped (D-11). No per-session value is computed.
 
 #### `getClientCompleteInfo`
 A client's whole wallet in one call (`GET /client/clientcompleteinfo`): the client record with `AccountBalance`, purchased services, contracts, memberships and arrival programs. Use it instead of four separate reads.
@@ -348,8 +387,11 @@ Process a complete purchase transaction.
 
 **Parameters:**
 - `clientId` (required): Client ID
-- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds? }`
-  - `item.type`: `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the service, product or package; a `Tip` uses `item.metadata.amount` instead.
+- `items` (required): Cart items, each `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`
+  - `item.type`: `Service`, `Product`, `Package` or `Tip`.
+  - `item.metadata`: `{ id }` for `Service` (pricing option ID), `Product` and `Package`; `{ amount }` for `Tip`. Only that key is sent. Any other key, such as `price` or `name`, is dropped without error.
+  - `discountAmount` (optional, per item): Amount taken off the item, sent as `DiscountAmount`. Must be a non-negative number, or the whole checkout is refused before anything is sent. Omitted, no `DiscountAmount` is sent. Mindbody ignores it for packages. The discount shows in the result's `shoppingCart.discountTotal` and `grandTotal` only; a line's `discountAmount` is as Mindbody reports it (0 on the sandbox) and its `total` is `price × quantity` before discount.
+  - `appointmentBookingRequests` (optional, per item, pricing option items only): New appointments to book and pay for with this item, sent as `AppointmentBookingRequests`. Each entry has `staffId`, `locationId`, `sessionTypeId`, `startDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and optional `notes`. `notes` is sent as `Notes` but **Mindbody ignores it**: the spec does not define it for this object, and the sandbox books the appointment with no notes. Use `updateAppointment` to add notes. No ownership guard applies: these create appointments.
   - `appointmentIds` (optional, per item): Existing appointment IDs this item pays for. Checkout reconciles them, linking the sale to the booked appointment. The response lists the reconciled IDs on each cart item as `appointments`. Every ID is verified to belong to `clientId` (same lookup as `cancelAppointments`) before anything is sent; if any fails, or the lookup cannot run, the whole checkout is refused and nothing is charged.
 - `payments` (required): Payment methods, each `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`.
   - `Custom`: `metadata` is `{ amount, id }`, where `id` comes from `getCustomPaymentMethods`. A `Custom` payment without a positive integer `id` refuses the whole checkout before anything is sent.
@@ -358,6 +400,9 @@ Process a complete purchase transaction.
 - `promotionCode` (optional): Discount code
 - `sendEmail` (optional): Send receipt (default true)
 - `locationId` (optional): Location ID
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the cart and returns its totals but records no sale; omitted or false, `Test` is never sent. Every guard above still runs and refuses before any request. Mindbody does **not** check payments in test mode (sandbox: Cash 107 against a total of 100 passed), so the tool compares the sum of `payments[].metadata.amount` with `GrandTotal` in whole cents and returns `success: false` with both figures on a mismatch. The result carries `dryRun: true` and never the response's `SaleId`, which names no recorded sale in test mode.
+
+**No per-sale price override.** Each item sells at its catalogue price. The Mindbody REST API has no field that sets a different price for one sale (22 candidate keys were ignored on the sandbox), and `discountAmount` can only lower a price. Record a sale that needs another price, including any 0-priced, hourly-billed option, in the Mindbody web app; a client purchases read can then confirm it. Evidence: [`docs/API.md`](docs/API.md#no-per-sale-price-override).
 
 #### `getCustomPaymentMethods`
 List the site's custom payment methods (`GET /sale/custompaymentmethods`). Takes no parameters; every page is fetched.
@@ -373,7 +418,7 @@ Read-only sales history (`GET /sale/sales`, every page fetched, list key `Sales`
 - `salesRepIds`, `clientIds`: filters applied client-side (the endpoint has none)
 - `matchAppointments` (default false): also read `GET /appointment/staffappointments` for the same range and credit each product sale to the staff on every appointment the same client had on the same site-local day
 
-**Returns:** `{ startDate, endDate, sales: [{ id, saleDateTime, salesRepId, clientId, locationId, items: [{ id, description, isService, categoryId, unitPrice, quantity, totalAmount, returned }], payments: [{ id, amount, method, type }] }], totalSales, bySalesRep: [{ salesRepId, staffName, saleCount, productItemCount, productTotal }] }`. With `matchAppointments`, also `byAppointmentStaff` (same shape, keyed `staffId`), `unmatchedProductSales` and `appointmentMatchNote`. Tip lines (a non-service item described `Tip`; v6 has no tip flag) are dropped from `items` and every summary, and a sale that was only a tip is dropped. Gift cards stay. Summaries count product lines only and skip returned lines; `saleCount` counts every sale for the rep. `saleDateTime` is site-local; the API appends a spurious `Z`, which is stripped, and its date filter matches the sale date only (`docs/mindbody-spec-discrepancies.md` D-11). Staff names come from one cached `GET /staff/staff`. The appointment match is a correlation, not a record: a client seen by two staff that day credits both.
+**Returns:** `{ startDate, endDate, sales: [{ id, saleDateTime, salesRepId, clientId, locationId, items: [{ id, description, isService, categoryId, unitPrice, quantity, totalAmount, returned }], payments: [{ id, amount, method, type }] }], totalSales, bySalesRep: [{ salesRepId, staffName, saleCount, productItemCount, productTotal }] }`. With `matchAppointments`, also `byAppointmentStaff` (same shape, keyed `staffId`), `unmatchedProductSales` and `appointmentMatchNote`. Tip lines (a non-service item described `Tip`; v6 has no tip flag) are dropped from `items` and every summary, and a sale that was only a tip is dropped. Gift cards stay. Summaries count product lines only and skip returned lines; `saleCount` counts every sale for the rep. `saleDateTime` is site-local; the API appends a spurious `Z`, which is stripped, and its date filter matches the sale date only (`docs/mindbody-spec-discrepancies.md` D-11). The endpoint's `TotalResults` counts sale-payment pairs, not sales (D-12), so it is ignored: paging ends on the first short page and `totalSales` counts the sales returned. Staff names come from one cached `GET /staff/staff`. The appointment match is a correlation, not a record: a client seen by two staff that day credits both.
 
 #### `purchaseContract`
 Purchase a membership/contract.
@@ -508,7 +553,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 **Parameters:**
 - `clientId` (required): Client ID who owns every appointment
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
-- `lateCancel` (optional): Record as late cancellations (default false). Refused unless `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is set, and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window)
+- `lateCancel` (optional): Record as late cancellations (default false). Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window). Appointment rules key on `programId`/`sessionTypeId`: an appointment has no pricing-option id, so a `serviceId` rule ahead of the match refuses
 - `sendEmail` (optional): Email the client about the cancellation (default false)
 
 **Guards.** All are checked before any cancellation is sent:
@@ -521,6 +566,26 @@ Cancel future appointments for one client. This is the only cancel path in the s
 All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` gives the reason for each failing ID. If the verification lookup itself fails, nothing is cancelled. Once the guards pass, cancellations are sent one at a time via `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`). If one of those writes fails, the cancellations already made stand: they are listed in `cancelled`, and the failing ID appears in `rejected`.
 
 **Returns:** `{ success, cancelled: [{ id, status, startDateTime }], rejected: [{ id, reason }], message }`
+
+#### `cancelClientBooking`
+Cancel one booking for one client and choose late or normal. A resolver: it finds the booking and decides, then hands the write to `cancelAppointments`, `cancelEnrollmentVisits` or `removeClientFromClass`, so every guard of those tools still applies. It never calls a write endpoint itself. Code: `cancelClientBookingTool(request, client?, cache?)` in `src/tools/cancelBooking.ts`.
+
+**Parameters:**
+- `clientId` (required)
+- Exactly one locator: `classId`, `appointmentId`, `visitId`, or `startDateTime` (site-local `YYYY-MM-DDTHH:MM[:SS]`, optionally narrowed by `classScheduleId`)
+- `lateCancel` (optional): omitted, the resolver decides; `true` is refused outside the window or when no window applies (before any read when nothing is configured); `false` forces a normal cancel
+- `sendEmail` (optional, default false). Passed to whichever tool does the write
+- `observeBalance` (optional, default false): read the paying service's `Remaining` and the client's `AccountBalance` before and after the write, and return `impact`
+
+**Resolution.** Reads `getClientSchedule` over the locator's day for `startDateTime`, otherwise today through 30 days (a booking further out is not found). Matched rows that are waitlist entries, signed in, already late-cancelled or cancelled, or already started are not cancellable. Exactly one cancellable match proceeds. None, or more than one, is refused with `candidates` and no write; the message names why each matched row was not cancellable. Routing: `appointment` → `cancelAppointments`, `enrollment` → `cancelEnrollmentVisits` (`visitId`), `class` → `removeClientFromClass` (`classId`), `waitlist` refused.
+
+**Decision.** The booking's window is the first matching `MINDBODY_LATE_CANCEL_WINDOW_RULES` entry, else `MINDBODY_LATE_CANCEL_WINDOW_HOURS` (see "Late-cancel windows" under Configuration); an appointment's program and session type cost one `GET /appointment/staffappointments`, only when rules are set. With `lateCancel` omitted: late when the start is within that window of now (site zone), normal otherwise, and normal when no window applies. Refused, with no write, when a rule cannot be decided or the rules are invalid (for `true` and omitted alike).
+
+**Failures.** The POST is never retried. If it fails, the schedule is re-read once: `outcome: 'cancelled'` when the booking is gone or released, `still-booked` when it is still there, `unknown` when the re-read fails. The re-read is returned as `reconcile`.
+
+**Returns:** `{ success, outcome: 'cancelled'|'still-booked'|'unknown'|'refused', mode?: 'late'|'normal', booking?, candidates?, decision?: { mode, requested, windowHours, windowSource, hoursUntilStart, reason }, receipt?: { tool, endpoint, request, response, error, sentAt, toolResult }, reconcile?: { readAt, booking, error }, impact?, message }`. `receipt.request` is the exact POST body (including `LateCancel`, and `Execute` for appointments); it is `undefined` when the delegate refused before writing. See `docs/API.md` for the field reference.
+
+**Observed forfeit.** With `observeBalance: true`, `impact` is `{ observed, reason?, serviceId, serviceName, remainingBefore, remainingAfter, consumed, accountBalanceBefore, accountBalanceAfter, accountBalanceDelta, readAtBefore, readAtAfter, caveats }`. The paying service is the visit's `ServiceId`, or the appointment's `ClientServiceId` (one `GET /appointment/staffappointments`); `Remaining` and `AccountBalance` come from one `GET /client/clientcompleteinfo` before and one after, so it adds two GETs (three for an appointment). `consumed` is before minus after. It is never a fee: the API has no fee ledger, so `caveats` always says a fee may be posted outside the read window. `observed` is false, with `reason`, when there is no service id, the service is not found, it has no `Remaining` (unlimited), or a read fails; a failed read never fails the cancel. Code: `src/tools/cancelImpact.ts`.
 
 #### `getBookableItems`
 Find availability windows in which a session could be booked — **windows, not slots**. Each row spans a range (typically 120–750 minutes), so a start must still be validated against `getActiveSessionTimes` before it can be booked.
@@ -599,7 +664,7 @@ Cancel 1 to 3 future enrollment sessions for one client, by visit ID, via `POST 
 **Parameters:**
 - `clientId` (required): owner of every visit
 - `visitIds` (required): 1 to 3 visit IDs (`MAX_ENROLLMENT_CANCELLATIONS_PER_REQUEST`), no duplicates
-- `lateCancel` (optional, default false; bounded by `MINDBODY_LATE_CANCEL_WINDOW_HOURS` as in `cancelAppointments`), `sendEmail` (optional, default false)
+- `lateCancel` (optional, default false; bounded by the late-cancel window as in `cancelAppointments`; rules match the visit's `ProductId`, program and session type), `sendEmail` (optional, default false)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call; 1 to 3 IDs; no duplicates.
@@ -713,7 +778,20 @@ MCP_SERVER_VERSION=2.0.0
 # MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
 # MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services)
 # MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless set; then only within N hours of the start
+# MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24}]'  # Per-service windows, first match wins
+# MCP_AUTH_TOKEN=...  # SSE only: bearer token clients must send; required unless MCP_HOST is loopback
+# MCP_ALLOWED_HOSTS=mcp.example.com  # SSE only: Host values accepted (403 otherwise); unset = loopback only
+# MCP_ALLOWED_ORIGINS=https://app.example.com  # SSE only: Origin values accepted; unset = not checked
+# MCP_CORS_ORIGIN=*  # SSE only: Access-Control-Allow-Origin, one origin or *; no Allow-Credentials is sent
+# MCP_DNS_REBINDING_PROTECTION=false  # SSE only: opt out of the Host/Origin check
 ```
+
+### Late-cancel windows
+The v6 API does not expose a site's late-cancel windows, so the operator states them. `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is the default. `MINDBODY_LATE_CANCEL_WINDOW_RULES` is an optional JSON array checked first, in order; first match wins.
+- A rule is `{ serviceId?, programId?, sessionTypeId?, hours }`: at least one id, every named id must match, ids positive integers, `hours` positive. Unknown keys are errors.
+- `serviceId` is the pricing option (`Visit.ProductId`), not the client's purchase (`Visit.ServiceId`). Appointments carry no pricing-option id, so their rules key on `programId`/`sessionTypeId`.
+- Fail closed: a rule that names an id the booking does not reveal refuses rather than being skipped; no match and no default refuses; malformed rules refuse every `lateCancel: true` before any lookup, naming the entry. `lateCancel: false` is never affected.
+- With no rules set, behaviour and messages are exactly the single-window ones. Refusals and `cancelClientBooking`'s `decision.windowSource` name the rule that applied. Details: `docs/API.md`, "Per-service windows". Code: `src/utils/lateCancel.ts`.
 
 ### Dates and timezones
 Mindbody takes and returns every date and time as the site's local time with no UTC offset (`2026-10-18T08:00:00`). Pass dates and times the same way; the server does the zone arithmetic.

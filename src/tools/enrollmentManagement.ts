@@ -24,7 +24,7 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
 import { errorMessage } from '../utils/errors.js';
-import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
+import { classLateCancelContext, lateCancelConfig, lateCancelConfigRefusal, lateCancelRefusalFor, type LateCancelConfig } from '../utils/lateCancel.js';
 import {
   getSiteTimeZone,
   siteDateString,
@@ -53,7 +53,8 @@ function scheduledDays(schedule: any): string[] {
   return DAY_NAMES.filter((day) => schedule?.[`Day${day}`] === true);
 }
 
-function isEnrollmentClass(cls: any): boolean {
+/** True when a GET /class/classes row belongs to a Program with ScheduleType `Enrollment`. */
+export function isEnrollmentClass(cls: any): boolean {
   return cls?.ClassDescription?.Program?.ScheduleType === ENROLLMENT_SCHEDULE_TYPE;
 }
 
@@ -62,7 +63,7 @@ function isEnrollmentClass(cls: any): boolean {
  * Returns a map ClassId -> Class. Dates bound the lookup the same way the
  * caller bounded the visits, so a class outside the window is simply absent.
  */
-async function lookupClasses(
+export async function lookupClasses(
   client: IMindbodyClient,
   classIds: number[],
   startDateTime: string,
@@ -85,6 +86,27 @@ async function lookupClasses(
     for (const cls of items) byId.set(Number(cls.Id), cls);
   }
   return byId;
+}
+
+/**
+ * Every row of a client's schedule in [startDate, endDate]: GET
+ * /client/clientschedule (paginated, list key `Visits`, rows are
+ * VisitWithWaitlistInfo) with waitlist entries included. Shared by the
+ * enrollment tools and getClientSchedule, so the endpoint is read one way.
+ */
+export async function fetchClientSchedule(
+  client: IMindbodyClient,
+  clientId: string,
+  startDate: string,
+  endDate: string
+): Promise<any[]> {
+  const { items } = await fetchAllPages<any>(
+    client,
+    '/client/clientschedule',
+    { ClientId: clientId, StartDate: startDate, EndDate: endDate, IncludeWaitlistEntries: true },
+    'Visits'
+  );
+  return items;
 }
 
 // ── getEnrollments ───────────────────────────────────────────────────────────
@@ -381,17 +403,7 @@ export async function getClientEnrollmentsTool(
   cache: SimpleCache = classCache
 ): Promise<{ enrollments: ClientEnrollment[]; totalEnrollments: number; totalSessions: number }> {
   const dates = await withDefaultDates(startDate, endDate, DEFAULT_ENROLLMENT_WINDOW_DAYS, client, cache);
-  const { items: visits } = await fetchAllPages<any>(
-    client,
-    '/client/clientschedule',
-    {
-      ClientId: clientId,
-      StartDate: dates.start,
-      EndDate: dates.end,
-      IncludeWaitlistEntries: true,
-    },
-    'Visits'
-  );
+  const visits = await fetchClientSchedule(client, clientId, dates.start, dates.end);
 
   const classVisits = visits.filter((visit: any) => Number(visit?.ClassId) > 0);
   if (classVisits.length === 0) return { enrollments: [], totalEnrollments: 0, totalSessions: 0 };
@@ -517,7 +529,7 @@ function visitRejectionReason(
   classes: Map<number, any>,
   nowMs: number,
   timeZone: string,
-  lateCancelWindowHrs?: number
+  lateConfig?: LateCancelConfig
 ): string | null {
   if (rows.length === 0) return NOT_FOUND_FOR_CLIENT;
   if (rows.length > 1) return 'visit returned more than once by lookup; refusing ambiguous data';
@@ -543,7 +555,7 @@ function visitRejectionReason(
   if (row.SignedIn) return 'visit is already signed in';
   // `Missed` is NOT a guard: the sandbox reports Missed: true on every future,
   // not-yet-attended enrollment visit, so it says nothing about cancellability.
-  return lateCancelWindowHrs === undefined ? null : lateCancelWindowRefusal(startMs, nowMs, lateCancelWindowHrs);
+  return lateConfig ? lateCancelRefusalFor(classLateCancelContext(cls, row), lateConfig, startMs, nowMs) : null;
 }
 
 /**
@@ -578,12 +590,14 @@ export async function cancelEnrollmentVisitsTool(
 
   // `lateCancel` forfeits the session, so it is honoured only inside the site's
   // late-cancel window, which the spec does not expose. Unknown window: refuse.
-  const lateWindowHours = lateCancel ? lateCancelWindowHours() : undefined;
-  if (lateCancel && lateWindowHours === undefined) {
+  const loaded = lateCancel ? lateCancelConfig() : undefined;
+  const configRefusal = loaded ? lateCancelConfigRefusal(loaded) : null;
+  const lateConfig = loaded && 'config' in loaded ? loaded.config : undefined;
+  if (configRefusal) {
     return {
       success: false,
       cancelled: [],
-      rejected: [{ visitId: -1, reason: LATE_CANCEL_WINDOW_UNKNOWN }],
+      rejected: [{ visitId: -1, reason: configRefusal }],
       message: 'Late-cancel window unknown; no visits were cancelled.',
     };
   }
@@ -606,12 +620,7 @@ export async function cancelEnrollmentVisitsTool(
   let rows: any[];
   let classes: Map<number, any>;
   try {
-    ({ items: rows } = await fetchAllPages<any>(
-      client,
-      '/client/clientschedule',
-      { ClientId: clientId, StartDate: start, EndDate: end, IncludeWaitlistEntries: true },
-      'Visits'
-    ));
+    rows = await fetchClientSchedule(client, clientId, start, end);
     const wanted = rows.filter((row) => visitIds.includes(Number(row?.Id)) && Number(row?.ClassId) > 0);
     classes = await lookupClasses(
       client,
@@ -632,7 +641,7 @@ export async function cancelEnrollmentVisitsTool(
   const verified = new Map<number, any>();
   for (const id of visitIds) {
     const matches = rows.filter((row) => Number(row?.Id) === id);
-    const reason = visitRejectionReason(matches, clientId, classes, Date.now(), timeZone, lateWindowHours);
+    const reason = visitRejectionReason(matches, clientId, classes, Date.now(), timeZone, lateConfig);
     if (reason) rejected.push({ visitId: id, reason });
     else verified.set(id, matches[0]);
   }

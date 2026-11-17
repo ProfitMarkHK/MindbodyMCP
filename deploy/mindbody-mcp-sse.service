@@ -14,10 +14,14 @@ Environment="NODE_ENV=production"
 Environment="MCP_TRANSPORT=sse"
 Environment="MCP_PORT=3000"
 Environment="MCP_HOST=0.0.0.0"
+# MCP_AUTH_TOKEN is REQUIRED: with MCP_HOST=0.0.0.0 the server refuses to
+# start without it. Set it in the EnvironmentFile below (never inline here),
+# e.g. MCP_AUTH_TOKEN=<output of `openssl rand -hex 32`>. Clients send
+# "Authorization: Bearer <token>".
 EnvironmentFile=/opt/mindbody-mcp/.env
 
 # Start command
-ExecStart=/usr/local/bin/bun run /opt/mindbody-mcp/dist/index.js --transport sse --port 3000
+ExecStart=/usr/local/bin/bun run /opt/mindbody-mcp/src/index.ts --transport sse --port 3000
 
 # Restart policy
 Restart=always

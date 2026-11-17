@@ -1,4 +1,4 @@
-import { mindbodyClient as client } from "../../../src/api/client";
+import { mindbodyClient as client } from "../../../src/api/client.js";
 
 // The method leaves its receiver, so the call site no longer says `.get`.
 export function readClasses(path: string) {

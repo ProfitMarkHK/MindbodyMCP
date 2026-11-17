@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- The SSE transport now requires a bearer token, `MCP_AUTH_TOKEN`, from inbound clients. An SSE server bound to anything other than `127.0.0.1`, `::1` or `localhost` (including the default `0.0.0.0`, the systemd unit, Docker and Kubernetes examples) refuses to start until `MCP_AUTH_TOKEN` is set, and its clients must send `Authorization: Bearer <token>`. STDIO is unchanged.
+
 ### Added
+- Added `cancelClientBooking`, which finds one booking on a client's schedule, chooses a late or normal cancel from `MINDBODY_LATE_CANCEL_WINDOW_HOURS`, and sends the write through `cancelAppointments`, `cancelEnrollmentVisits` or `removeClientFromClass`. A failed write is never retried: the schedule is re-read once to report whether the booking is gone, and the result carries a receipt with the exact request body.
+- Added `observeBalance` to `cancelClientBooking`. When it is true, the paying service's `Remaining` and the client's `AccountBalance` are read before and after the cancel and returned as `impact`, with `consumed` and the balance delta. It reports what was observed, never a fee: the API exposes no fee ledger.
+- Added a Streamable HTTP transport (`--transport http`, `bun run dev:http`): stateless, serving `/mcp` plus `/health`, authenticated by a Cloudflare Access JWT (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`) and refusing to start without it. `MCP_ALLOW_UNAUTHENTICATED=true` serves unauthenticated on loopback only. In-flight requests drain for up to 25 s on SIGTERM. The SSE transport is unchanged and still available.
+- Added Railway deployment support: `.railway/railway.ts` (Railway Infrastructure as Code: App Sleeping, a `/health` healthcheck and `drainingSeconds: 30`; Railway ignores `railway.json` for new services), a source-only `Dockerfile`, and `docs/RAILWAY.md` covering the cost model, the Cloudflare Access setup and the steps that were not verified.
 - Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
 - Added `getClientCompleteInfo`, which reads a client's account balance, services, contracts, memberships and arrivals in one `/client/clientcompleteinfo` request. The tool set is now 50.
 - `getClientCompleteInfo` now exposes the parameters a sandbox probe verified (evidence in `docs/mindbody-spec-discrepancies.md` F-3): `requiredClientData` (validated to `Services`/`Contracts`/`Memberships`/`ArrivalPrograms`, the only values the API accepts — anything else is silently ignored with HTTP 200), `showActiveOnly` (narrows services to the rows that can pay now), and `startDate` (includes services *expiring* on or after the date — the observed semantics; the spec claims purchase date, and the default window silently drops expired purchases). Recorded as deviations D-12/D-13.
@@ -21,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added agent guidance: `AGENTS.md` as the canonical guide, role definitions for Claude Code and OpenCode, and the ponytail plugin configuration.
 
 ### Changed
+- The project is Bun-first: Bun runs `src/` directly and `bin` points at `src/index.ts` (it already has a `bun` shebang). Installing no longer compiles `dist/` (`prepare` now only sets the git hooks path). Node.js remains an option through `npm run node:build` and the `node:*` scripts, and CI still builds and smoke-tests Node 18, 20 and 22. The Docker image, systemd unit and Kubernetes example run `bun src/index.ts`. Removed the stale `package.node.json` and `switch.bat` runtime switcher; `package.json` already carries both sets of scripts.
+- `MCP_TRANSPORT` is now honoured. It was declared in `.env.example` and read by `parseArgs`, but the check `if (!transport && process.env.MCP_TRANSPORT)` could never fire because `transport` was always set, so the variable was silently ignored. `PORT` is now read for the HTTP transport when `MCP_PORT` is unset (Railway injects it).
 - The project is now standalone: it has left the `vespo92/MindbodyMCP` fork network and lives at `ProfitMarkHK/MindbodyMCP`. The npm package is renamed `@profitmarkhk/mindbody-mcp` (the command stays `mindbody-mcp`), and the release workflow publishes to the ProfitMarkHK npm scope, GitHub Packages and `ghcr.io/profitmarkhk`. Entries for 2.0.2 and earlier describe upstream releases.
 - `getClients` accepts any number of `clientIds`. Production Mindbody refuses more than 20 `ClientIds` per `GET /client/clients` (`InvalidParameter`), so the IDs are sent in sequential batches of 20 and the results merged, de-duplicated by client ID; if any batch fails the whole call fails. Client-name lookups batch the same way.
 - List reads now page through every result: each Mindbody list GET is fetched 200 rows at a time until the server's total is reached, instead of returning only the first page.
@@ -36,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Typed the client domain against the OpenAPI spec: `fetchAllPages<any>` and ad-hoc `(row: any)` mappers are now spec-derived types (`Client`, `Visit`, `ClientMembership`, `ClientContract`, and the POST response wrappers).
 
 ### Fixed
+- The SSE transport now routes message POSTs. `POST /sse?sessionId=<id>` used to answer `404` and a bare `POST /sse` hung, so no client could complete `initialize`. Each POST now reaches the session that owns the id (`202`), and is refused with `400` (no `sessionId`), `404` (unknown or closed session), `403` (DNS-rebinding check) or `401` (no bearer token). An automated SSE round trip now runs in `bun test`.
 - Non-idempotent POST requests are no longer retried. A POST that fails transiently is reported for reconciliation, because the v6 API has no idempotency key. Retries apply only to GET, HEAD and OPTIONS.
 - The pager fails loudly instead of truncating a result: it throws on an empty page before the server's total is reached, on a total that contradicts the rows received, and on a server that ignores `Offset`.
 - Corrected how the OAuth token expiry is read, and made user token authentication optional, which resolves `DeniedAccess` errors on the sandbox.
@@ -43,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ClientMembership.IconCode` was typed `number`; it is a string on the wire (e.g. `"6"`). Retyped to `string` everywhere, after a live sandbox probe.
 
 ### Security
+- The SSE transport authenticates inbound clients with `MCP_AUTH_TOKEN` (constant-time compare). Every request except `GET /health` and `OPTIONS` without the token gets `401`, before a session is created and before the DNS-rebinding check. Previously anyone who could reach the port could open sessions with the server's Mindbody credentials (#40).
 - `updateAppointment` and `cancelAppointments` verify that the appointment belongs to the given client and that its status allows the change, before anything is written.
 - `checkoutShoppingCart` verifies that every `appointmentIds` entry belongs to the client, and refuses the whole checkout if any does not.
 - Arrived appointments cannot be cancelled.

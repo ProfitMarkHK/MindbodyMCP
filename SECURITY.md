@@ -42,12 +42,13 @@ Please include the following information in your report:
 When using Mindbody MCP:
 
 1. **Never commit credentials**: Always use environment variables for API keys and passwords
-2. **Use HTTPS in production**: When deploying with SSE, always use SSL/TLS certificates
+2. **Use HTTPS in production**: When deploying with SSE, always use SSL/TLS certificates, or terminate TLS at a reverse proxy
 3. **Restrict CORS origins**: In production, set specific allowed origins instead of wildcards
-4. **Keep dependencies updated**: Regularly update the MCP SDK and other dependencies
-5. **Monitor for vulnerabilities**: Use `npm audit` or `bun audit` regularly
-6. **Rotate credentials**: Regularly rotate your Mindbody API credentials
-7. **Limit permissions**: Use the principle of least privilege for API access
+4. **Authenticate every remote client**: SSE requires the `MCP_AUTH_TOKEN` bearer token off loopback; Streamable HTTP requires a Cloudflare Access JWT and refuses to start without `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`. `MCP_ALLOW_UNAUTHENTICATED=true` binds loopback only and is for local use
+5. **Keep dependencies updated**: Regularly update the MCP SDK and other dependencies
+6. **Monitor for vulnerabilities**: Use `npm audit` or `bun audit` regularly
+7. **Rotate credentials**: Regularly rotate your Mindbody API credentials
+8. **Limit permissions**: Use the principle of least privilege for API access
 
 ## Disclosure Policy
 

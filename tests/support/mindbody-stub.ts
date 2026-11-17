@@ -539,7 +539,6 @@ export const STUB_FIXTURES = {
   // ── Appointments ───────────────────────────────────────────────────────────
   staffAppointment: {
     Id: 8001,
-    Status: 'Booked',
     StaffId: 42,
     // An embedded `AppointmentStaff` documents only Id/FirstName/LastName/DisplayName.
     Staff: { Id: 42, Name: 'Ada Lovelace', FirstName: 'Ada', LastName: 'Lovelace', DisplayName: 'Ada Lovelace' },

@@ -199,7 +199,7 @@ The use case is a booking made under the wrong service (for example "Extensions 
 | `Completed`, `NoShow` | refused: the appointment has been checked out or has taken place |
 | `Cancelled`, `LateCancelled` | refused: final for every update |
 
-Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check. If the staff member is not set up for the new session type, Mindbody's error is returned unchanged as `success: false`.
+Mindbody may reset the end time to the new session type's default duration, so the response's `startDateTime`, `endDateTime` and `sessionTypeId` are returned for the caller to check (on the -99 sandbox, 30-minute type 23 changed to 60-minute type 200 kept the old end time). Mindbody's errors are returned unchanged as `success: false`. A type the staff member does not offer fails with the generic `Something went wrong. Please try again. (Code: Unknown)`, so check `getBookableItems` filtered by `staffIds` first. An appointment with a payment applied refuses any type change (`Payment found. Session type can't be updated when payment already applied.`).
 
 #### Examples
 
@@ -270,7 +270,37 @@ A late cancel forfeits the service, so `lateCancel: true` is bounded. The Mindbo
 - Unset, empty, non-numeric or not positive: a `lateCancel: true` request is refused before any lookup or write, with `late cancel refused: the site's late-cancel window is unknown. Set MINDBODY_LATE_CANCEL_WINDOW_HOURS ...` (id `-1`).
 - `lateCancel: false` (the default) is unaffected.
 
+##### Per-service windows (`MINDBODY_LATE_CANCEL_WINDOW_RULES`)
+
+Mindbody sets the window per pricing option, so one number can be wrong both ways: too large records an on-time cancel as late, too small refuses a genuine late cancel. `MINDBODY_LATE_CANCEL_WINDOW_RULES` is an optional JSON array of rules, checked in order before `MINDBODY_LATE_CANCEL_WINDOW_HOURS`; the first match wins and the default is the fallback.
+
+```bash
+MINDBODY_LATE_CANCEL_WINDOW_HOURS=24
+MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24},{"sessionTypeId":7,"hours":12}]'
+```
+
+- A rule is `{ serviceId?, programId?, sessionTypeId?, hours }`. It names at least one id, and every id it names must equal the booking's (AND). Ids are positive integers, `hours` a positive number. No other keys are accepted, so a typo such as `serviceID` is an error rather than a rule that never matches.
+- `serviceId` is the pricing option's id: `Visit.ProductId` ("the ID of the pricing option"), the same as `ClientService.ProductId`. It is not `Visit.ServiceId`, which is the client's own purchase and differs per client.
+- Where each id comes from:
+
+  | Booking | `serviceId` | `programId` | `sessionTypeId` |
+  |---|---|---|---|
+  | Enrollment session (`cancelEnrollmentVisits`) | the visit's `ProductId` | class `ClassDescription.Program.Id` | class `ClassDescription.SessionType.Id` |
+  | Drop-in class (`removeClientFromClass`) | the client's visit for that class, read from `GET /client/clientschedule` for that day **only when some rule keys on `serviceId`** | class `ClassDescription.Program.Id` | class `ClassDescription.SessionType.Id` |
+  | Appointment (`cancelAppointments`) | never known: the spec's `Appointment` has only `ClientServiceId` (the client's pass) | `ProgramId` | `SessionTypeId` |
+
+- **Fail closed.** If a rule names an id that the booking's lookup did not reveal (for example a `serviceId` rule ahead of an appointment), the tool cannot tell whether the rule applies, so it refuses rather than trying the next rule: `late cancel refused: cannot tell whether MINDBODY_LATE_CANCEL_WINDOW_RULES[i] (...) applies, because the booking's serviceId is not known; ...`. Put `programId`/`sessionTypeId` rules for appointments before any `serviceId` rule. A rule whose known id differs is skipped even if its other ids are unknown.
+- No rule matches and `MINDBODY_LATE_CANCEL_WINDOW_HOURS` is unset: refused, naming both variables. With rules set but no default, that is decided per booking, after the lookup and before any write.
+- Invalid JSON, a non-array, a non-object entry, a missing or non-positive `hours`, a non-integer id, an unknown key, or a rule with no id: every `lateCancel: true` is refused before any lookup or write, with `late cancel refused: MINDBODY_LATE_CANCEL_WINDOW_RULES is invalid: rule <i> <entry> ...` naming the entry.
+- A rule's refusal names it: `late cancel refused: it starts more than 2 hour(s) from now, outside the late-cancel window of MINDBODY_LATE_CANCEL_WINDOW_RULES[0] (serviceId 10); ...`. The default window keeps its original text.
+- Unset or empty: no rules, and behaviour, reads and messages are exactly the single-window behaviour above.
+- `lateCancel: false` never reads either variable.
+
+Code: `lateCancelConfig`, `resolveLateCancelWindow` and `lateCancelRefusalFor` in `src/utils/lateCancel.ts`.
+
 `cancelEnrollmentVisits` applies the same bound to enrollment sessions, and so does `removeClientFromClass` (drop-in classes). With `lateCancel: true` the latter, before any write: refuses if the window is unset or invalid (no lookup, no write); resolves the site timezone (refuses if it cannot); looks the class up with `GET /class/classes` filtered by `ClassIds`, from now through two years ahead in the site's zone; and refuses if the class is not found (including one that has already started), is returned more than once, or starts more than the window from now. It returns `{ success: false, message }` with the same refusal texts as above. `lateCancel: false` (the default) makes no extra read.
+
+`removeClientFromClass` also takes `sendEmail` (default `false`), sent as `SendEmail` on `POST /class/removeclientfromclass`. As above, it is not a dry run: `true` can email a real client. A late cancel that the window refuses makes no POST, so no email is sent.
 
 #### Response
 
@@ -298,11 +328,140 @@ interface CancelAppointmentsResponse {
 | `appointment status is <Status>, which cannot be cancelled` | Already Cancelled, LateCancelled, Completed, NoShow or Arrived. Nothing is cancelled. For `Arrived` the message adds how to proceed. | Completed means checked out; it cannot be cancelled here. For Arrived, un-arrive it (`updateAppointment` with `execute: "unarrive"`) or cancel it in Mindbody directly |
 | `duplicate appointment id in request` | The same ID appears twice | Remove the duplicate |
 | `late cancel refused: it starts more than N hour(s) from now, ...` | `lateCancel: true` on an appointment outside `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. Nothing is cancelled. | Cancel without `lateCancel` |
-| `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |
+| `late cancel refused: the site's late-cancel window is unknown. ...` (id `-1`) | `lateCancel: true` with `MINDBODY_LATE_CANCEL_WINDOW_HOURS` unset or invalid and no rules. Nothing is looked up or cancelled. | Set the variable, or cancel without `lateCancel` |
+| `late cancel refused: MINDBODY_LATE_CANCEL_WINDOW_RULES is invalid: ...` (id `-1`) | `lateCancel: true` with malformed rules; the message names the entry. Nothing is looked up or cancelled. | Fix the rule |
+| `late cancel refused: cannot tell whether MINDBODY_LATE_CANCEL_WINDOW_RULES[i] ... applies` | A rule ahead of the match names an id the appointment does not carry (always `serviceId`). Nothing is cancelled. | Order appointment rules first, or cancel without `lateCancel` |
+| `late cancel refused: the booking ... matches no rule ...` | Rules set, no rule matches, no default. Nothing is cancelled. | Add a rule or `MINDBODY_LATE_CANCEL_WINDOW_HOURS` |
 | `at most 3 appointments may be cancelled per request` | More than 3 IDs. Nothing is cancelled. | Split into several calls |
 | `appointment lookup failed` | Verification lookup failed. Nothing is cancelled. | Retry |
 | `site timezone unavailable: <reason>` (id `-1`) | The site's timezone could not be resolved, so start times cannot be compared. Nothing is cancelled. | Check the site record's `TimeZone`; set `MINDBODY_SITE_TIMEZONE` only if the record has none, and unset it if it disagrees with the record |
 | Mindbody write error | Cancellations already made stand and appear in `cancelled`; the call stops at the failing ID. | Re-check the listed appointments with `getStaffAppointments` |
+
+### cancelClientBooking
+
+Cancels one booking for one client and chooses late or normal. It resolves and decides; the write is delegated to the guarded tool for the booking's kind, so ownership, status, timezone and all-or-nothing guards are the same code as when those tools are called directly. No new endpoint is used.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client who owns the booking | - |
+| `classId` | number | One locator | Class ID of a drop-in or enrollment session | - |
+| `appointmentId` | number | One locator | Appointment ID | - |
+| `visitId` | number | One locator | Visit ID from `getClientSchedule` | - |
+| `startDateTime` | string | One locator | Site-local `YYYY-MM-DDTHH:MM[:SS]`, no offset | - |
+| `classScheduleId` | number | No | Narrows a `startDateTime` match; only with `startDateTime` | - |
+| `lateCancel` | boolean | No | Omitted: decided from the window. `true`: refused outside it. `false`: normal | omitted |
+| `sendEmail` | boolean | No | Email the client. Passed to whichever tool does the write | false |
+| `observeBalance` | boolean | No | Read the paying service's `Remaining` and the account balance before and after the write, and return `impact` | false |
+
+#### Steps
+
+1. Validate: exactly one locator, positive integer ids, `startDateTime` format. `lateCancel: true` with neither `MINDBODY_LATE_CANCEL_WINDOW_HOURS` nor rules set is refused here with the shared `late cancel refused: the site's late-cancel window is unknown ...` text, before any read. Invalid `MINDBODY_LATE_CANCEL_WINDOW_RULES` refuses `lateCancel: true` **and omitted** here too, naming the entry; only `false` proceeds.
+2. Resolve the site timezone (refuse if it cannot) and read `getClientScheduleTool`: the locator's day for `startDateTime`, otherwise today through 30 days.
+3. Match the locator. Drop rows that are waitlist entries, signed in, late-cancelled, appointments already `Cancelled`/`LateCancelled`, or already started. One row left proceeds; zero or several refuse with `candidates`.
+4. Resolve the booking's window: the default when no rules are set (no extra read), otherwise the first matching rule (see *Per-service windows*). An appointment's `ProgramId`/`SessionTypeId` are read with one `GET /appointment/staffappointments`, only when rules are set. Decide the mode (table below), then call the delegate with a client wrapper that records the POST body and result. The wrapper passes every call through unchanged.
+5. If the POST failed, re-read the schedule once over the same window and report the outcome.
+
+| Kind | Delegate | POST |
+|------|----------|------|
+| `appointment` | `cancelAppointments` | `/appointment/updateappointment` `{ AppointmentId, Execute: cancel\|latecancel, SendEmail }` |
+| `enrollment` | `cancelEnrollmentVisits` | `/class/removeclientfromclass` `{ ClientId, ClassId, VisitId, LateCancel, SendEmail, Test: false }` |
+| `class` | `removeClientFromClass` | `/class/removeclientfromclass` `{ ClientId, ClassId, LateCancel }` |
+| `waitlist` | refused | none |
+
+| `lateCancel` | Window applies, start inside | Window applies, start outside | No window applies (default unset, no rule matches) | A rule cannot be decided |
+|---|---|---|---|---|
+| omitted | late | normal | normal | refused, no POST |
+| `true` | late | refused, no POST | refused (before any read when nothing is configured) | refused, no POST |
+| `false` | normal | normal | normal | normal |
+
+`decision.windowHours` and `decision.windowSource` say which window applied: `MINDBODY_LATE_CANCEL_WINDOW_HOURS` or `MINDBODY_LATE_CANCEL_WINDOW_RULES[i] (...)`.
+
+#### Outcomes
+
+| `outcome` | `success` | When |
+|---|---|---|
+| `cancelled` | true | The delegate's POST succeeded, or it failed and the re-read no longer shows the booking as booked |
+| `still-booked` | false | The POST failed and the re-read still shows the booking |
+| `unknown` | false | The POST failed and the re-read failed too; check Mindbody before retrying |
+| `refused` | false | Nothing was sent: a request, resolution, decision or delegate guard refused it |
+
+The POST is never retried (`src/api/client.ts` does not retry POSTs either). A failed `removeclientfromclass` or `updateappointment` may still have landed, which is why the re-read decides.
+
+#### Response
+
+```typescript
+interface CancelClientBookingResult {
+  success: boolean;
+  outcome: 'cancelled' | 'still-booked' | 'unknown' | 'refused';
+  mode?: 'late' | 'normal';           // undefined only when refused before resolution
+  booking?: ClientBooking;            // the resolved getClientSchedule row
+  candidates?: ClientBooking[];       // on a refused resolution
+  decision?: { mode; requested?: boolean; windowHours?: number; windowSource?: string; hoursUntilStart: number; reason: string };
+  receipt?: {
+    tool: 'cancelAppointments' | 'cancelEnrollmentVisits' | 'removeClientFromClass';
+    endpoint?: string;                // undefined when the delegate refused before writing
+    request?: Record<string, unknown>; // the exact POST body
+    response?: unknown;               // Mindbody's body on success
+    error?: string;                   // the POST's error on failure
+    sentAt?: string;                  // ISO instant
+    toolResult: unknown;              // the delegate's own return value
+  };
+  reconcile?: { readAt: string; booking: ClientBooking | null; error?: string }; // after a failed POST
+  impact?: CancelImpact;              // only with observeBalance: true
+  message: string;
+}
+```
+
+The receipt is the record; nothing is persisted.
+
+#### Observed forfeit (`observeBalance`)
+
+The API cannot report a late-cancel fee: `docs/openapi.json` has no fee field, and `AccountBalance` is one aggregate with no ledger. What it can show is whether a pre-paid session was consumed. With `observeBalance: true` (code: `src/tools/cancelImpact.ts`):
+
+1. Resolve the paying client service: the visit's `ServiceId` for a class or enrollment session; for an appointment, its `ClientServiceId` from one `GET /appointment/staffappointments`.
+2. Before the write: one `GET /client/clientcompleteinfo` with `RequiredClientData: [Services, Memberships]`. It gives that service's `Remaining` (looked up by id in `ClientServices` and `ClientMemberships`) and `Client.AccountBalance`.
+3. After the write, only when a POST was sent and the before read worked: the same GET again.
+
+So it adds two GETs for a class or enrollment session and three for an appointment. Omitted or `false`, it adds none. The reads never change the write or `outcome`: a failed read after a successful cancel leaves `success: true` and sets `impact.observed: false` with the error.
+
+```typescript
+interface CancelImpact {
+  observed: boolean;             // true only when Remaining was read before and after
+  reason?: string;               // why not: no ServiceId / ClientServiceId, service not found, no Remaining, read error
+  serviceId?: number;            // the client service (purchased pricing option)
+  serviceName?: string;
+  remainingBefore?: number;
+  remainingAfter?: number;
+  consumed?: number;             // remainingBefore - remainingAfter; negative means a session was returned
+  accountBalanceBefore?: number; // Client.AccountBalance, not attributed to this cancel
+  accountBalanceAfter?: number;
+  accountBalanceDelta?: number;  // after - before
+  readAtBefore: string;          // ISO instants
+  readAtAfter?: string;          // undefined when no after read was made
+  caveats: string[];             // always: no fee ledger, out-of-window fees, unlimited plans, booking-time draws
+}
+```
+
+Every number is a value read from the API or the difference of two. The service is never guessed: a visit with no `ServiceId`, or a service that is not on the account or matches two different rows, gives `observed: false`. An unlimited plan has no `Remaining`, so it gives `observed: false` too. The account balance is still read in those cases. `estimatedValue` from the issue is not reported yet: it needs the purchase record, which is the purchase-history ticket's work.
+
+`consumed` is what the counts show, not what the policy says. If a site draws the session when the class is booked, a normal cancel returns it (`consumed: -1`) and a late cancel keeps it (`consumed: 0`). A fee posted after `readAtAfter` does not show, so a zero `accountBalanceDelta` does not mean no charge.
+
+#### Example
+
+```json
+{ "clientId": "12345", "classId": 2201 }
+```
+
+```json
+{
+  "success": true, "outcome": "cancelled", "mode": "late",
+  "decision": { "mode": "late", "windowHours": 24, "hoursUntilStart": 3, "reason": "starts in 3h, inside the 24h late-cancel window" },
+  "receipt": { "tool": "removeClientFromClass", "endpoint": "/class/removeclientfromclass",
+               "request": { "ClientId": "12345", "ClassId": 2201, "LateCancel": true } }
+}
+```
 
 ### checkoutShoppingCart
 
@@ -313,20 +472,66 @@ Processes a shopping cart checkout. A cart item can carry `appointmentIds` to re
 | Parameter | Type | Required | Description | Default |
 |-----------|------|----------|-------------|---------|
 | `clientId` | string | Yes | Client ID | - |
-| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. `item.metadata.id` identifies the item; a `Tip` uses `item.metadata.amount`. | - |
+| `items` | array | Yes | Cart items: `{ item: { type, metadata }, quantity, appointmentIds?, discountAmount?, appointmentBookingRequests? }`. `item.type` is `Service`, `Product`, `Package` or `Tip`. See "Cart items" below. | - |
 | `payments` | array | Yes | Payment methods: `{ type, metadata: { amount, ... } }`. `type` is `Cash`, `Check`, `CreditCard`, `Comp`, `Custom` or `StoredCard`. | - |
 | `inStore` | boolean | No | In-store purchase | false |
 | `promotionCode` | string | No | Promotion code | - |
 | `sendEmail` | boolean | No | Send email receipt | true |
 | `locationId` | number | No | Location ID | - |
+| `test` | boolean | No | Dry run, sent as `Test: true`: Mindbody validates the cart and computes its totals but records no sale. See "Dry run" below. Omitted or false, `Test` is not sent. | false |
+
+#### Cart items
+
+The tool builds each cart item's `Item.Metadata` itself; it does not pass the caller's `metadata` through. The accepted keys are:
+
+| `item.type` | `item.metadata` | Sent as |
+|---|---|---|
+| `Service` | `{ id }`: the pricing option ID | `Item: { Type: 'Service', Metadata: { Id } }` |
+| `Product` | `{ id }`: the product ID | `Item: { Type: 'Product', Metadata: { Id } }` |
+| `Package` | `{ id }`: the package ID | `Item: { Type: 'Package', Metadata: { Id } }` |
+| `Tip` | `{ amount }` | `Item: { Type: 'Tip', Metadata: { Amount } }` |
+
+Any other key (`price`, `name`, a second `id` on a tip, ...) is dropped without error. `docs/openapi.json` types `CheckoutItem.Metadata` as a bare `object` and points to Mindbody's "Cart Item Metadata" page for its contents, so the table above is this tool's contract, not a schema the spec publishes.
+
+Per-item fields beside `item` and `quantity`, all optional. Each maps to a property of `CheckoutItemWrapper` in the spec:
+
+- `appointmentIds` → `AppointmentIds`: existing appointments this item reconciles. See "Guards".
+- `discountAmount` → `DiscountAmount`: amount taken off the item. It must be a non-negative number, or the checkout is refused before any request. Omitted, no `DiscountAmount` key is sent. The spec says it "is ignored for packages". The discount shows only in the cart's `discountTotal` and `grandTotal`: on `-99` (2026-11-16) a 5 discount on a 30 service gave `DiscountTotal` 5 and `GrandTotal` 25, but the line's `DiscountAmount` came back 0. So a result line's `discountAmount` is passed through as reported, and its `total` is `price × quantity` before discount.
+- `appointmentBookingRequests` → `AppointmentBookingRequests`: new appointments to book and pay for with this item. The spec says it "applies only to pricing option items" (`Service`). Each entry is `{ staffId, locationId, sessionTypeId, startDateTime, notes? }`, sent as `StaffId`, `LocationId`, `SessionTypeId`, `StartDateTime` (site-local `yyyy-mm-ddThh:mm:ss`) and `Notes`. Mindbody ignores `Notes`: the spec's `CheckoutAppointmentBookingRequest` has no such property, and on `-99` (2026-11-16) an appointment booked with notes came back with `Notes: null`, in the checkout response and on a read-back. Set notes afterwards with `updateAppointment`. Its `EndDateTime`, `Resources` and `ProviderId` are not exposed. Unlike `appointmentIds`, these entries pass no ownership guard: they create appointments rather than pay for existing ones.
+
+The spec's other wrapper fields (`SalesNotes`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds`, `Id`) are not exposed.
+
+#### No per-sale price override
+
+Every item sells at its catalogue price. The REST API has no field that sets a different price for one sale, and `DiscountAmount` only lowers one. A sale that needs another price, including any 0-priced option billed by the hour, must be recorded in the Mindbody web app. A client purchases read (`GET /client/clientpurchases`, the `getClientPurchases` tool where this server has it) can then confirm it.
+
+The evidence, from `Test: true` probes on the `-99` sandbox on 2026-10-28 (issue #32). The sandbox currently refuses user tokens, so none of this could be re-run for this write-up:
+
+- `CheckoutItemWrapper` in `docs/openapi.json` has no price field. Its properties are `Item`, `Quantity`, `DiscountAmount`, `SalesNotes`, `AppointmentIds`, `AppointmentBookingRequests`, `ClassIds`, `VisitIds`, `EnrollmentIds`, `CourseIds` and `Id`.
+- 68 checkouts placed 22 candidate keys at three levels: inside `Item.Metadata`, on `Item`, and on the cart item. The keys were `Price`, `price`, `UnitPrice`, `SalePrice`, `CustomPrice`, `OverridePrice`, `PriceOverride`, `ItemPrice`, `NewItemPrice`, `NewPrice`, `ManualPrice`, `OnlinePrice`, `PricePaid`, `Total`, `TotalAmount`, `Subtotal`, `SubTotal`, `Cost`, `Rate`, `Value`, `Amount` and `amount`. Every one was ignored without an error.
+- A committed (`Test: false`) checkout carrying several of those keys, with a payment matching the intended price, was refused: `The input payment total (107) does not match the calculated total (100)`.
+- A negative `DiscountAmount` on a 0-priced service left the total at 0.
+- The web app's override is a form field (`newItemPrice`) posted to the classic ASP Point of Sale page, not to the REST API. A sale at an overridden price reads back through `GET /client/clientpurchases` and `GET /sale/sales` as `PurchasedItems[].UnitPrice`, with no override flag. So the API can read an overridden price but cannot write one.
+
+Changing the catalogue price around a sale (`PUT /sale/services`) was rejected: it changes the price for every concurrent sale, and it changes the pricing option rather than overriding one checkout.
 
 #### Guards
 
+Every guard below runs on a dry run exactly as on a real checkout, and refuses before any request.
+
+A `discountAmount` that is negative or not a finite number refuses the checkout.
+
 Every `appointmentIds` entry (across all items) is verified before the sale is sent, all-or-nothing: if any one fails, nothing is charged and no partial cart is built. The check is the same ownership lookup `cancelAppointments` and `updateAppointment` use (`GET /appointment/staffappointments` filtered by `ClientId`, a year back through two years ahead). An appointment that belongs to another client, or is outside that window, is reported as `not found for this client`; the owner is never named. If the site timezone or the lookup fails, the checkout is refused (fail closed). A request with no `appointmentIds` makes no lookup.
+
+#### Dry run (`test: true`)
+
+Mindbody's test mode does **not** check payments. On the `-99` sandbox (2026-10-28) a Cash payment of 107 against a cart total of 100 passed with `Test: true`, while the same cart with `Test: false` was refused (`The input payment total (107) does not match the calculated total (100) for the entire cart.`). So the tool checks payments itself: it sums `payments[].metadata.amount` and compares it with the returned `GrandTotal` in whole cents. On a mismatch it returns `success: false` with both figures, as the real call would.
+
+A dry-run result carries `dryRun: true`. The response's `ShoppingCart.SaleId` is never returned: in test mode the sandbox still hands one back, but no such sale exists (`GET /sale/sales` by that id returns no rows). `shoppingCart.id` is the cart id, not a sale id.
 
 #### Response
 
-The response has `success`, a `shoppingCart` with totals and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled.
+The response has `success`, a `shoppingCart` with totals (`subTotal`, `discountTotal`, `taxTotal`, `grandTotal`) and `items`, and a top-level `appointments` list. Each cart item carries `appointments`: the IDs of the appointments that item reconciled. A dry run adds `dryRun: true`.
 
 #### Examples
 
@@ -345,8 +550,11 @@ The response has `success`, a `shoppingCart` with totals and `items`, and a top-
 | Error | Description | Solution |
 |-------|-------------|----------|
 | `Appointment(s) failed verification (<id>: not found for this client; ...); nothing was charged.` | An `appointmentIds` entry is not this client's. Nothing is charged. | Check the appointment ID and `clientId` |
+| `discountAmount must be a non-negative number (got ...); nothing was charged.` | A negative or non-numeric `discountAmount`. Nothing is sent. | Pass a number of 0 or more; a higher price must be sold in the web app |
 | `Appointment id(s) ... are not positive integers; nothing was charged.` | A malformed ID. Nothing is charged. | Fix the ID |
 | `Could not verify the appointments (site timezone unavailable: ... / appointment lookup failed: ...); nothing was charged.` | The ownership lookup could not run. Nothing is charged. | Retry; check the site record's `TimeZone` |
+| `Dry run: the payment total (<sum>) does not match the calculated total (<GrandTotal>); ...` | `test: true` and the payments do not sum to the cart total. The real checkout would be refused. | Fix the payment amounts |
+| `Dry run: Mindbody returned no GrandTotal, ...` | `test: true` and the response had no cart total, so payments could not be checked | Retry; check the items |
 | Mindbody error | Returned as `success: false` with Mindbody's message | Check item IDs, payment amounts and the appointment IDs |
 
 ### getActiveSessionTimes
@@ -466,6 +674,66 @@ Updates an existing client. The server nests the changed fields under `Client`, 
 }
 ```
 
+### getClientSchedule
+
+A client's bookings in a window, one flat row per booking, shaped so a cancel flow can resolve "Jane's 6pm tonight" to the ids the cancel tools take. Read-only: no POST.
+
+Reads `GET /client/clientschedule` with `ClientId`, `StartDate`, `EndDate` and `IncludeWaitlistEntries: true`, through `fetchAllPages`. The read is shared with `getClientEnrollments` and `cancelEnrollmentVisits` (`fetchClientSchedule` in `src/tools/enrollmentManagement.ts`). When some rows have a `ClassId`, it also reads `GET /class/classes` by `ClassIds` (chunks of 50, same helper as `getClientEnrollments`) to learn each class's program. An empty schedule costs one request. Staff and location names come from the cached `/staff/staff` and `/site/locations` catalogues, each read only when a row carries that id.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to look up | - |
+| `startDate` | string | No | Start date (YYYY-MM-DD), sent unchanged | Today at the site |
+| `endDate` | string | No | End date (YYYY-MM-DD), sent unchanged | 30 days after today at the site |
+
+#### `kind`
+
+Checked in this order; the first match wins.
+
+| `kind` | Rule | Cancel with |
+|--------|------|-------------|
+| `waitlist` | `WaitlistInfo.WaitlistId` is set | Not a seat. Remove it from the waitlist |
+| `appointment` | `AppointmentId > 0` | `cancelAppointments` (`appointmentId`) |
+| `enrollment` | `ClassId > 0` and the class's `ClassDescription.Program.ScheduleType` is `Enrollment` | `cancelEnrollmentVisits` (`visitId`) |
+| `class` | Any other `ClassId > 0`, including a class `/class/classes` did not return | `removeClientFromClass` (`classId`) |
+
+#### Response
+
+```typescript
+interface GetClientScheduleResponse {
+  bookings: Array<{
+    kind: 'waitlist' | 'appointment' | 'enrollment' | 'class';
+    visitId: number;
+    classId?: number;            // undefined on appointments (Mindbody sends 0)
+    appointmentId?: number;      // undefined on class rows (Mindbody sends 0)
+    appointmentStatus?: string;  // appointment rows only
+    startDateTime: string;       // site-local, no offset
+    endDateTime: string;
+    name?: string;
+    staffId?: number;
+    staffName?: string;          // undefined when the staff catalogue lacks the id
+    locationId?: number;
+    locationName?: string;       // undefined when the location catalogue lacks the id
+    serviceId?: number;          // Visit.ServiceId: the client's purchase that pays
+    serviceName?: string;
+    productId?: number;          // Visit.ProductId: the pricing option; what a late-cancel rule's serviceId matches
+    programId?: number;          // from the class; undefined on appointments
+    programName?: string;
+    sessionTypeId?: number;      // class ClassDescription.SessionType.Id; undefined on appointments
+    signedIn: boolean;
+    lateCancelled: boolean;
+    missed: boolean;             // the sandbox sets it on future unattended enrollment visits too
+    isWaitlisted: boolean;
+    waitlistEntryId?: number;
+  }>;                            // sorted by startDateTime
+  totalBookings: number;
+}
+```
+
+The tool does not decide whether a cancellation would be late. That policy belongs to the cancel path.
+
 ### getClientEnrollments
 
 A client's enrollments (courses, workshops, series) with every session they hold, grouped by enrollment.
@@ -567,7 +835,54 @@ interface CancelEnrollmentVisitsResponse {
 { "clientId": "12345", "visitIds": [100002, 100003] }
 ```
 
-### getClientCompleteInfo
+### getClientPurchases
+
+Returns a client's purchase history with prices. It wraps `GET /client/clientpurchases` and reads every page through `fetchAllPages` on the `Purchases` key. Read-only: it makes no POST.
+
+Use it to:
+- value what a client bought (`ClientService` from `getClientCompleteInfo` has no price field);
+- check whether a client already has a sale on a day before recording one with `checkoutShoppingCart` (pass the same date as `startDate` and `endDate`);
+- read a sale back afterwards by `saleId`. A sale made in the Mindbody web app at an overridden price reads back as plain `price` and `purchasedItems[].unitPrice` (sandbox sale 100170630: a 10 Class Card at 77 instead of 100 reads `price: 77`, `totalAmount: 83.16`). There is no override flag.
+
+The endpoint's own defaults are `StartDate: now` and `EndDate: end of today`, so a request that omits them returns almost nothing. The tool always sends both.
+
+#### Parameters
+
+| Parameter | Type | Required | Description | Default |
+|-----------|------|----------|-------------|---------|
+| `clientId` | string | Yes | Client to read | - |
+| `startDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `StartDate` `T00:00:00` | 365 days before today, site zone |
+| `endDate` | string | No | Site-local date (YYYY-MM-DD). Sent as `EndDate` `T23:59:59` | Today, site zone |
+| `saleId` | number | No | Sent as `SaleId`: only the record for that sale | - |
+
+#### Response
+
+```json
+{
+  "purchases": [
+    {
+      "description": "10 Class Card", "price": 77, "amountPaid": 83.16, "discount": 0, "tax": 6.16,
+      "returned": false, "quantity": 1, "accountPayment": false,
+      "sale": {
+        "id": 100170630, "saleDateTime": "2026-10-28T10:15:00", "locationId": 1,
+        "purchasedItems": [
+          { "id": 1192, "isService": true, "description": "10 Class Card", "unitPrice": 77, "quantity": 1,
+            "totalAmount": 83.16, "returned": false, "contractId": 0,
+            "expDate": "2027-10-28T00:00:00", "activeDate": "2026-10-28T00:00:00" }
+        ],
+        "payments": [{ "id": 77001, "amount": 83.16, "method": 1, "type": "Cash", "transactionId": 555 }]
+      }
+    }
+  ],
+  "totalPurchases": 1
+}
+```
+
+- Every key exists on `ClientPurchaseRecord`, `Sale`, `PurchasedItem` or `SalePayment` in `docs/openapi.json`. Nothing is computed, and no per-session value is derived.
+- A record with `AccountPayment: true` is a payment onto the client's account. It is kept and reported as `accountPayment: true`.
+- `sale.saleDateTime` is site-local. A trailing `Z`, which the API appends spuriously, is stripped (D-11).
+- `UniqueClientId` is not exposed: `clientId` reads the same records.
+
 
 Returns a client's whole wallet in one request: the client record (with `AccountBalance`), purchased services, contracts, memberships and arrival programs. It wraps `GET /client/clientcompleteinfo`, which returns all four collections in one object with no pagination (sandbox-verified: `Limit`/`Offset` are ignored silently and no `PaginationResponse` envelope exists), so the tool makes a single request and does not page it. Use it to read a client's balance before and after an action: one call instead of four.
 

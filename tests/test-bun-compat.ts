@@ -8,7 +8,7 @@ console.log('✅ Transport class:', typeof StdioServerTransport);
 
 // Test our other imports
 import { config } from 'dotenv';
-import axios from 'axios';
+import 'axios';
 
 config();
 

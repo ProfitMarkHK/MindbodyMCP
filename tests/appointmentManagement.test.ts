@@ -15,7 +15,7 @@ import {
 } from "../src/tools/appointmentManagement.js";
 import { checkoutShoppingCartTool } from "../src/tools/salesManagement.js";
 import { SimpleCache } from "../src/cache/index.js";
-import { LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
+import { LATE_CANCEL_RULES_ENV, LATE_CANCEL_WINDOW_ENV } from "../src/utils/lateCancel.js";
 import {
   SITE_TIMEZONE_ENV,
   epochMsToSiteLocal,
@@ -351,6 +351,71 @@ describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-ca
       expect(client.callCount).toBe(0);
     });
   }
+});
+
+describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)", () => {
+  beforeEach(() => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+    delete process.env[LATE_CANCEL_RULES_ENV];
+  });
+  afterEach(() => {
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+    delete process.env[LATE_CANCEL_RULES_ENV];
+  });
+
+  it("applies a matching programId rule instead of the default", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 2 }]);
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 3, SessionTypeId: 7 })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain(`more than 2 hour(s)`);
+    expect(result.rejected[0].reason).toContain(`${LATE_CANCEL_RULES_ENV}[0] (programId 3)`);
+    expect(client.posts).toEqual([]);
+  });
+
+  it("falls back to the default window when the rule does not match", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 2 }]);
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 4, SessionTypeId: 7 })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    expect(result.success).toBe(true);
+    expect(client.posts.map((post) => post.data.Execute)).toEqual(["latecancel"]);
+  });
+
+  it("refuses when no rule matches and there is no default, with no write", async () => {
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 24 }]);
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 4 })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain(LATE_CANCEL_WINDOW_ENV);
+    expect(client.posts).toEqual([]);
+  });
+
+  it("refuses when a serviceId rule comes first: an appointment carries no pricing-option id", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ serviceId: 10, hours: 2 }]);
+    const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 3, ClientServiceId: 10 })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain("serviceId is not known");
+    expect(client.posts).toEqual([]);
+  });
+
+  it("refuses lateCancel with no call at all on malformed rules, but lateCancel: false is unaffected", async () => {
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    process.env[LATE_CANCEL_RULES_ENV] = '[{"programId":"three","hours":2}]';
+    const late = new RecordingClient([row(1)]);
+    const refused = await cancelAppointmentsTool(CLIENT, [1], true, false, late, late.cache);
+    expect(refused.success).toBe(false);
+    expect(refused.rejected[0].reason).toContain('rule 0 {"programId":"three","hours":2}');
+    expect(late.callCount).toBe(0);
+
+    const plain = new RecordingClient([row(1)]);
+    const ok = await cancelAppointmentsTool(CLIENT, [1], false, false, plain, plain.cache);
+    expect(ok.success).toBe(true);
+    expect(plain.posts.map((post) => post.data.Execute)).toEqual(["cancel"]);
+  });
 });
 
 describe("cancelAppointmentsTool — fails closed without a site timezone", () => {

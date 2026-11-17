@@ -91,7 +91,7 @@ its output so the side effect is never a surprise.
 |---|------|-------|----------------|
 | 1 | All tests pass | applies | `bun test` — every test passes, 0 failing, exits **0**. (Deliberately no test/file count here: it went stale on nearly every change, so read it from the run.) `bunfig.toml` sets `[test] root = "./tests"`, so discovery never walks nested worktrees or scratch checkouts in the repo root (Bun ignores `.gitignore` for discovery) — see gate 1 below. It also sets `[test] coverageThreshold = 0.10`, read by Bun 1.4.0 as a **fraction** (0.0–1.0) enforced **per file against both % Funcs and % Lines**, not against the aggregate row; the worst file is `src/api/auth.ts` at 16.67% funcs / 11.25% lines. **Read the units before changing that number** — see gate 1 below. |
 | 2 | End-to-end / acceptance tests pass | applies | `bun test tests/e2e-mcp-server.test.ts` — 0 failing, ~2s. Spawns the real `src/index.ts` as a STDIO subprocess, speaks real MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`) to it over stdin/stdout, and points it at a local stub Mindbody API via `MINDBODY_API_URL`. Run by the runner as part of Gate 1's single `bun test` invocation; see Gate 2 below. |
-| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **gap** | No linter is configured. See gaps 3a and 3b below. |
+| 3 | Linters / formatters / static analysis pass (incl. complexity ≤ 10, tests excluded) | **partial** | `bun run lint` (`oxlint --deny-warnings src tests scripts`, default rules) — exits 0. Run by the runner and by CI. No formatter and no complexity budget yet: see 3a and 3b below. |
 | 4 | New code covered by non-trivial tests | applies | manual review — the change's tests must exercise real logic paths, assert on outputs or state, and cover error paths, not just "returns without error". |
 | 5 | Documentation updated | applies | manual review — `README.md`, `Claude.md`, `AGENTS.md`, and `docs/` (notably `docs/quality-gates.md`) stay in sync with the change. |
 | 6 | Type checking passes | applies | `bun run typecheck` (`tsc --noEmit`) — currently exits 0. Run by the runner. |
@@ -99,7 +99,7 @@ its output so the side effect is never a surprise.
 | 8 | Security / secrets checks pass | applies | `npm audit --audit-level=moderate` → **found 0 vulnerabilities** (exit 0), plus the fail-closed secret scan below. The audit was verified green 2026-10-15; the secret scan passed on 2026-10-17 (see Gate 8). **The secret scan half is wired into the runner and runs on every `bun run check` and every commit** — `bash scripts/secret-scan.sh .`, then an index-only guard that refuses a staged `.env*` file. The scan prints filenames only and fails closed. `npm audit` stays CI-only: it needs the registry, and a pre-commit hook must not depend on the network. |
 | 9 | Change reviewed | applies | manual — peer review via `.github/PULL_REQUEST_TEMPLATE.md`. Never a gate that always passes. |
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
-| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
+| 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. `bun run spec:coverage` lists which spec paths the tools reach and which they do not (informational, see below Gate 13). **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
 | 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
@@ -231,7 +231,7 @@ and not needed" from "forgotten":
   | Tool registration: the exact 40-name set from `index.ts`, unique, well-formed names, non-empty descriptions | `tools/list` |
   | Schema conformance: every `inputSchema` parses as JSON Schema, is `type: "object"`, every `required` entry exists in `properties`, every property has a `type` | `tools/list` |
   | Real dispatch across four domains: clients (`getClients`, `addClient`, `updateClient`, `getClientVisits`, `getClientAccountBalances`, `addClientArrival`), orders (`getPackages`, `getProducts`, `getContracts`, `checkoutShoppingCart`, `purchaseContract`), appointments (`getStaffAppointments`, `getBookableItems`, `getActiveSessionTimes`, `addAppointment`, `updateAppointment`, `cancelAppointments`), and the site and service-definition reads (`getSites`, `getServices`, `getSessionTypes`) | `domain — clients`, `domain — orders`, `domain — appointments`, `domain — site`, `domain — service definitions` |
-  | Pagination end to end: `getClasses` reads all 7 classes over three capped pages (`Offset` 0, 3, 6, each `Limit=200`); `getTeacherSchedule` finds a teacher who is only on staff page two and reads both pages of her classes; `getClassDescriptions`, `getWaitlistEntries`, `getClassSchedules`, `getLocations`, `getPrograms`, `getClientMemberships` and `getClientEnrollments` (via `/client/clientschedule`) each go through the pager; every GET in the session carried `Limit=200` and an `Offset` | `pagination — multi-page walks through the real server`, `process health` |
+  | Pagination end to end: `getClasses` reads all 7 classes over three capped pages (`Offset` 0, 3, 6, each `Limit=200`); `getTeacherSchedule` finds a teacher who is only on staff page two and reads both pages of her classes; `getClassDescriptions`, `getWaitlistEntries`, `getClassSchedules`, `getLocations`, `getPrograms`, `getClientMemberships` `getClientEnrollments` and `getClientSchedule` (via `/client/clientschedule`) each go through the pager; every GET in the session carried `Limit=200` and an `Offset` | `pagination — multi-page walks through the real server`, `process health` |
 | OAuth user token: issue and attach, 60s expiry skew, 23-hour fallback when `Expires` is absent, fail closed on refusal or missing source credentials (no API-key-only requests), concurrent callers share one issue | `OAuth user token — …`, `tests/auth-fail-closed.test.ts` |
   | Error paths: unknown tool name → `isError` result, missing required argument → Mindbody error message + code, upstream 4xx → error result then recovery | `tools/call — error handling` |
   | Process health: still alive and answering after every call above, and every outbound request landed on the loopback stub | `process health` |
@@ -285,8 +285,18 @@ and not needed" from "forgotten":
     opt-in live tier targets exactly this gap (see the live-tier entry below). It
     has now been run against the sandbox, but its last recorded run is not all
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
-  - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
-    manual script needing a server already listening.
+  - **SSE transport.** Everything here is STDIO. The SSE transport is covered
+    outside Gate 2, still inside Gate 1's `bun test`: `tests/sse-routing.test.ts`
+    runs the routing in-process and the real `src/index.ts` with
+    `--transport sse` against this stub (`initialize`, `tools/list` compared
+    with STDIO, one tool call, with and without `MCP_AUTH_TOKEN`), and
+    `tests/sse-auth.test.ts` covers the bearer check. `bun run test:sse` remains
+    a manual script for a server that is already listening.
+  - **Streamable HTTP transport.** `tests/http-server.test.ts` covers the server
+    in-process: the `/health` and `/mcp` routes, the Cloudflare Access JWT check
+    (issuer, audience, expiry, RS256), the loopback-only rule for
+    `MCP_ALLOW_UNAUTHENTICATED`, `MCP_ALLOWED_HOSTS`, and the SIGTERM drain. It
+    does not spawn the real process or exercise a live Access application.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
@@ -407,20 +417,18 @@ and not needed" from "forgotten":
     exposed either, and a return is a second record, not a deletion. Nothing in
     v6 deletes a ClientContract, so `purchaseContract`'s leftover stands until it
     is removed by hand.
-- **Gate 3a — no linter (gap).** There is no `eslint`, `prettier`, or `biome`
-  configuration in the repo. `bun run lint` is `tsc --noEmit --strict`, which is
-  Gate 6 run again, not a linter — it cannot catch style or static-analysis
-  drift. `shellcheck` 0.11.0 is installed, but the only two tracked `.sh` files
-  are vendored skill scripts under `.agents/skills/`, not project code, so it has
-  nothing to check here. To close it: `bun add -d eslint prettier`, add a config
-  with `prettier --check src tests` and `eslint src --ext .ts`, and repoint
-  `lint` in `package.json` at the real linter instead of `tsc --strict`.
+- **Gate 3a — linter (applies); no formatter (gap).** `bun run lint` runs
+  oxlint with its default rules over `src`, `tests` and `scripts`, with
+  `--deny-warnings`, so any finding fails. It replaced `tsc --noEmit --strict`,
+  which was Gate 6 run again rather than a linter. There is no config file: add
+  `.oxlintrc.json` only to turn rules on. No formatter is wired.
 - **Gate 3b — no complexity budget (gap).** The budget is strict McCabe
-  complexity ≤ 10 per function, tests excluded, no grandfathering. Nothing
-  enforces it: there is no eslint config, so the `complexity` rule does not
-  exist. To close it, after 3a: add `"complexity": ["error", 10]` to the
-  eslint config and run it scoped to source (`eslint src --ext .ts`) so `tests/`
-  is excluded. Do not raise the threshold or grandfather existing functions.
+  complexity ≤ 10 per function, tests excluded, no grandfathering. oxlint has
+  the rule (`eslint/complexity`), but turning it on at 10 over `src` reports 33
+  functions today, so it is not enabled. To close it: bring those functions under
+  10, then add `"eslint/complexity": ["error", 10]` to an `.oxlintrc.json`
+  override scoped to `src/`. Do not raise the threshold or grandfather existing
+  functions.
 - **Gate 8 — security and secret scan (applies; secret scan passes).**
   - **Audit.** `npm audit --audit-level=moderate` → **`found 0 vulnerabilities`**,
     exit 0. The 12 advisories that made this gate red were **lockfile staleness,
@@ -564,7 +572,7 @@ and not needed" from "forgotten":
   `import { mindbodyClient as mb }`, `this.mindbody.get(p)`, `client?.get(p)`,
   `client['get'](p)`, `(client.get as any)(p)`, or a receiver on the line below.
   A call is ignored only when the receiver's **type** is on the benign list
-  (`BENIGN_RECEIVER_TYPES` in the test: `Map`, `ReadonlyMap`, `WeakMap`,
+  (`BENIGN_RECEIVER_TYPES` in [`tests/support/api-call-scanner.ts`](../tests/support/api-call-scanner.ts): `Map`, `ReadonlyMap`, `WeakMap`,
   `URLSearchParams`, `Headers`, and this repo's `SimpleCache` / `SimpleTtlCache` /
   `TtlCache`), because those `.get` calls are keyed lookups, never an HTTP read.
   Anything else, including an `any`-typed receiver or axios itself, is treated as
@@ -695,6 +703,50 @@ and not needed" from "forgotten":
   checks paths, not query parameters, so a call that sends a parameter the spec
   does not document (for example `Days` on `/appointment/activesessiontimes`)
   passes Gate 13. That is Gate 11 work.
+
+  **Where the scanner lives.** The call-site scanner is
+  [`tests/support/api-call-scanner.ts`](../tests/support/api-call-scanner.ts),
+  shared with `bun run spec:coverage` (below); the rules, floors and fixtures
+  above stay in the gate file. It sits under `tests/`, outside the scan roots,
+  because its own reads of the spec (`item.get`) would otherwise be flagged.
+- **Spec coverage report — `bun run spec:coverage` (not a gate; informational).**
+  Reports which [`docs/openapi.json`](openapi.json) paths the registered MCP
+  tools call and which they do not. Offline: it parses `src/` and reads the spec,
+  no network, no credentials, ~2s. It is **not** run by `bun run check` and gates
+  nothing by default; it is evidence for Gate 11 reviews and for picking the next
+  endpoint to wrap.
+  ```bash
+  bun run spec:coverage              # informational, exits 0
+  bun run spec:coverage -- --min 30  # exits 1 below 30% of spec paths covered
+  SPEC_COVERAGE_MIN=30 bun run spec:coverage
+  ```
+  A threshold that is not a number from 0 to 100 exits 2. Output: each tool with
+  the spec paths it reaches, the uncovered paths grouped by API tag (with their
+  methods), paths called in `src/` that no tool reaches, call sites whose path or
+  method the spec does not define, and a `Summary: covered/total` line.
+
+  **How it maps tools to paths.** Call sites come from Gate 13's scanner, so path
+  resolution is the same (hoisted constants, aliased imports, `fetchAllPages`),
+  plus `.post('/…')` writes, which Gate 13 does not read. A tool is an object
+  literal in `src/index.ts` with both `name` and `inputSchema` (the ListTools
+  list), dispatched by its `case '<name>':` clause (an empty clause falls through
+  to the next). From that clause, every identifier that resolves, through imports,
+  to a function, method or function-valued const is followed transitively, and a
+  call site belongs to the innermost named function that holds it. Nothing is
+  hardcoded: a new tool or endpoint shows up on the next run. A path counts as
+  covered when a tool reaches it with a method the spec defines for it; templated
+  paths (`/pickaspot/v1/class/{classId}`) match any one segment.
+
+  **Limits.** The graph counts a referenced function as reached, so a path a tool
+  calls only on one branch is still covered; it over-approximates, never misses a
+  path reached through a named function. Calls the scanner cannot resolve to a
+  literal path are not mapped: the token issue in `src/api/auth.ts` builds its URL
+  at runtime, so `/usertoken/issue` is reported uncovered although every request
+  depends on it. The logic is in
+  [`tests/support/spec-coverage.ts`](../tests/support/spec-coverage.ts), tested
+  by `tests/spec-coverage.test.ts` against
+  [`tests/fixtures/spec-coverage/`](../tests/fixtures/spec-coverage/); the CLI
+  is `scripts/spec-coverage.ts`.
 - **Gate 16 — OpenAPI spec integrity (applies; passes; offline).**
   `sha256(docs/openapi.json)` must equal the single value in
   [`docs/openapi.lock`](openapi.lock). Purely local: it reads two files and
@@ -797,13 +849,13 @@ and not needed" from "forgotten":
   "fix it upstream" is not available for 2 of the 5.
 - **Not in the runner, and why.** Gates 4, 5, 9, 10 and 11 need human judgement
   and are enforced by the done-done block in `AGENTS.md`, `Claude.md`, and
-  `.github/copilot-instructions.md` pointing at this file. Gates 3 and 12 are
-  excluded for different reasons: Gate 3 is still red (no linter, no complexity
-  budget); Gate 12's check needs `npx --yes` network access and, for
+  `.github/copilot-instructions.md` pointing at this file. Gate 3b and Gate 12 are
+  excluded for different reasons: Gate 3's complexity budget (3b) is not wired;
+  Gate 12's check needs `npx --yes` network access and, for
   the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
   is **half** in: its secret scan and staged-`.env` guard run as the first gate of
   the runner, so every commit is covered; only `npm audit` is left out, because it
-  needs the registry and CI runs it. The runner covers Gates 1, 2, 6, 7, 8, 13
+  needs the registry and CI runs it. The runner covers Gates 1, 2, 3 (lint only), 6, 7, 8, 13
   and 16. Gates 2
   and 13 are executed by Gate 1's single `bun test` run and their verdicts read
   out of that run's log; see the Gate 2 and Gate 13 entries for why neither is

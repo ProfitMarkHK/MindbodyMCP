@@ -105,7 +105,7 @@ export async function setSessionTypeServiceTool(
   const oldServiceId = base.sessionTypeServices[key]?.[tier] ?? null;
 
   const next = { ...base, sessionTypeServices: { ...base.sessionTypeServices } };
-  const entry = { ...(next.sessionTypeServices[key] ?? {}) };
+  const entry = { ...next.sessionTypeServices[key] };
   if (serviceId === null) delete entry[tier];
   else entry[tier] = serviceId;
   if (Object.keys(entry).length === 0) delete next.sessionTypeServices[key];

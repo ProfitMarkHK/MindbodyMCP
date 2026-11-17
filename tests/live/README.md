@@ -149,13 +149,15 @@ indistinguishable in a CI log.
 |---|---|---|
 | Configuration | sandbox SiteId, no credential inheritance, STDIO + MCP handshake, host reachability | — |
 | User token | `POST /usertoken/issue` outcome, token attached; a refused token fails closed (no API-key-only requests) | — |
-| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal) | `addClient`, read-back, cleanup |
+| Clients | `getClients`; `getClients` with more than 20 `clientIds` (batched under the 20-id cap); `getClientFormulaNotes` (walks up to 40 clients for one with notes; also checks the no-id refusal); `getClientPurchases` (walks up to 20 clients for one with a purchase in the default window, then reads that sale back by `saleId` over a one-day window); `getClientSchedule` (default window for one client, then walks up to 40 clients from a year back for one with bookings and checks each row's `kind`, ids and flags; loud skip if none has any) | `addClient`, read-back, cleanup |
 | Service definitions | `getSites` (site time zone), `getServices`, `getSessionTypes`, `getLocations`, `getStaff` | — |
 | Orders | `getPackages`, `getProducts`, `getContracts`, `getCustomPaymentMethods`, `getSales` (month to date, with `matchAppointments` and `productsOnly`) | — |
 | Appointments | `getBookableItems`, `getStaffAppointments`, `getServices` filtered to the booked session type | `addAppointment`, dry-run probe (`test: true`, issue #30), reschedule, arrive, read-back, cancel (or LEFTOVER re-note) |
 | Cancellation guards | `cancelAppointments` refusals (read-only when the guards hold) | — |
+| Booking-cancel resolver | `cancelClientBooking` refusals for two locators and an unmatched one (no write) | books the run's client into a future class (`addClientToClass`, `requirePayment: false`), then `cancelClientBooking` with `lateCancel: false` and a schedule read-back; a second booking cancelled the same way with `observeBalance: true`, asserting the `impact` reads are timestamped; loud skip if no class can be booked |
 | Appointment checkout | — | `checkoutShoppingCart` with `AppointmentIds` and a Comp payment; runs by default, leaves one comp-paid sale |
 | Custom-payment checkout | `getCustomPaymentMethods` (first method) | `checkoutShoppingCart` for the appointment's service, paid `Custom` with that method's id; no appointment; runs by default, leaves one sale |
+| Dry-run checkout | `getSales` for the run's client, before and after | `checkoutShoppingCart` with `test: true` (Comp, matching and mismatched amounts); expects no new sale and the mismatch refused; leaves nothing |
 | Contract purchase | `getContracts` (walked until one is purchasable), `getClientContracts` (read-back) | `purchaseContract` funded by account credit; runs by default, leaves one active ClientContract |
 
 `addClientArrival` (`POST /client/addarrival`) is deliberately **not** in the
@@ -426,16 +428,19 @@ the suite; none is hardcoded as an id.
 
 ## Status
 
-**Runs end to end against the authenticated `-99` sandbox.** A default run books, dry-runs a notes change, reschedules, arrives, changes the session type, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-11-16 (branch for issue #30, stacked on #29):
+**Runs end to end against the authenticated `-99` sandbox.** A default run books, reschedules, arrives, guard-checks, checks out with a comp payment, then either cancels the appointment or re-notes it as a LEFTOVER, sells the same service again paid with a custom payment method, and buys a contract with account credit. Last default result on 2026-11-16, on master:
 
 ```
- 35 pass
+ 36 pass
  0 fail
-Ran 35 tests across 1 file.
+Ran 36 tests across 1 file.
 ```
 
-- **The dry-run probe passed (2026-11-16, issue #30).** `updateAppointment` with `test: true` and new notes answered `dryRun: true`; the re-read showed the booking's notes (`live-e2e <run token>`), times, staff and status unchanged.
-- **One loud skip on 2026-11-16:** the session type change test (issue #29). Mindbody answered every one of the six other session types tried (41, 42, 43, 114, 115, 116) with `Something went wrong. Please try again. (Code: Unknown)`, so there was no type to change to. It is a skip, not a failure.
+With `SKIP_LIVE_E2E=1` every test in the file skips.
+
+On the #26 branch (`observeBalance`, one more test), the same day: 37 pass, 0 fail.
+
+On the #30 branch, the same day: 35 pass, 0 fail (before #81). Its dry-run probe passed: `updateAppointment` with `test: true` and new notes answered `dryRun: true`, and the re-read showed the booking's notes (`live-e2e <run token>`), times, staff and status unchanged. On master the default run gains this one test.
 
 The tallies below this point are from the 2026-10-28 run (29 tests), kept for the field evidence they record.
 
@@ -446,6 +451,11 @@ The tallies below this point are from the 2026-10-28 run (29 tests), kept for th
 - **Every appointment-lifecycle step ran:** client created, slot discovered from availability, appointment booked, the paying service found (`1395` for session type 23 at location 1), rescheduled, `execute: 'arrive'` read back as `Arrived`, both cancel guards refused, and the appointment sold through the comp-paid checkout. Cleanup then refused the `Completed` appointment and re-noted it as a LEFTOVER.
 - `LEFTOVERS` on every default run: one client (no delete in v6), one `Completed` appointment, one comp-paid sale record, one custom-paid sale record, and one active auto-pay ClientContract. Each carries the run token (in the client's name, the appointment's notes and the payment's notes), so each is identifiable in the Mindbody UI. None can be deleted or reversed through this server.
 - **The sandbox is shared and gets reset.** Between two runs on 2026-10-20 a concurrent reset removed every record an earlier run had left: the probe client returned HTTP 404 and `clientcontracts` came back empty. Nothing in this tier depends on state surviving one run — every id is re-discovered each time — but do not read a "missing leftover" as a bug in the suite.
+
+- **`cancelClientBooking` passed (2026-11-16).** It booked the run's client into class 18223, cancelled it through the resolver (routed to `removeClientFromClass`, normal mode) and read the schedule back with the seat gone. Its refusal checks sent no write.
+- **`getClientSchedule` passed (2026-11-16).** Client 100015484 read back 1 booking (an appointment) over the past year, and 0 in the default window.
+- **`cancelClientBooking` with `observeBalance` passed (2026-11-16, #26 branch).** A second unpaid booking of class 18223 was normal-cancelled. With `observeBalance: true` the impact reads landed and were timestamped. The result was `observed: false` ("the visit carries no ServiceId"), because an unpaid booking has no paying service, and the balance delta was 0. The `observed: true` path (a pass's `Remaining` before and after) is covered by unit tests only: proving it live would consume a paid session.
+- **The sandbox refused every user token on 2026-11-15** (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which failed every authenticated live test. Restored by 2026-11-16.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.

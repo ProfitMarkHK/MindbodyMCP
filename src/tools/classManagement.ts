@@ -1,7 +1,7 @@
 import { fetchAllPages, mindbodyClient, type IMindbodyClient } from '../api/client.js';
 import { classCache, SimpleCache } from '../cache/index.js';
 import { errorMessage } from '../utils/errors.js';
-import { LATE_CANCEL_WINDOW_UNKNOWN, lateCancelWindowHours, lateCancelWindowRefusal } from '../utils/lateCancel.js';
+import { classLateCancelContext, lateCancelConfig, lateCancelConfigRefusal, lateCancelRefusalFor, rulesNeed } from '../utils/lateCancel.js';
 import {
   epochMsToSiteLocal,
   getSiteTimeZone,
@@ -13,6 +13,7 @@ import {
   GetClassesRequest,
   Class,
 } from '../types/mindbody.js';
+import { fetchClientSchedule } from './enrollmentManagement.js';
 import { locationNames } from './lookups.js';
 
 // Get all classes with filtering options
@@ -206,17 +207,25 @@ const LATE_CANCEL_LOOKUP_WINDOW_DAYS = 365 * 2;
 
 /**
  * Why a late cancel of `classId` is refused, or null if it may go ahead.
- * Every failure refuses (fail closed): unknown window, unknown site zone, a
- * failed lookup, a class that is absent or ambiguous, or one outside the window.
- * The lookup starts at "now", so a class that has already started is "not found".
+ * Every failure refuses (fail closed): unknown or invalid window configuration,
+ * unknown site zone, a failed lookup, a class that is absent or ambiguous, or
+ * one outside the window that applies to it. The lookup starts at "now", so a
+ * class that has already started is "not found".
+ *
+ * Only when a per-service rule exists (MINDBODY_LATE_CANCEL_WINDOW_RULES with a
+ * serviceId) is the client's schedule read for that day, to learn which pricing
+ * option pays for the visit. Without it the class lookup is the only read.
  */
 async function lateCancelRefusal(
+  clientId: string,
   classId: number,
   client: IMindbodyClient,
   cache: SimpleCache
 ): Promise<string | null> {
-  const windowHours = lateCancelWindowHours();
-  if (windowHours === undefined) return LATE_CANCEL_WINDOW_UNKNOWN;
+  const loaded = lateCancelConfig();
+  const configRefusal = lateCancelConfigRefusal(loaded);
+  if (configRefusal || !('config' in loaded)) return configRefusal;
+  const { config } = loaded;
 
   let timeZone: string;
   try {
@@ -246,23 +255,39 @@ async function lateCancelRefusal(
 
   const startMs = siteLocalToEpochMs(rows[0].StartDateTime, timeZone);
   if (Number.isNaN(startMs)) return `late cancel refused: class ${classId} start time could not be parsed`;
-  return lateCancelWindowRefusal(startMs, nowMs, windowHours);
+
+  let visit: any;
+  if (rulesNeed(config, 'serviceId')) {
+    const day = String(rows[0].StartDateTime).slice(0, 10);
+    try {
+      const visits = await fetchClientSchedule(client, clientId, day, day);
+      const booked = visits.filter((v) => Number(v?.ClassId) === classId && v?.WaitlistInfo?.WaitlistId == null);
+      // Zero or several visits leave the service unknown; the resolver then refuses any serviceId rule it cannot decide.
+      if (booked.length === 1) visit = booked[0];
+    } catch (error: unknown) {
+      return `late cancel refused: client schedule lookup failed: ${errorMessage(error, 'unknown error')}`;
+    }
+  }
+  return lateCancelRefusalFor(classLateCancelContext(rows[0], visit), config, startMs, nowMs);
 }
 
 // Remove client from class (cancel booking). `lateCancel` forfeits the visit,
 // so it is honoured only inside the site's late-cancel window (see lateCancel.ts).
+// `sendEmail` asks Mindbody to email the client (sent as `SendEmail`). It comes
+// last so existing positional callers that pass `client`/`cache` keep working.
 export async function removeClientFromClassTool(
   clientId: string,
   classId: number,
   lateCancel: boolean = false,
   client: IMindbodyClient = mindbodyClient,
-  cache: SimpleCache = classCache
+  cache: SimpleCache = classCache,
+  sendEmail: boolean = false
 ): Promise<{
   success: boolean;
   message: string;
 }> {
   if (lateCancel) {
-    const refusal = await lateCancelRefusal(classId, client, cache);
+    const refusal = await lateCancelRefusal(clientId, classId, client, cache);
     if (refusal) return { success: false, message: refusal };
   }
 
@@ -271,6 +296,7 @@ export async function removeClientFromClassTool(
       ClientId: clientId,
       ClassId: classId,
       LateCancel: lateCancel,
+      SendEmail: sendEmail,
     });
 
     // Clear cache after cancellation

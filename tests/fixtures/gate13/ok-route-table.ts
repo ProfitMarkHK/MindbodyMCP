@@ -1,4 +1,4 @@
-import { SimpleCache } from "../../../src/cache/index";
+import { SimpleCache } from "../../../src/cache/index.js";
 
 // Path-keyed lookups on a Map or a cache are not API reads.
 const routeTable = new Map<string, number>([["/class/classes", 1]]);
