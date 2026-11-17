@@ -273,12 +273,15 @@ async function lateCancelRefusal(
 
 // Remove client from class (cancel booking). `lateCancel` forfeits the visit,
 // so it is honoured only inside the site's late-cancel window (see lateCancel.ts).
+// `sendEmail` asks Mindbody to email the client (sent as `SendEmail`). It comes
+// last so existing positional callers that pass `client`/`cache` keep working.
 export async function removeClientFromClassTool(
   clientId: string,
   classId: number,
   lateCancel: boolean = false,
   client: IMindbodyClient = mindbodyClient,
-  cache: SimpleCache = classCache
+  cache: SimpleCache = classCache,
+  sendEmail: boolean = false
 ): Promise<{
   success: boolean;
   message: string;
@@ -293,6 +296,7 @@ export async function removeClientFromClassTool(
       ClientId: clientId,
       ClassId: classId,
       LateCancel: lateCancel,
+      SendEmail: sendEmail,
     });
 
     // Clear cache after cancellation

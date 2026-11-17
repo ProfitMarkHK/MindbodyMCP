@@ -423,7 +423,7 @@ describe("removeClientFromClassTool — lateCancel window", () => {
     const result = await removeClientFromClassTool("c1", 501, true, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts).toEqual([
-      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: true } },
+      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: true, SendEmail: false } },
     ]);
     const [lookup] = client.gets.filter((get) => get.url === "/class/classes");
     expect(lookup.params.ClassIds).toEqual([501]);
@@ -486,7 +486,7 @@ describe("removeClientFromClassTool — lateCancel window", () => {
     expect(result.success).toBe(true);
     expect(client.gets).toEqual([]);
     expect(client.posts).toEqual([
-      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: false } },
+      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: false, SendEmail: false } },
     ]);
   });
 });
@@ -562,5 +562,41 @@ describe("removeClientFromClassTool — per-service late-cancel rules (issue #21
     const plain = await removeClientFromClassTool("c1", 501, false, client, client.cache);
     expect(plain.success).toBe(true);
     expect(client.posts[0].data.LateCancel).toBe(false);
+  });
+});
+
+describe("removeClientFromClassTool — sendEmail", () => {
+  beforeEach(() => {
+    resetSiteTimeWarningForTests();
+    delete process.env[LATE_CANCEL_WINDOW_ENV];
+  });
+  afterEach(() => delete process.env[LATE_CANCEL_WINDOW_ENV]);
+
+  it("sends SendEmail: true in exactly one spec-valid POST", async () => {
+    // RecordingClient.post runs SpecValidatingClient, so an undocumented
+    // body field would throw here rather than pass silently.
+    const client = new RecordingClient();
+    const result = await removeClientFromClassTool("c1", 501, false, client, client.cache, true);
+    expect(result.success).toBe(true);
+    expect(client.gets).toEqual([]);
+    expect(client.posts).toEqual([
+      { url: "/class/removeclientfromclass", data: { ClientId: "c1", ClassId: 501, LateCancel: false, SendEmail: true } },
+    ]);
+  });
+
+  it("defaults SendEmail to false when omitted", async () => {
+    const client = new RecordingClient();
+    await removeClientFromClassTool("c1", 501, false, client, client.cache);
+    expect(client.posts.map((post) => post.data.SendEmail)).toEqual([false]);
+  });
+
+  it("sends nothing, so no email, when the late-cancel guard refuses", async () => {
+    const client = new RecordingClient();
+    client.classes = [classStartingIn(24 * 90)];
+    process.env[LATE_CANCEL_WINDOW_ENV] = "24";
+    const result = await removeClientFromClassTool("c1", 501, true, client, client.cache, true);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("outside the site's late-cancel window");
+    expect(client.posts).toEqual([]);
   });
 });

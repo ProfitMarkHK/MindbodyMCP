@@ -16,7 +16,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 - **Multi-Location Support** - Manage multiple studio locations seamlessly
 - **High Performance** - Built on Bun runtime with intelligent caching
 - **Type-Safe** - Full TypeScript support with comprehensive types
-- **Dual Transport Support** - STDIO for local development, SSE for production deployment
+- **Multiple Transports** - STDIO for local development, SSE for self-hosted production, Streamable HTTP for managed hosting
 
 ## 🚀 Quick Start
 
@@ -25,22 +25,21 @@ This project is not published to npm under its own name yet. Install it from Git
 ### Install from GitHub
 
 ```bash
-# Using npx
-npx github:ProfitMarkHK/MindbodyMCP
-
-# Using bunx (recommended for performance)
+# Using bunx
 bunx github:ProfitMarkHK/MindbodyMCP
 
 # Or clone and run locally
 git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
-bun install # or npm install
-bun run start # or npm start
+bun install
+bun run start
 ```
+
+The server runs on [Bun](https://bun.sh), which executes the TypeScript source directly: there is no build step. The package's `bin` points at `src/index.ts` (with a `bun` shebang), so `npx` also needs Bun installed. Node.js is supported as an option; see [Using Node.js](#using-nodejs-optional).
 
 ## 📋 Prerequisites
 
-- Node.js 20+ or Bun 1.0+
+- Bun 1.0+ (Node.js 20+ works as an option; see [Using Node.js](#using-nodejs-optional))
 - Mindbody API credentials (API Key, Site ID, Source credentials)
 - 1Password CLI (`op`) to run this repo's server scripts; see [1Password setup](#1password-setup)
 - Claude Desktop or any MCP-compatible client
@@ -127,14 +126,14 @@ Or run a local clone:
 
 ## 🛠️ Available Tools
 
-The server provides 51 tools across 6 categories:
+The server provides 52 tools across 6 categories:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters
 - `getClassDescriptions` - List class types
 - `getClassSchedules` - View recurring schedules
 - `addClientToClass` - Book clients into classes
-- `removeClientFromClass` - Cancel bookings
+- `removeClientFromClass` - Cancel bookings. Optional `sendEmail` (default `false`) asks Mindbody to email the client, as `cancelAppointments` and `cancelEnrollmentVisits` do
 - `getWaitlistEntries` - Manage waitlists. **At least one of `classScheduleIds`, `classIds` or `clientIds` is required**: the API rejects a request with none of them. Entries carry no queue position — the endpoint has no such field
 - `substituteClassTeacher` - Handle substitutions. Takes the **incoming** teacher's staff id as `substituteTeacherId`; the original teacher is implied by the class. The response shape is unverified against the sandbox (the endpoint has no `Test` flag)
 - `getClassVisits` - Attendance and sign-in status for a class. Returns client ids, not client names: the endpoint returns no client object
@@ -150,6 +149,7 @@ The server provides 51 tools across 6 categories:
 - `getClientAccountBalances` - View account balances
 - `getClientContracts` - View contracts
 - `getClientFormulaNotes` - Read a client's formula notes, by client and/or appointment (read-only)
+- `getClientPurchases` - A client's purchase history with prices (read-only): price, amount paid, discount, tax, account-payment flag, and the sale's items and payments. Default window: the last 365 days through today in the site timezone; `saleId` reads one sale back
 - `getClientCompleteInfo` - A client's whole wallet in one call: account balance, services, contracts, memberships and arrivals. Optional sandbox-verified parameters: `requiredClientData` (subset of collections), `showActiveOnly` (services that can pay now), `startDate` (include expired purchase history)
 
 ### 💰 Sales & Commerce
@@ -164,7 +164,7 @@ The server provides 51 tools across 6 categories:
 - `getContracts` - View membership options. **`locationId` is required** — the API answers HTTP 400 without it
 - `getCustomPaymentMethods` - List the site's custom payment methods with their ids (needed for a `Custom` payment)
 - `getSales` - Read-only sales history (default: month to date, site-local) with a per-sales-rep summary of retail product sales (tips excluded); `productsOnly`, `salesRepIds`, `clientIds` filters; `matchAppointments` adds a best-effort same-day appointment-staff match
-- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged)
+- `checkoutShoppingCart` - Process purchases; a `Custom` payment needs `metadata.id` from `getCustomPaymentMethods`; an item can pay for existing appointments via `appointmentIds` (each must belong to `clientId`, or nothing is charged); `test: true` is a dry run that records no sale and, because Mindbody does not check payments in test mode, checks that the payments sum to the cart total itself. `item.metadata` takes only `id` (or `amount` for a `Tip`); other keys are dropped. An item can carry a non-negative `discountAmount` and `appointmentBookingRequests` to book and pay in one call. There is no per-sale price override: the API sells at the catalogue price, so a sale at another price (such as a 0-priced, hourly-billed option) must be made in the Mindbody web app ([details](docs/API.md#no-per-sale-price-override))
 - `purchaseContract` - Sell memberships; needs `useAccountCredit: true` to be accepted, and has no dry run — it always creates a real contract with an AutoPay schedule
 
 ### 🏢 Site & Locations
@@ -180,7 +180,7 @@ The server provides 51 tools across 6 categories:
 ### 📆 Appointments
 - `getStaffAppointments` - View appointments; filter by staff (optional), location, date range, appointment IDs or a single client. Session-type and location **names** are resolved from the cached site catalogue; the client name, email and phone are not returned by this endpoint, so only `clientId` is available
 - `addAppointment` - Book appointments. Returns `sessionTypeId`/`locationId` rather than names — the response carries ids, not objects
-- `updateAppointment` - Reschedule (new `startDateTime`), change staff or notes, or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
+- `updateAppointment` - Reschedule (new `startDateTime`), change staff, notes or session type (`sessionTypeId`, on Booked, Confirmed or Arrived appointments only), or apply an `execute` status: confirm, unconfirm, arrive, unarrive, complete. It cannot cancel. Requires `clientId`: ownership, status and timing are verified before anything is written (see [CLAUDE.md](CLAUDE.md#updateappointment)).
 - `cancelAppointments` - Cancel 1 to 3 future appointments for one client, with guards (below)
 - `cancelClientBooking` - Cancel one booking (appointment, enrollment session or drop-in class) found by `classId`, `appointmentId`, `visitId` or `startDateTime`, choosing late or normal from `MINDBODY_LATE_CANCEL_WINDOW_HOURS`. The write goes through the guarded tool for the booking's kind, is never retried, and returns a receipt with the exact request body. `observeBalance: true` adds `impact`: the paying service's remaining count and the account balance, read before and after, reported as observed, never as a fee
 - `getBookableItems` - Find available slots
@@ -219,24 +219,36 @@ git clone https://github.com/ProfitMarkHK/MindbodyMCP.git
 cd MindbodyMCP
 
 # Install dependencies
-bun install  # or npm install
+bun install
 
 # If you cloned with --no-scripts, install the pre-commit quality gate by hand:
 git config core.hooksPath .githooks
 
 # Run in development mode
-bun run dev  # or npm run dev
+bun run dev
 
 # Run tests
-bun test  # or npm test
+bun test
 
-# Build for production
-bun run build  # or npm run build
+# Type-check and compile to dist/ (not needed to run; used for the Node.js option and npm releases)
+bun run build
 ```
+
+### Using Node.js (optional)
+
+Bun is the default runtime, and installing does not build `dist/`. To run on Node.js instead, compile once and run the output:
+
+```bash
+npm install
+npm run node:build        # tsc -> dist/
+node dist/index.js        # add --transport sse|http for the hosted transports
+```
+
+`npm run node:start`, `node:start:sse`, `node:start:http` and `node:dev*` (via `tsx`, no build) wrap these with the 1Password CLI like the Bun scripts. Node 18 to 22 is built and smoke-tested in CI.
 
 ### 1Password setup
 
-The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+The `dev`, `dev:sse`, `dev:http`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
 2. Set four environment variables in your shell to references to your item's fields, not the values. Use your own vault and item:
@@ -268,11 +280,19 @@ MindbodyMCP/
 └── CLAUDE.md             # Detailed documentation
 ```
 
-## 🌐 SSE Deployment (Production)
+## 🌐 Remote Deployment (SSE and Streamable HTTP)
 
-The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
+The server supports two remote transports: SSE (Server-Sent Events) for self-hosted deployment, and Streamable HTTP for managed hosting such as Railway. Both are additions to the default STDIO transport; neither replaces the other.
 
-### Quick Start with SSE
+### SSE transport
+
+**Client authentication.** Every SSE tool call runs with the server's Mindbody credentials, so the SSE transport requires a shared bearer token, `MCP_AUTH_TOKEN`. Clients send `Authorization: Bearer <token>` on every request except `GET /health`; anything else gets `401`. When the server binds to anything other than `127.0.0.1`, `::1` or `localhost` (the default host is `0.0.0.0`), it refuses to start without the token. On loopback the token may be left unset for local development, with a warning. STDIO needs no token.
+
+```bash
+export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"
+```
+
+#### Quick Start with SSE
 
 The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
 
@@ -287,34 +307,56 @@ MCP_TRANSPORT=sse bun start
 bun run src/index.ts --transport sse --port 8080
 ```
 
-### Docker Deployment
+#### Docker Deployment
 
 ```bash
 # Using Docker Compose
 docker-compose up -d
 
-# Or manually
+# Or manually (the image defaults to --transport http, so name the transport)
 docker build -t mindbody-mcp .
-docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse mindbody-mcp
+docker run -d -p 3000:3000 -e MCP_AUTH_TOKEN mindbody-mcp --transport sse
 ```
 
-### Production Configuration
+#### Production Configuration
 
 Configure via environment variables:
 - `MCP_TRANSPORT=sse` - Enable SSE transport
+- `MCP_AUTH_TOKEN` - Bearer token clients must send. Required unless `MCP_HOST` is loopback
 - `MCP_PORT=3000` - Server port
 - `MCP_HOST=0.0.0.0` - Server host
-- `MCP_CORS_ORIGIN=https://yourdomain.com` - CORS configuration
+- `MCP_ALLOWED_HOSTS=mcp.yourdomain.com` - Comma-separated `Host` values accepted (DNS-rebinding protection, on by default). Unset means loopback only, so set it whenever remote clients connect
+- `MCP_ALLOWED_ORIGINS=https://app.yourdomain.com` - Comma-separated `Origin` values accepted. Unset means Origin is not checked; requests without an Origin always pass
+- `MCP_CORS_ORIGIN=https://app.yourdomain.com` - Sent as `Access-Control-Allow-Origin`: one origin or `*` (default). Tells browsers who may read responses; refuses nothing on the server
+- `MCP_DNS_REBINDING_PROTECTION=false` - Turns the Host/Origin check off (opt-out; the bearer token still applies)
 - `MCP_SSL_CERT=/path/to/cert.pem` - SSL certificate (optional)
 - `MCP_SSL_KEY=/path/to/key.pem` - SSL private key (optional)
 
-### Endpoints
+The bearer token is checked first: a request without it gets `401` before the Host/Origin check, which answers `403`. The server sends no `Access-Control-Allow-Credentials` header, because it authenticates with the `Authorization` header and reads no cookies. See [Host, Origin and CORS](docs/SSE_DEPLOYMENT.md#host-origin-and-cors).
 
-- `/health` - Health check endpoint
-- `/info` - Server information
-- `/sse` - SSE event stream for MCP communication
+#### SSE Endpoints
+
+- `/health` - Health check endpoint (no token needed)
+- `/info` - Server information (token required)
+- `/sse` - SSE event stream for MCP communication (token required)
 
 For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOYMENT.md).
+
+### Streamable HTTP transport
+
+For managed hosting, `--transport http` serves the SDK's stateless Streamable HTTP transport at `/mcp` plus `/health`. Being stateless it has no session to route and sends nothing while idle, which is what lets a host scale the service to zero.
+
+**Authentication is a Cloudflare Access JWT, not a bearer token.** Every client acts as the studio's one Mindbody login, so the server refuses to start without `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`; Cloudflare performs the Google Workspace sign-in and the MCP OAuth flow, and the server verifies the forwarded `Cf-Access-Jwt-Assertion` header (RS256, issuer, audience and expiry). `MCP_ALLOW_UNAUTHENTICATED=true` serves unauthenticated on a loopback host only.
+
+```bash
+# Local, unauthenticated, loopback only
+MCP_ALLOW_UNAUTHENTICATED=true bun run src/index.ts --transport http
+
+# Local, authenticated through Cloudflare Access
+bun run dev:http
+```
+
+Deploying to Railway — including the cost model, the Access setup and the parts that were not verified — is documented in [docs/RAILWAY.md](docs/RAILWAY.md).
 
 ## 🧪 Testing
 
@@ -322,8 +364,8 @@ For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOY
 # Run all tests
 bun test
 
-# Test SSE connection
-bun run test:sse
+# Test SSE connection (pass the server's token if it has one)
+MCP_AUTH_TOKEN=... bun run test:sse
 
 # Test specific tool
 bun run test:tool
@@ -333,7 +375,12 @@ bun run benchmark
 
 # Type checking
 bun run typecheck
+
+# Which docs/openapi.json paths the tools call, grouped by API tag (offline)
+bun run spec:coverage
 ```
+
+`spec:coverage` is informational and exits 0; pass `-- --min <percent>` (or set `SPEC_COVERAGE_MIN`) to make it exit 1 below that share of spec paths. See [docs/quality-gates.md](docs/quality-gates.md).
 
 ### Quality gates
 

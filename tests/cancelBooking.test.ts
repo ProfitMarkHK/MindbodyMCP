@@ -145,7 +145,7 @@ describe("cancelClientBookingTool: decision and routing", () => {
     dropIn(client, 3);
     const result = await run(client, { classId: 201 });
 
-    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: true } }]);
+    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: true, SendEmail: false } }]);
     expect(result).toMatchObject({ success: true, outcome: "cancelled", mode: "late" });
     expect(result.decision).toMatchObject({ mode: "late", requested: undefined, windowHours: 24 });
     expect(result.receipt).toMatchObject({ tool: "removeClientFromClass", endpoint: "/class/removeclientfromclass", response: { ok: true } });
@@ -295,12 +295,12 @@ describe("cancelClientBookingTool: resolution refusals", () => {
     expect(client.gets).toEqual([]);
   });
 
-  it("refuses sendEmail on a drop-in class, which removeClientFromClass cannot send", async () => {
+  it("passes sendEmail through to removeClientFromClass for a drop-in class", async () => {
     const client = new StubClient();
     dropIn(client, 72);
     const result = await run(client, { classId: 201, sendEmail: true });
-    expect(client.posts).toEqual([]);
-    expect(result.message).toContain("sendEmail");
+    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: false, SendEmail: true } }]);
+    expect(result.outcome).toBe("cancelled");
   });
 
   it("reports a delegate guard refusal with an empty receipt request", async () => {
@@ -540,7 +540,7 @@ describe("cancelClientBookingTool: per-service late-cancel rules (issue #21)", (
     const client = new StubClient();
     paidDropIn(client, 10, 11);
     const result = await run(client, { classId: 201, lateCancel: true });
-    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: true } }]);
+    expect(client.posts).toEqual([{ url: "/class/removeclientfromclass", body: { ClientId: CLIENT, ClassId: 201, LateCancel: true, SendEmail: false } }]);
     expect(result).toMatchObject({ success: true, mode: "late", decision: { windowHours: 24, windowSource: `${LATE_CANCEL_RULES_ENV}[1] (programId 3)` } });
   });
 
