@@ -42,8 +42,8 @@ Please include the following information in your report:
 When using Mindbody MCP:
 
 1. **Never commit credentials**: Always use environment variables for API keys and passwords
-2. **Use HTTPS in production**: When deploying with SSE, always use SSL/TLS certificates
-3. **Restrict CORS origins**: In production, set specific allowed origins instead of wildcards
+2. **Gate hosted deployments**: the HTTP transport acts as one shared Mindbody login for everyone who reaches it, so serve it only behind Cloudflare Access (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`) and over HTTPS. See `docs/RAILWAY.md`
+3. **Never expose the unauthenticated mode**: `MCP_ALLOW_UNAUTHENTICATED` is for loopback development only
 4. **Keep dependencies updated**: Regularly update the MCP SDK and other dependencies
 5. **Monitor for vulnerabilities**: Use `npm audit` or `bun audit` regularly
 6. **Rotate credentials**: Regularly rotate your Mindbody API credentials

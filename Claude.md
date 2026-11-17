@@ -38,8 +38,8 @@ bun install
 # Run in development mode (STDIO transport)
 bun run dev
 
-# Run with SSE transport (production-like)
-bun run dev:sse
+# Run with HTTP transport (production-like; needs CF_ACCESS_* or MCP_ALLOW_UNAUTHENTICATED=true)
+bun run dev:http
 
 # Run tests
 bun test
@@ -87,8 +87,6 @@ bun test
 # Test a specific tool manually
 bun run test:tool
 
-# Test SSE transport
-bun run test:sse
 
 # Run performance benchmarks
 bun run benchmark

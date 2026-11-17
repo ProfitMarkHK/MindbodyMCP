@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- Removed the SSE transport (`/sse`, `/info`, `--ssl-cert`, `--ssl-key`, `MCP_CORS_ORIGIN`, `MCP_SSL_*`, `MCP_ALLOWED_ORIGINS`, `MCP_DNS_REBINDING_PROTECTION`), which could not receive client messages. `--transport sse` is now a deprecated alias for `http`. Removed the `*:sse` scripts, `test:sse`, `start:prod` and the `deploy/` templates (nginx, systemd, Kubernetes).
+- `MCP_TRANSPORT` is now honoured (it was ignored), and `PORT` is read when `MCP_PORT` is unset.
+
 ### Added
+- Streamable HTTP transport (`--transport http`): stateless, `/mcp` plus `/health`, authenticated only by a Cloudflare Access JWT (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`); refuses to start without it. `MCP_ALLOW_UNAUTHENTICATED=true` serves unauthenticated on loopback only. In-flight requests drain for up to 25 s on SIGTERM.
+- Railway deployment: `railway.json` (sleeping enabled), a Bun-only `Dockerfile`, and `docs/RAILWAY.md`.
 - Added `getClientFormulaNotes`, a read-only tool for a client's formula notes, filtered by client and/or appointment.
 - Brought the tool set from 38 to 41 with `getClassVisits` (attendance for a single class), `cancelAppointments` and `cancelEnrollmentVisits`.
 - Added dependency injection for the API client and cache in every tool, so tests run without the global client.

@@ -265,8 +265,9 @@ and not needed" from "forgotten":
     opt-in live tier targets exactly this gap (see the live-tier entry below). It
     has now been run against the sandbox, but its last recorded run is not all
     green (see [`tests/live/README.md`](../tests/live/README.md)), so the gap is not closed.
-  - **SSE transport.** Everything here is STDIO. `bun run test:sse` is still a
-    manual script needing a server already listening.
+  - **HTTP transport.** The E2E suite is STDIO. `tests/http-server.test.ts` covers
+    the HTTP transport (auth, Cloudflare Access JWT, a real SDK client over
+    `/mcp`) against a stub server, not the full tool set.
   - **Retry-on-5xx** is covered by `tests/api-client-retry.test.ts` (loopback
     servers, a 1 ms backoff injected through the client's constructor), not by the
     E2E suite: a GET is retried on a 5xx or a lost response (1 attempt + 3 retries)
@@ -445,7 +446,7 @@ and not needed" from "forgotten":
     the script runs from its own root. Every exclusion is **printed** before the
     result, so a pass is auditable: the log names what was not scanned. If the
     worktree list cannot be read, nothing is excluded. This exists because one
-    branch's in-flight edit to `ci.yml` or `deploy/k8s-deployment.yaml` must not
+    branch's in-flight edit to `ci.yml` or `railway.json` must not
     turn another branch's gate red on a file that is not its own.
 
     **Residual gap, stated plainly.** `grep --exclude-dir` matches on the
@@ -516,11 +517,6 @@ and not needed" from "forgotten":
     npm, a public registry and its mirrors within minutes. `ci.yml` now declares `permissions: { contents: read }`; it previously
     had no `permissions:` block at all, so `bun install` inherited the repository
     default token, often `contents: write`.
-  - **Known false negative (intentional).** `deploy/k8s-deployment.yaml` carries
-    Kubernetes Secret `stringData:` placeholders set to the literal `"REPLACE"`
-    (7 characters — deliberately under the pattern's 8-character minimum) rather
-    than an allowlist. Any allowlist entry is a maintenance burden and an obvious
-    next target for a real credential to hide behind.
   - `.env` is untracked and gitignored; never read or print it, and refer to
     variable names and lengths only.
 - **Gate 13 — mandatory pagination (applies; passes; no allowlist).**

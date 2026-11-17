@@ -17,7 +17,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 - **Multi-Location Support** - Manage multiple studio locations seamlessly
 - **High Performance** - Built on Bun runtime with intelligent caching
 - **Type-Safe** - Full TypeScript support with comprehensive types
-- **Dual Transport Support** - STDIO for local development, SSE for production deployment
+- **Dual Transport Support** - STDIO for local development, Streamable HTTP for hosting
 
 ## 🚀 Quick Start
 
@@ -251,7 +251,7 @@ bun run build  # or npm run build
 
 ### 1Password setup
 
-The `dev`, `dev:sse`, `start`, `start:sse`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+The `dev`, `dev:http`, `start`, `start:http` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
 2. Set four environment variables in your shell to references to your item's fields, not the values. Use your own vault and item:
@@ -265,7 +265,7 @@ MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 
 3. Run the script as usual, for example `bun run dev`. `op run` resolves each reference and passes it to the server as an environment variable.
 
-`bun run dev:sandbox` (and `dev:sandbox:sse`) uses the same four variables, so point them at your sandbox item for that run. The script always pins the site to the sandbox (`-99`) and ignores `MINDBODY_SITE_ID`. Production and sandbox use separate 1Password items, so don't leave the production references in the shell when you run the sandbox scripts. See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances.
+`bun run dev:sandbox` uses the same four variables, so point them at your sandbox item for that run. The script always pins the site to the sandbox (`-99`) and ignores `MINDBODY_SITE_ID`. Production and sandbox use separate 1Password items, so don't leave the production references in the shell when you run the sandbox scripts. See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances.
 
 ### Project Structure
 
@@ -283,62 +283,21 @@ MindbodyMCP/
 └── CLAUDE.md             # Detailed documentation
 ```
 
-## 🌐 SSE Deployment (Production)
+## 🌐 Hosted deployment (HTTP)
 
-The server supports SSE (Server-Sent Events) transport for production deployment, enabling web-based clients and remote access.
-
-### Quick Start with SSE
-
-The `start:sse` script reads production credentials through 1Password; see [1Password setup](#1password-setup).
+`--transport http` serves Streamable HTTP at `/mcp` (stateless, one POST per request) plus `/health`. Every client acts as the studio's one Mindbody login, so auth is mandatory: set `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` and put the server behind Cloudflare Access (Google Workspace sign-in); the server verifies the JWT Access forwards. It refuses to start without them. For local use only, `MCP_ALLOW_UNAUTHENTICATED=true` serves with no auth, bound to 127.0.0.1.
 
 ```bash
-# Start with SSE transport
-bun run start:sse
-
-# Or with environment variable
-MCP_TRANSPORT=sse bun start
-
-# With custom port
-bun run src/index.ts --transport sse --port 8080
+MCP_ALLOW_UNAUTHENTICATED=true bun run src/index.ts --transport http --port 3000
 ```
 
-### Docker Deployment
-
-```bash
-# Using Docker Compose
-docker-compose up -d
-
-# Or manually
-docker build -t mindbody-mcp .
-docker run -d -p 3000:3000 -e MCP_TRANSPORT=sse mindbody-mcp
-```
-
-### Production Configuration
-
-Configure via environment variables:
-- `MCP_TRANSPORT=sse` - Enable SSE transport
-- `MCP_PORT=3000` - Server port
-- `MCP_HOST=0.0.0.0` - Server host
-- `MCP_CORS_ORIGIN=https://yourdomain.com` - CORS configuration
-- `MCP_SSL_CERT=/path/to/cert.pem` - SSL certificate (optional)
-- `MCP_SSL_KEY=/path/to/key.pem` - SSL private key (optional)
-
-### Endpoints
-
-- `/health` - Health check endpoint
-- `/info` - Server information
-- `/sse` - SSE event stream for MCP communication
-
-For detailed deployment instructions, see [SSE Deployment Guide](docs/SSE_DEPLOYMENT.md).
+The old SSE transport could not receive client messages and has been removed; `--transport sse` is a deprecated alias for `http`. Step-by-step Railway, scale-to-zero and Cloudflare Access setup is in [docs/RAILWAY.md](docs/RAILWAY.md).
 
 ## 🧪 Testing
 
 ```bash
 # Run all tests
 bun test
-
-# Test SSE connection
-bun run test:sse
 
 # Test specific tool
 bun run test:tool
