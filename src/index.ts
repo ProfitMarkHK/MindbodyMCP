@@ -139,7 +139,7 @@ const requiredEnvVars = [
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     console.error(`Missing required environment variable: ${envVar}`);
-    console.error('Please copy .env.example to .env and fill in your credentials');
+    console.error('Set it in the environment, or see .env.example for the standalone template');
     process.exit(1);
   }
 }

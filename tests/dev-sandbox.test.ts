@@ -2,8 +2,9 @@
  * Sandbox launcher mapping (scripts/dev-sandbox.ts).
  *
  * The launcher gets its credentials from 1Password (via `op run`), never from a file. It must
- * reach only the sandbox: it always uses site -99, whatever MINDBODY_SITE_ID the environment
- * carries, and refuses to start without credentials.
+ * reach only the sandbox: it always uses site -99, refuses an incoming MINDBODY_SITE_ID that
+ * names another site (the signature of production references left in the shell), and refuses
+ * to start without credentials.
  */
 import { describe, expect, it } from "bun:test";
 import { sandboxEnv } from "../scripts/dev-sandbox.js";
@@ -26,8 +27,15 @@ describe("sandboxEnv", () => {
     });
   });
 
-  it("ignores a live site ID in the environment and still uses the sandbox", () => {
-    expect(sandboxEnv({ ...CREDENTIALS, MINDBODY_SITE_ID: "123456" }).MINDBODY_SITE_ID).toBe("-99");
+  it("refuses a live site ID instead of silently pinning the sandbox", () => {
+    expect(() => sandboxEnv({ ...CREDENTIALS, MINDBODY_SITE_ID: "123456" })).toThrow(
+      /not the sandbox \(-99\)/,
+    );
+  });
+
+  it("accepts an explicit sandbox site ID and an absent one", () => {
+    expect(sandboxEnv({ ...CREDENTIALS, MINDBODY_SITE_ID: "-99" }).MINDBODY_SITE_ID).toBe("-99");
+    expect(sandboxEnv(CREDENTIALS).MINDBODY_SITE_ID).toBe("-99");
   });
 
   it("refuses to start without sandbox credentials", () => {

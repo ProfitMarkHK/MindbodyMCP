@@ -27,11 +27,14 @@ scripts/live-e2e.sh
 
 ## Supplying the credentials — `scripts/live-e2e.sh`
 
-The repo's `.env` holds a real business site and must never be reused for this
-tier, so the `MINDBODY_TEST_*` values have to be entered by hand. The project's
-secrets protocol is that the owner enters every secret, through a reviewed
-script that prompts with no echo, and that no agent ever passes a secret in a
-command-line argument. `scripts/live-e2e.sh` is that script.
+The live tier must never be handed the operator's production `MINDBODY_*`
+credentials, so its values live in a separate `MINDBODY_TEST_*` namespace and
+have to be entered by hand. Use the sandbox 1Password item or Environment, not
+the production one; the tier's `-99` site check is the backstop if the wrong
+source is used. The project's secrets protocol is that the owner
+enters every secret, through a reviewed script that prompts with no echo, and
+that no agent ever passes a secret in a command-line argument.
+`scripts/live-e2e.sh` is that script.
 
 ```bash
 scripts/live-e2e.sh                 # prompt for whatever is missing, then run
@@ -84,17 +87,27 @@ All credentials are read from a **separate namespace**, never from `MINDBODY_*`:
 
 ### Why a separate namespace
 
-The repo's own `.env` points at a **real business site**, and `bunfig.toml` sets
-`dotenv = true`, so `bunfig.toml` has already loaded those production
-credentials into `process.env` by the time any test runs. If this tier inherited
-them it would create clients and appointments inside somebody's live account on
-the first run anyone made. A separate namespace makes that impossible rather
-than merely unlikely.
+Two layers keep this tier away from production credentials.
 
-Put the live credentials in your shell environment or a gitignored file; do not
-add them to the repo `.env` alongside the production ones. `.env.example` lists
-the names as **commented-out, empty** entries for that reason, and never a
-value.
+The first is the namespace. `live-config.ts` reads only `MINDBODY_TEST_*`, so an
+environment that already exports the operator's `MINDBODY_*` values — a shell,
+or a consumer checkout whose `.env` `bunfig.toml`'s `dotenv = true` has loaded —
+cannot supply this tier. That is a human-facing guard: it turns "the live tier
+is about to run against the wrong site" into a visible misconfiguration instead
+of a silent one.
+
+The second is mechanical, and it does not depend on the absence of a file.
+`buildLiveChildEnv` constructs the spawned server's environment from the
+resolved `MINDBODY_TEST_*` values rather than spreading `process.env`, and the
+server's cwd is an empty scratch directory, so neither an exported variable nor
+a `.env` reaches it. In this repository there is normally no `.env` at all: the
+dev and start scripts resolve credentials from 1Password through `op run`.
+
+Put the live credentials in your shell environment or the wrapper's saved file
+under `~/.config`; do not add them to any repo `.env`. `.env.example` documents
+only the server's `MINDBODY_*` names, for people running the published package;
+the live tier's namespace is documented here and by
+`scripts/live-e2e.sh --help`, and is deliberately absent from that template.
 
 ### Required Mindbody parameters are discovered, never hardcoded
 

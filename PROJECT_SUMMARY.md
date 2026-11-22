@@ -73,9 +73,8 @@ mindbody-mcp/
 # Install dependencies
 bun install
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your credentials
+# Configure environment (this repo's scripts use 1Password; no .env is needed)
+# For the published server only: cp .env.example .env, then fill it in
 
 # Test the setup
 bun run test:tool

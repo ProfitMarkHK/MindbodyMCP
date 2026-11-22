@@ -168,14 +168,16 @@ export async function getClassesTool(
 **1Password-first policy:**
 - Mindbody credentials come from 1Password at launch through `op run`. No env file is required: do not create `.env.production`, `.env.development` or `prod.env`, and do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` values in any file.
 - The four variables below must be set in the shell environment as `op://` references to the item the operator chooses. The references are not secrets, but they name the vault layout, so they are never committed.
-- Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items: the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
-- `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and ignores any `MINDBODY_SITE_ID` in the environment. Use it for all local work and tests against the sandbox.
+- Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items, clearly named for the site they serve (for example `Mindbody Production` and `Mindbody Sandbox`): the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
+- `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and refuses an incoming `MINDBODY_SITE_ID` that names any other site, which is the signature of the production item's references still being in the shell. Use it for all local work and tests against the sandbox.
 - `bun run dev`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` select production through the same references. Run them only on purpose. If a task truly needs a live site, state that explicitly before running one.
-- The live E2E tier (`scripts/live-e2e.sh`, `tests/live/`) still reads `MINDBODY_TEST_*` names. The npm dev scripts do not.
+- The live E2E tier (`scripts/live-e2e.sh`, `tests/live/`) still reads `MINDBODY_TEST_*` names. The npm dev scripts do not. That namespace is a human-facing guard only; the mechanical isolation is `buildLiveChildEnv` in `tests/live/live-config.ts`, which builds the child environment from the resolved test values instead of inheriting the shell's `MINDBODY_*`.
+- Do not add a `MINDBODY_PROD_*` namespace. `MINDBODY_*` is the runtime contract for the published server, Docker, Railway and `.env.example`; the live tier's `MINDBODY_TEST_*` is the only second namespace. A prod prefix would break existing deployments without adding a safety property the site guard does not already provide. Production and sandbox are separated by which 1Password item the references point at, and by the `-99` site guard.
+- `.env.example` is the template for people running the published server, not a credential file for this repository. It lists the same `MINDBODY_*` names with placeholders and its header says not to create a `.env` for the repo's scripts. The live tier's `MINDBODY_TEST_*` namespace is documented in `tests/live/README.md` and deliberately absent from the template.
 
 **Required environment variables (as `op://` references in the shell):**
 - `MINDBODY_API_KEY` - API key
-- `MINDBODY_SITE_ID` - Production site ID. Read by the production scripts; the sandbox ignores it.
+- `MINDBODY_SITE_ID` - Production site ID. Read by the production scripts; `dev:sandbox` pins `-99` and refuses any other value.
 - `MINDBODY_SOURCE_NAME` - OAuth source name
 - `MINDBODY_SOURCE_PASSWORD` - OAuth source password
 
