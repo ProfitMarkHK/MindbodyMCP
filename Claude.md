@@ -844,7 +844,11 @@ Mindbody takes and returns every date and time as the site's local time with no 
 ## Configuration for Development
 
 ### Environment Setup
-Create `.env` with Mindbody sandbox credentials:
+In this repository, `bun run dev` (and the other `dev*`/`start*` scripts)
+resolves these from 1Password through `op run`, so no `.env` is needed; see the
+README's 1Password setup. For the published server, or a checkout that supplies
+credentials itself, `.env.example` is the template. Sandbox values:
+
 ```bash
 MINDBODY_API_KEY=your_key
 MINDBODY_SITE_ID=-99

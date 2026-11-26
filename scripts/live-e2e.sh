@@ -5,12 +5,13 @@
 #
 # ── Why this wrapper exists ────────────────────────────────────────────────
 # tests/live/mindbody-live.e2e.ts reads three secrets from `MINDBODY_TEST_*`.
-# The repo's own `.env` holds a real business site and must never be reused for
-# that (see tests/live/README.md), so the credentials have to come from
-# somewhere else. The project's secrets protocol is explicit: the OWNER enters
-# every secret, by hand, through a reviewed script that prompts with no echo,
-# and agents never pass secrets in command-line arguments or through any channel
-# that logs output. This script is that wrapper.
+# The tier must never inherit the operator's production `MINDBODY_*`
+# credentials, so its values live in a separate namespace and have to come from
+# somewhere other than the server's own configuration. The project's secrets
+# protocol is explicit: the OWNER enters every secret, by hand, through a
+# reviewed script that prompts with no echo, and agents never pass secrets in
+# command-line arguments or through any channel that logs output. This script is
+# that wrapper.
 #
 # ── What it guarantees ─────────────────────────────────────────────────────
 #   1. Every value is read with `read -r -s` (no terminal echo), or taken from an
@@ -116,6 +117,12 @@ Environment variables already set are used as-is and never re-prompted, so this
 script is safe to call non-interactively. Variable NAMES are safe to mention;
 their VALUES are never printed by this script, and never appear in the
 arguments of any command it runs.
+
+Credentials are read from the MINDBODY_TEST_* namespace, never MINDBODY_*:
+  MINDBODY_TEST_API_KEY, MINDBODY_TEST_SOURCE_NAME,
+  MINDBODY_TEST_SOURCE_PASSWORD
+Optional: MINDBODY_TEST_SITE_ID (must be -99), MINDBODY_TEST_API_URL, and
+SKIP_LIVE_E2E=1 to skip the tier entirely. See tests/live/README.md.
 EOF
 }
 
@@ -183,7 +190,7 @@ if [[ "$PERSIST_FILE" != /* ]]; then
 fi
 case "$PERSIST_FILE" in
   "$REPO_ROOT" | "$REPO_ROOT"/*)
-    die "refusing to write credentials inside the repository ($PERSIST_FILE). The repo's own .env holds a production site and this script will not touch it."
+    die "refusing to write credentials inside the repository ($PERSIST_FILE). This wrapper keeps its saved file outside the repo; the repo itself holds no credential file."
     ;;
 esac
 if [[ "${PERSIST_FILE##*/}" == '.env' ]]; then

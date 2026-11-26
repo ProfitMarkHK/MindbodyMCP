@@ -64,6 +64,11 @@ bun install
 
 ### Create Environment File
 
+This step is for the published server or a checkout where you supply credentials
+yourself. If you are setting up this repository's own scripts, the credentials
+come from 1Password through `op run` — see the README's 1Password setup and
+Step 5b for the Claude Code instances — and no `.env` is needed.
+
 ```bash
 # Copy the example file
 cp .env.example .env
@@ -199,7 +204,7 @@ Requirements: `claude` on your PATH and Bun installed (Step 1). `bun run --cwd` 
 
 ### Sandbox instance (`mindbody-sandbox`)
 
-The sandbox instance pulls its API key and Source credentials from a 1Password item of its own, separate from production. Its item's `MINDBODY_SITE_ID` is `-99`. Mindbody does not issue per-environment keys, so the sandbox item may hold the same key as production. `scripts/dev-sandbox.ts` always uses site `-99` and ignores any other `MINDBODY_SITE_ID`, so this instance cannot reach a live site. No `.env` file is read.
+The sandbox instance pulls its API key and Source credentials from a 1Password item of its own, separate from production. Its item's `MINDBODY_SITE_ID` is `-99`. Mindbody does not issue per-environment keys, so the sandbox item may hold the same key as production. `scripts/dev-sandbox.ts` pins site `-99` and refuses an incoming `MINDBODY_SITE_ID` that names any other site, so this instance cannot reach a live site and production references left in the shell are reported rather than silently ignored. No `.env` file is read.
 
 ```bash
 claude mcp add mindbody-sandbox --scope user -e MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field> -e MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field> -e MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field> -- op run -- bun run --cwd E:/MindbodyMCP scripts/dev-sandbox.ts

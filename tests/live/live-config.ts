@@ -7,15 +7,20 @@
  *
  * ── Credential namespace ────────────────────────────────────────────────────
  * Credentials are read ONLY from `MINDBODY_TEST_*`. This module never reads
- * `MINDBODY_API_KEY` / `MINDBODY_SITE_ID` / `MINDBODY_SOURCE_*`, even though the
- * repo's own `.env` sets them and `bunfig.toml`'s `dotenv = true` has already
- * loaded them into `process.env` by the time this runs.
+ * `MINDBODY_API_KEY` / `MINDBODY_SITE_ID` / `MINDBODY_SOURCE_*`.
  *
- * The reason is not tidiness. The repo's `.env` points at a REAL business site,
- * not the sandbox. If the live tier inherited those values it would create
- * clients and appointments inside somebody's production account, and it would do
- * so on the first `bun test` run anybody made. A separate namespace makes that
- * failure impossible rather than merely unlikely.
+ * The separate namespace is a human-facing guard: it keeps an environment that
+ * already exports the operator's production credentials from being pointed at
+ * this tier by accident, and it makes that mistake visible rather than silent.
+ *
+ * The mechanical guard is `buildLiveChildEnv` below. The spawned server gets an
+ * environment constructed from the resolved `MINDBODY_TEST_*` values, not a
+ * copy of this process's environment, and its cwd is an empty scratch
+ * directory. Nothing ambient therefore reaches it, including a `.env` loaded by
+ * Bun or by `dotenv.config()`. In this repository there is normally no `.env`
+ * at all: the dev and start scripts resolve credentials from 1Password through
+ * `op run`. A consumer checkout may have one, which is exactly why the child
+ * environment is built rather than inherited.
  *
  * ── Skip vs fail ────────────────────────────────────────────────────────────
  * There are exactly TWO automatic skips, and they are both statements about this
@@ -101,7 +106,7 @@ export function resolveLiveTier(env: NodeJS.ProcessEnv = process.env): LiveDecis
       reason:
         `No live Mindbody credentials configured (missing: ${missing.join(', ')}). ` +
         'Set them to run this tier against the sandbox; see tests/live/README.md. ' +
-        'The MINDBODY_* variables in the repo .env are deliberately NOT used.',
+        'Ambient MINDBODY_* variables are deliberately never read.',
     };
   }
 
@@ -135,12 +140,13 @@ export function resolveLiveTier(env: NodeJS.ProcessEnv = process.env): LiveDecis
 /**
  * Build the environment for the spawned MCP server subprocess.
  *
- * Constructed from scratch rather than spread from `process.env`: the test
- * process holds the developer's real `MINDBODY_*` credentials (via
- * `bunfig.toml`'s `dotenv = true`) and inheriting them into a child that writes
- * to a live API is the exact accident this module exists to prevent. The
- * subprocess's cwd is an empty scratch directory, so the repo `.env` is neither
- * read nor reachable from there either.
+ * Constructed from scratch rather than spread from `process.env`: the parent
+ * process may hold real `MINDBODY_*` credentials — exported by a shell, or
+ * loaded from a consumer `.env` by `bunfig.toml`'s `dotenv = true` — and
+ * inheriting them into a child that writes to the live API is the exact
+ * accident this module exists to prevent. The subprocess's cwd is an empty
+ * scratch directory, so a `.env` is neither read nor reachable from there
+ * either.
  *
  * Proxy settings are the one deliberate exception: unlike the hermetic suite,
  * which pins them to a dead port on purpose, this tier has to reach the real

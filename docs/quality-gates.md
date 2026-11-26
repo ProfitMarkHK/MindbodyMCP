@@ -364,11 +364,17 @@ and not needed" from "forgotten":
   pass/fail tally.
 
   **Credentials — names only, never values.** The tier reads a separate
-  `MINDBODY_TEST_*` namespace and never `MINDBODY_*`. That separation is
-  load-bearing: `bunfig.toml` sets `dotenv = true`, so the repo `.env` — which
-  points at a **real business site** — is already loaded into `process.env` before
-  any test runs. Inheriting it would create clients and appointments inside
-  somebody's live account on first use.
+  `MINDBODY_TEST_*` namespace and never `MINDBODY_*`. That separation is a
+  human-facing guard: an operator's production credentials may already be in
+  `process.env` (exported by a shell, or loaded from a consumer `.env` by
+  `bunfig.toml`'s `dotenv = true`), and inheriting them would create clients and
+  appointments inside somebody's live account on first use. The mechanical guard
+  does not depend on the absence of a file: `buildLiveChildEnv`
+  ([`tests/live/live-config.ts`](../tests/live/live-config.ts)) constructs the
+  spawned server's environment from the resolved `MINDBODY_TEST_*` values instead
+  of spreading `process.env`, and the child's cwd is an empty scratch directory.
+  In this repository there is normally no `.env` at all: the dev and start
+  scripts resolve credentials from 1Password through `op run`.
 
   | Variable | Required | Meaning |
   |---|---|---|
@@ -377,8 +383,10 @@ and not needed" from "forgotten":
   | `MINDBODY_TEST_SOURCE_PASSWORD` | yes | Source password |
   | `MINDBODY_TEST_SITE_ID` | no | Defaults to `-99`. **Any other value is refused**, not skipped |
 
-  Values go in the shell environment or a gitignored file — never in the repo
-  `.env`, never in this document.
+  Values go in the shell environment or the wrapper's saved file under
+  `~/.config` — never in a repo `.env`, never in this document. In this
+  repository there is normally no `.env`: the dev and start scripts resolve
+  credentials from 1Password through `op run`.
 
   **Financial writes always commit, and the server forces that.** Both Mindbody
   endpoints accept `Test: true`, which validates without committing, and the MCP

@@ -11,6 +11,11 @@ Bun is the runtime; if you only have Node.js, see [Using Node.js](../README.md#u
 
 ## 2. Configure Environment
 
+This step is for the published server or a checkout where you supply credentials
+yourself. In this repository, `dev` and `start` resolve the credentials from
+1Password through `op run` (see the README's 1Password setup), so no `.env` is
+needed.
+
 Create a `.env` file in the project root:
 
 ```bash
