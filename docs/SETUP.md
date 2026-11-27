@@ -117,7 +117,7 @@ op run -- bun run test:tool
 
 | Error | Solution |
 |-------|----------|
-| "Missing required environment variable" | Check that all 4 required variables are set, and that `op run` resolved the references rather than passing `op://` strings through |
+| "Missing required environment variable" | Check that all the required variables are set, and that `op run` resolved the references rather than passing `op://` strings through |
 | "401 Unauthorized" | Verify your API credentials are correct |
 | "Teacher not found" | Normal for sandbox - try a different name or check your site |
 | "Connection refused" | Check internet connection and firewall settings |
@@ -165,7 +165,7 @@ Add the Mindbody MCP server to your configuration:
 **Important Notes:**
 - Use full absolute paths
 - On Windows, use double backslashes (`\\`)
-- Include all 4 references, never their values: `op run` resolves them at launch
+- Include all the required references, never their values: `op run` resolves them at launch
 - Save the file with valid JSON
 
 ### Restart Claude Desktop

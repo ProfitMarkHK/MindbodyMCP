@@ -61,7 +61,7 @@ Try asking:
 ## Troubleshooting
 
 If the test script fails:
-1. Check your `.env` file has all 4 required variables
+1. Check your `.env` file has all the required variables
 2. Verify your API credentials are correct
 3. Ensure the teacher name exists in your Mindbody site
 4. Check the console for specific error messages
