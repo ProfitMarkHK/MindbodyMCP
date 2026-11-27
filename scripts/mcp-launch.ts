@@ -44,7 +44,7 @@ export function refFilePath(profile: Profile, env: NodeJS.ProcessEnv, home: stri
   return env[REF_FILE_ENV] || profileConfig(profile, home).refFile;
 }
 
-/** Parse `KEY=value` lines; comments and blank lines are ignored. Reads ref files and `op inject` output. */
+/** Parse a hand-written ref file: `KEY=value` lines; comments and blank lines are ignored. */
 export function parseRefFile(text: string): Record<string, string> {
   const refs: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
@@ -79,7 +79,14 @@ export async function resolveRefs(
 ): Promise<Record<string, string>> {
   const result = await runner.run(buildInjectSpec(refs, sat));
   if (result.exitCode !== 0) throw new Error(result.stderr.trim() || "op inject failed");
-  return parseRefFile(result.stdout);
+  // Not parseRefFile: a secret may begin or end with a space or a quote, so pass it through as is.
+  const lines = result.stdout.split(/\r?\n/);
+  return Object.fromEntries(
+    Object.keys(refs).flatMap((key) => {
+      const line = lines.find((candidate) => candidate.startsWith(`${key}=`));
+      return line === undefined ? [] : [[key, line.slice(key.length + 1)]];
+    })
+  );
 }
 
 /** Pure server plan: resolved values in the environment, never in `args`, and no SAT. */

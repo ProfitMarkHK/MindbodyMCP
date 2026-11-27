@@ -27,8 +27,9 @@ bun run scripts/op-sat.ts install sandbox   # or: prod
   the real tty. The `-w` flag is last and has no argument, so the SAT never
   appears in argv or process listings.
 - **Windows and Linux: pipe the SAT in.** Pipe the output of your one-time
-  `op service-account create` command straight into the installer. There is no
-  interactive prompt on these platforms.
+  `op service-account create <name> ... --raw` command straight into the
+  installer. Without `--raw` the output is a multi-line message, which would be
+  stored as the token. There is no interactive prompt on these platforms.
 - On Linux, `secret-tool store --label ... service mindbody-op-sat account <profile>`
   is used, so `secret-tool` (libsecret) and a D-Bus session are required.
 - Nothing checks the token at install time. A wrong or empty token is stored as
@@ -56,6 +57,25 @@ bun run scripts/op-sat.ts doctor prod
 
 Expected vaults: `MindbodyMCP Prod` for `prod`, `MindbodyMCP Sandbox` for
 `sandbox`. Expected OS-store accounts: `mindbody-prod` and `mindbody-sandbox`.
+
+## Remove the SAT
+
+There is no `remove` command. To clear a stored token (offboarding, or retiring
+a machine), use the OS tool for one profile (`sandbox` shown; or `prod`):
+
+```bash
+# macOS
+security delete-generic-password -a mindbody-sandbox -s op-service-account
+# Linux
+secret-tool clear service mindbody-op-sat account sandbox
+```
+
+```powershell
+# Windows
+Remove-Item "$env:LOCALAPPDATA\mindbody-op-sat\sandbox.bin"
+```
+
+Removing the local copy does not revoke the token. Revoke it in 1Password too.
 
 ## Ref files
 

@@ -14,11 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultSatContext, readSat, type CommandSpec, type Profile, type SatContext } from "./op-sat.js";
 import { parseRefFile, refFilePath, resolveRefs } from "./mcp-launch.js";
+// Sandbox ref files omit the site id; use the same pin the sandbox server enforces.
+import { SANDBOX_SITE_ID } from "./dev-sandbox.js";
 
 export type PlatformTarget = "railway" | "azure";
-
-/** Sandbox ref files omit the site id: scripts/dev-sandbox.ts pins it locally. */
-export const SANDBOX_SITE_ID = "-99";
 
 export interface SeedContext extends SatContext {
   env: NodeJS.ProcessEnv;

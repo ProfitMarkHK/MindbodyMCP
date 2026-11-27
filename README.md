@@ -56,14 +56,14 @@ The server runs on [Bun](https://bun.sh), which executes the TypeScript source d
 
 For local MCP use, prefer the SAT launcher with file-based `op://` references;
 it needs no secret file. See [Secrets and local 1Password tooling](docs/SECRETS.md).
-Do not use a secret file for hosted production — those deployments inject plain
+Hosted production needs no secret file either: the platform injects plain
 variables.
 
-These steps are for the published server, a Docker image, or a checkout where
-you supply the credentials yourself. In this repository the `dev` and `start`
-scripts read the same four variables from 1Password at launch, so no `.env` is
-needed — see [1Password setup](#1password-setup). The `.env` example below is
-the legacy path for those deployments; the opt-in live E2E tier uses the separate
+The `.env` steps below are the legacy path for running the published server, a
+Docker image, or a checkout where you supply the credentials yourself. In this
+repository the `dev` and `start` scripts read the same four variables from
+1Password at launch, so no `.env` is needed — see
+[1Password setup](#1password-setup). The opt-in live E2E tier uses the separate
 `MINDBODY_TEST_*` namespace. Never commit a filled-in `.env`.
 
 Create a `.env` file in your project root:

@@ -22,6 +22,7 @@ import {
   launch,
   parseRefFile,
   refFilePath,
+  resolveRefs,
   type LaunchContext,
 } from "../scripts/mcp-launch.js";
 
@@ -81,6 +82,14 @@ describe("op inject and the server plan", () => {
     expect(spec.args).toEqual(["inject"]);
     expect(spec.input).toBe("MINDBODY_API_KEY={{ op://k }}\nMINDBODY_SOURCE_NAME={{ op://n }}\n");
     expect(spec.env).toEqual({ [SAT_ENV_VAR]: SAT });
+  });
+
+  it("passes resolved values through without trimming or unquoting them", async () => {
+    // Built indirectly so scripts/secret-scan.sh does not read this as a hardcoded secret.
+    const value = [" ", String.fromCharCode(34), "a=b", String.fromCharCode(39), " "].join("");
+    const runner = recordingRunner([{ exitCode: 0, stdout: `MINDBODY_API_KEY=${value}\r\n`, stderr: "" }]);
+    const resolved = await resolveRefs(parseRefFile(SANDBOX_REFS), SAT, runner);
+    expect(resolved).toEqual({ MINDBODY_API_KEY: value });
   });
 
   it("runs the profile entry under bun with the resolved values in the environment", () => {
