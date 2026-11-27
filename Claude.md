@@ -105,6 +105,8 @@ bun run spec:coverage            # add -- --min <percent> to exit 1 below a floo
 
 `spec:coverage` reuses Gate 13's scanner (`tests/support/api-call-scanner.ts`) and maps each tool registered in `src/index.ts` to the spec paths it reaches. It is not part of `bun run check`. See [docs/quality-gates.md](docs/quality-gates.md).
 
+Local 1Password service account token (SAT) tooling lives in `scripts/op-sat.ts`, `scripts/mcp-launch.ts` (`launch:sandbox` / `launch:prod`) and `scripts/seed-platform-secrets.ts` (local admin only). Hosted production uses `start:platform` with plain injected `MINDBODY_*` variables and no `op`. See [docs/SECRETS.md](docs/SECRETS.md).
+
 ### Adding a New Tool
 
 1. **Create the tool file** in `src/tools/yourFeature.ts`:

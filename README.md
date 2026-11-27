@@ -54,11 +54,17 @@ The server runs on [Bun](https://bun.sh), which executes the TypeScript source d
 
 ### 2. Set Environment Variables
 
-These steps are for the published server, a Docker image, or a checkout where
-you supply the credentials yourself. In this repository the `dev` and `start`
-scripts read the same four variables from 1Password at launch, so no `.env` is
-needed — see [1Password setup](#1password-setup). Never commit a filled-in
-`.env`.
+For local MCP use, prefer the SAT launcher with file-based `op://` references;
+it needs no secret file. See [Secrets and local 1Password tooling](docs/SECRETS.md).
+Hosted production needs no secret file either: the platform injects plain
+variables.
+
+The `.env` steps below are the legacy path for running the published server, a
+Docker image, or a checkout where you supply the credentials yourself. In this
+repository the `dev` and `start` scripts read the same four variables from
+1Password at launch, so no `.env` is needed — see
+[1Password setup](#1password-setup). The opt-in live E2E tier uses the separate
+`MINDBODY_TEST_*` namespace. Never commit a filled-in `.env`.
 
 Create a `.env` file in your project root:
 
@@ -269,6 +275,8 @@ MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 3. Run the script as usual, for example `bun run dev`. `op run` resolves each reference and passes it to the server as an environment variable.
 
 `bun run dev:sandbox` (and `dev:sandbox:sse`) uses the same four variables, so point them at your sandbox item for that run. The script pins the site to `-99` and refuses to start if `MINDBODY_SITE_ID` names any other site, which is what happens when the production references are still in the shell. Production and sandbox use separate 1Password items, clearly named for the site they serve (for example `Mindbody Production` and `Mindbody Sandbox`). See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances.
+
+For a launcher that keeps the 1Password **service account token (SAT)** in the OS credential store and reads `op://` refs from a file, use `bun run launch:sandbox` / `bun run launch:prod`. Hosted deployments use `bun run start:platform` with plain injected `MINDBODY_*` variables — no `op` in production. Full setup, MCP client config and rotation: [docs/SECRETS.md](docs/SECRETS.md).
 
 ### Project Structure
 
