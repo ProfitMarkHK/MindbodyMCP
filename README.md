@@ -8,7 +8,7 @@ A comprehensive Model Context Protocol (MCP) server that provides AI assistants 
 
 ## ✨ Features
 
-- **50 Tools** covering every aspect of studio operations
+- **Tools for every aspect of studio operations**
 - **Complete Class Management** - View schedules, book clients, manage waitlists, substitute teachers
 - **Client Management** - Add/update clients, track visits, memberships, and balances
 - **Sales & Commerce** - Process payments, sell packages, memberships, and retail products
@@ -106,7 +106,7 @@ A server started this way has no terminal for an unlock prompt. [docs/SETUP.md](
 
 ## 🛠️ Available Tools
 
-The server provides 52 tools across 6 categories:
+The server provides the tools below, grouped by category:
 
 ### 📅 Class Management
 - `getClasses` - View all classes with filters

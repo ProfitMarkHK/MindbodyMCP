@@ -75,7 +75,7 @@ Mindbody API
 - `src/sseAuth.ts` - Bearer-token gate for the SSE transport (`MCP_AUTH_TOKEN`)
 - `src/httpServer.ts` - Stateless Streamable HTTP at `/mcp` plus `/health`, gated by a Cloudflare Access JWT
 
-**Tools Layer (`src/tools/` - 7 domains)**
+**Tools Layer (`src/tools/`)**
 - `classManagement.ts` - Class scheduling, bookings, waitlists, substitutions
 - `clientManagement.ts` - Client registration, visits, memberships, balances (barrel; split by aspect into `clientProfile.ts`, `clientAccount.ts`, `clientActivity.ts`)
 - `appointmentManagement.ts` - Appointments, availability, scheduling
@@ -355,7 +355,7 @@ probed without committing a real record is aligned to the spec and marked
 `// SPEC-ALIGNED BUT UNVERIFIED:` instead — a weaker claim, and never added to
 the deviations table.
 
-The full audit of all 46 call sites, with the evidence for every finding, is
+The full audit of every API call site, with the evidence for every finding, is
 [`docs/mindbody-spec-discrepancies.md`](docs/mindbody-spec-discrepancies.md).
 
 ## Adding a New Tool
@@ -371,6 +371,7 @@ The full audit of all 46 call sites, with the evidence for every finding, is
    - Add tool description to `README.md`
    - Add usage example to `Claude.md`
    - Add JSDoc comments to function
+6. **Update the tool list test:** add the tool's name to `EXPECTED_TOOL_NAMES` in `tests/e2e-mcp-server.test.ts`. That list is the one enforced record of which tools exist, so it is the only place a tool count belongs. Never write a tool count in prose (README, `Claude.md`, this file): it goes stale. Always update the list when you add, rename or remove a tool.
 
 Example structure:
 ```typescript

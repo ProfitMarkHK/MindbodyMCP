@@ -133,6 +133,8 @@ Local 1Password service account token (SAT) tooling lives in `scripts/op-sat.ts`
    - This file with usage examples
    - Add JSDoc comments
 
+5. **Update the tool list test**: add the tool's name to `EXPECTED_TOOL_NAMES` in `tests/e2e-mcp-server.test.ts`. That list is the one enforced record of which tools exist, so it is the only place a tool count belongs. Never write a tool count in prose (README, this file, AGENTS.md): it goes stale. Always update the list when you add, rename or remove a tool.
+
 See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 
 ## Architecture
@@ -162,7 +164,7 @@ See `CONTRIBUTING.md` for detailed style guidelines and PR process.
 - **Rate limit awareness**: Respects Mindbody's 2000 req/hour limit
 - **Multi-level caching**: Teacher ID → class data → HTTP responses
 
-## Available Tools (52 tools)
+## Available Tools
 
 ### 📅 Class Management
 
