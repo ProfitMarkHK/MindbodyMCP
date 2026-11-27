@@ -1166,25 +1166,32 @@ error. Verified on the sandbox (2026-10-26, site `-99`):
 | `GET /client/clients` with `Api-Key` + `SiteId` only | `200` — `Clients: []`, `TotalResults: 0` |
 | Same request plus `Authorization: Bearer <usertoken>` | `200` — 4,465 clients |
 
-So an empty client, visit or membership list from this server can mean one of
-two things: the site has no such records, **or** token acquisition failed and
-every call was silently downgraded to API-key-only auth. The degradation is
-endpoint-specific: it was verified on `GET /client/clients` (empty without a
-token, 4,465 rows with one), while `GET /client/clientcompleteinfo` returns
-full data with the API key alone (verified 2026-10-27). Treat "works without a
-token" as something to verify per endpoint, never to assume. The server logs
-one stderr line when the downgrade happens:
+So an empty client, visit or membership list **from the raw API** can mean one of
+two things: the site has no such records, **or** the request carried no staff
+usertoken. The degradation is endpoint-specific: it was verified on
+`GET /client/clients` (empty without a token, 4,465 rows with one), while
+`GET /client/clientcompleteinfo` returns full data with the API key alone
+(verified 2026-10-27). Treat "works without a token" as something to verify per
+endpoint, never to assume.
+
+**This server never relies on that distinction.** Every request builds its
+headers through `mindbodyAuth.getAuthHeaders()` ([`src/api/client.ts`](../src/api/client.ts)),
+which awaits `getUserToken()` and throws `MindbodyAuthError` when
+`POST /usertoken/issue` is refused or the source credentials are unset. That
+error is marked non-retryable, so no request is sent with the API key alone and
+the failure is loud:
 
 ```
-User token acquisition failed (<status>): <message>. Falling back to API-key-only auth.
+MindbodyAuthError: Mindbody user token request failed (<status>): <Mindbody message>
 ```
 
-If a query returns an empty collection unexpectedly, check the server log for
-that line before concluding the data is absent. The failure causes observed so
+Consequently an empty collection returned by a tool means the API answered an
+authenticated call — not that the token was missing. `tests/auth-fail-closed.test.ts`
+asserts this. If a tool call fails with the error above, the causes observed so
 far are `Unsupported IP Address …` (the sandbox API key allow-lists IPs; add
 the egress IP in the Mindbody developer portal) and `Staff user was not found
 for this site` (the source credentials are not a staff user of the site in the
-`SiteId` header).
+`SiteId` header). `scripts/mb-auth-check.ps1` / `.sh` re-probes this in one command.
 
 ## Error Codes
 

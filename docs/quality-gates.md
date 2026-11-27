@@ -634,7 +634,10 @@ and not needed" from "forgotten":
      every `*.sh` under `scripts/` must contain no
      `curl`, `wget`, `ncat`, `socat`, `telnet`, `fetch`, `axios`,
      `XMLHttpRequest`, `/dev/tcp/`, absolute `http(s)://` URL or `mindbodyonline`
-     on a non-comment line. The list is checked to be non-empty (the runner and the
+     on a non-comment line, with one exception: a line may name a client when it also
+     names a loopback literal (`127.0.0.1`, `localhost` or `[::1]`, with a port that may
+     be a variable), one literal per client. A URL held in a variable, or any other
+     host, is still refused. The list is checked to be non-empty (the runner and the
      live-tier launcher must be in it), so a moved directory
      cannot make it vacuous. A shell script that needs the network must be
      rewritten as a `.ts` file under `scripts/`, where it is scanned.

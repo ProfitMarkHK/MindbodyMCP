@@ -60,42 +60,21 @@ cd mindbody-mcp
 bun install
 ```
 
-## Step 3: Configure Environment
+## Step 3: Configure Credentials
 
-### Create Environment File
+### References, not values
 
-This step is for the published server or a checkout where you supply credentials
-yourself. If you are setting up this repository's own scripts, the credentials
-come from 1Password through `op run` — see the README's 1Password setup and
-Step 5b for the Claude Code instances — and no `.env` is needed.
-
-```bash
-# Copy the example file
-cp .env.example .env
-
-# Edit with your preferred editor
-# Windows: notepad .env
-# macOS/Linux: nano .env
-```
-
-### Required Environment Variables
-
-Edit `.env` with your Mindbody credentials:
+Credentials come from 1Password at launch: `op run` resolves each `op://` reference and passes the value to the server as an environment variable. An env file is optional, and one may hold references only — never a credential value. Set the four references in your shell, or keep them in a gitignored file such as `.env.op-refs` and launch through `op run --env-file .env.op-refs -- bun run src/index.ts`.
 
 ```env
-# Get these from Mindbody Partner Portal
-MINDBODY_API_KEY=your_actual_api_key_here
-MINDBODY_SITE_ID=-99  # Use -99 for sandbox, or your production site ID
-
-# Source credentials (create in Partner Portal)
-MINDBODY_SOURCE_NAME=YourSourceName
-MINDBODY_SOURCE_PASSWORD=YourSourcePassword
-
-# Optional settings
-MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
-CACHE_TTL_MINUTES=5
-RATE_LIMIT_BUFFER=100
+# Replace <vault>, <item> and the field names with your own
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 ```
+
+Store the four values in a 1Password item once, then use references everywhere. `.env.example` lists the optional, non-secret settings instead: `MINDBODY_API_URL`, `CACHE_TTL_MINUTES`, `RATE_LIMIT_BUFFER`, transport and DNS-rebinding options.
 
 ### Getting Mindbody Credentials
 
@@ -137,7 +116,7 @@ bun run test:tool
 
 | Error | Solution |
 |-------|----------|
-| "Missing required environment variable" | Check your `.env` file has all 4 required variables |
+| "Missing required environment variable" | Check that all 4 required variables are set, and that `op run` resolved the references rather than passing `op://` strings through |
 | "401 Unauthorized" | Verify your API credentials are correct |
 | "Teacher not found" | Normal for sandbox - try a different name or check your site |
 | "Connection refused" | Check internet connection and firewall settings |
@@ -169,13 +148,13 @@ Add the Mindbody MCP server to your configuration:
 {
   "mcpServers": {
     "mindbody": {
-      "command": "bun",
-      "args": ["run", "C:\\full\\path\\to\\mindbody-mcp\\src\\index.ts"],
+      "command": "op",
+      "args": ["run", "--", "bun", "run", "C:\\full\\path\\to\\mindbody-mcp\\src\\index.ts"],
       "env": {
-        "MINDBODY_API_KEY": "your_api_key",
-        "MINDBODY_SITE_ID": "-99",
-        "MINDBODY_SOURCE_NAME": "your_source_name",
-        "MINDBODY_SOURCE_PASSWORD": "your_source_password"
+        "MINDBODY_API_KEY": "op://<vault>/<item>/<api-key-field>",
+        "MINDBODY_SITE_ID": "op://<vault>/<item>/<site-id-field>",
+        "MINDBODY_SOURCE_NAME": "op://<vault>/<item>/<source-name-field>",
+        "MINDBODY_SOURCE_PASSWORD": "op://<vault>/<item>/<source-password-field>"
       }
     }
   }
@@ -185,7 +164,7 @@ Add the Mindbody MCP server to your configuration:
 **Important Notes:**
 - Use full absolute paths
 - On Windows, use double backslashes (`\\`)
-- Include all 4 required environment variables
+- Include all 4 references, never their values: `op run` resolves them at launch
 - Save the file with valid JSON
 
 ### Restart Claude Desktop
@@ -204,7 +183,7 @@ Requirements: `claude` on your PATH and Bun installed (Step 1). `bun run --cwd` 
 
 ### Sandbox instance (`mindbody-sandbox`)
 
-The sandbox instance pulls its API key and Source credentials from a 1Password item of its own, separate from production. Its item's `MINDBODY_SITE_ID` is `-99`. Mindbody does not issue per-environment keys, so the sandbox item may hold the same key as production. `scripts/dev-sandbox.ts` pins site `-99` and refuses an incoming `MINDBODY_SITE_ID` that names any other site, so this instance cannot reach a live site and production references left in the shell are reported rather than silently ignored. No `.env` file is read.
+The sandbox instance pulls its API key and Source credentials from a 1Password item of its own, separate from production. Its item's `MINDBODY_SITE_ID` is `-99`. Mindbody does not issue per-environment keys, so the sandbox item may hold the same key as production. `scripts/dev-sandbox.ts` always uses site `-99` and refuses an incoming `MINDBODY_SITE_ID` that names any other site, so this instance cannot reach a live site. It needs no env file: the references are resolved from the shell.
 
 ```bash
 claude mcp add mindbody-sandbox --scope user -e MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field> -e MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field> -e MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field> -- op run -- bun run --cwd E:/MindbodyMCP scripts/dev-sandbox.ts
@@ -214,7 +193,7 @@ Replace `E:/MindbodyMCP` with your clone's path. Point the references at your sa
 
 ### Production instance (`mindbody-prod`)
 
-The production instance pulls its four required values from 1Password at launch, the same way `bun run dev` does. No production secret is stored in the repo, in an env file, or in the Claude config. The Claude config holds only `op://` references, which name a 1Password item and field but not its value. No `.env` file is needed.
+The production instance pulls its four required values from 1Password at launch, the same way `bun run dev` does. No production secret is stored in the repo, in an env file, or in the Claude config. The Claude config holds only `op://` references, which name a 1Password item and field but not its value. An env file is optional, and one may hold `op://` references only — never a value. The Claude Desktop variant below uses one.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration (see [1Password setup](../README.md#1password-setup)).
 2. Register the instance, replacing `<vault>`, `<item>` and the field names with your item's references (`op item get <item> --format json` lists its field IDs and labels):

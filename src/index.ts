@@ -139,7 +139,7 @@ const requiredEnvVars = [
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     console.error(`Missing required environment variable: ${envVar}`);
-    console.error('Set it in the environment, or see .env.example for the standalone template');
+    console.error('Set them in the environment as 1Password references and launch through op run; see README, 1Password setup');
     process.exit(1);
   }
 }

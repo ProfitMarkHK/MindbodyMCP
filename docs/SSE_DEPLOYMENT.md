@@ -159,7 +159,8 @@ sudo systemctl reload nginx
 # Create namespace and deploy
 kubectl apply -f deploy/k8s-deployment.yaml
 
-# Update secrets with your credentials, including MCP_AUTH_TOKEN
+# Fill the secret with real values and MCP_AUTH_TOKEN. It is a cluster Secret,
+# not a file in this repository, and it holds values by design.
 kubectl edit secret mindbody-mcp-secrets -n mindbody-mcp
 
 # Check deployment
@@ -174,13 +175,15 @@ kubectl logs -f deployment/mindbody-mcp-sse -n mindbody-mcp
 ### 4. Docker Compose
 
 ```bash
-# Create .env file with your credentials and MCP_AUTH_TOKEN
+# Copy the template, then replace the four credential placeholders with op://
+# references — never values, and MCP_AUTH_TOKEN included.
 # (docker-compose refuses to start the service without MCP_AUTH_TOKEN)
 cp .env.example .env
 nano .env
 
-# Start services
-docker-compose up -d
+# Start services. op resolves the references into compose's environment, which
+# takes precedence over the file's own interpolation.
+op run --env-file .env -- docker-compose up -d
 
 # View logs
 docker-compose logs -f

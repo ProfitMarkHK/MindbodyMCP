@@ -42,7 +42,8 @@
  * checks).
  *
  * Code outside the TypeScript roots cannot be parsed: rule 6 holds shell scripts
- * under scripts/ to "no network client or absolute URL on a non-comment line".
+ * under scripts/ to "no network client or absolute URL on a non-comment line", except that a
+ * line may name a client when it names a loopback literal on that same line (see `offends`).
  *
  * Every rule is its own test, and its failure message lists every offender as
  * `file:line → path`. The suite prints `GATE13_PAGINATION_RESULT sites=N
@@ -113,6 +114,23 @@ function listUnparsedCode(root: string): string[] {
 
 /** A network client or an absolute URL on any non-comment line. A comment cannot run, so full-line comments are skipped. */
 const NETWORK_CLIENT = /\b(?:curl|wget|ncat|socat|telnet|fetch|axios|XMLHttpRequest)\b|\/dev\/tcp\/|https?:\/\/|mindbodyonline/i;
+const CLIENT_TOKEN = /\b(?:curl|wget|ncat|socat|telnet|fetch|axios|XMLHttpRequest)\b/gi;
+const ABSOLUTE_URL = /https?:\/\/[^\s"'`)]*/gi;
+/** A loopback host literal: this machine's own service. The port may be a variable; the host may not. */
+const LOOPBACK_URL = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::(?:\d+|\$\{?\w+\}?))?(?:\/|$)/i;
+
+/**
+ * Whether a live line is a refused network reference. Mindbody, /dev/tcp and any absolute URL that
+ * is not a loopback literal are refused. A line may name a client only with one loopback literal per
+ * client on that same line, so a client whose target is a variable is refused.
+ */
+function offends(text: string): boolean {
+  if (!NETWORK_CLIENT.test(text)) return false;
+  if (/mindbodyonline|\/dev\/tcp\//i.test(text)) return true;
+  const urls = text.match(ABSOLUTE_URL) ?? [];
+  if (urls.some((u) => !LOOPBACK_URL.test(u))) return true;
+  return (text.match(CLIENT_TOKEN) ?? []).length > urls.length;
+}
 
 function networkOffenders(files: string[]): string[] {
   const out: string[] = [];
@@ -120,7 +138,7 @@ function networkOffenders(files: string[]): string[] {
     readFileSync(file, "utf-8")
       .split("\n")
       .forEach((text, i) => {
-        if (/^\s*(?:#|\/\/|\/?\*)/.test(text) || !NETWORK_CLIENT.test(text)) return;
+        if (/^\s*(?:#|\/\/|\/?\*)/.test(text) || !offends(text)) return;
         out.push(`${relPosix(ROOT, file)}:${i + 1} → ${text.trim()}`);
       });
   }
@@ -326,6 +344,34 @@ describe("Gate 13 — scanner self-test", () => {
     try {
       expect(networkOffenders([quiet])).toEqual([]);
       expect(networkOffenders([loud]).map((o) => o.replace(/^.*loud\.sh/, "loud.sh").split(" → ")[0])).toEqual(["loud.sh:2"]);
+    } finally {
+      require("fs").rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rule 6 detector: allows a loopback literal named on the same line, refuses everything else", () => {
+    const dir = require("fs").mkdtempSync(join(require("os").tmpdir(), "gate13-loop-"));
+    const allowed = join(dir, "allowed.sh");
+    const refused = join(dir, "refused.sh");
+    require("fs").writeFileSync(allowed, [
+      'HEALTH_URL="http://127.0.0.1:$PORT/health"',
+      'curl -fsS --max-time 2 "http://127.0.0.1:8080/health" >/dev/null',
+      'curl -fsS "http://localhost:8080/health"',
+      'curl -fsS "http://[::1]:8080/health"',
+      "",
+    ].join("\n"));
+    require("fs").writeFileSync(refused, [
+      'curl -fsS "$HEALTH_URL"', // a URL held in a variable cannot be checked on its line
+      'curl -fsS "http://127.0.0.1.evil.test/"', // not the loopback host
+      'curl -fsS "http://127.0.0.1@evil.test/"', // user-info, not the loopback host
+      'curl -fsS "http://127.0.0.1:8080/x" "https://api.mindbodyonline.com/x"', // a second target
+      'curl -fsS "http://127.0.0.1:8080/x"; curl -fsS "$URL"', // two clients, one literal
+      "for tool in op bun curl; do", // a client named with no target
+      "",
+    ].join("\n"));
+    try {
+      expect(networkOffenders([allowed])).toEqual([]);
+      expect(networkOffenders([refused]).map((o) => Number(o.match(/refused\.sh:(\d+)/)![1]))).toEqual([1, 2, 3, 4, 5, 6]);
     } finally {
       require("fs").rmSync(dir, { recursive: true, force: true });
     }

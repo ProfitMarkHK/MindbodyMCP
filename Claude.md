@@ -764,11 +764,13 @@ The live tier ([`tests/live/README.md`](tests/live/README.md)) runs this lifecyc
 ## Configuration
 
 ### Required Environment Variables
+
+Set them as 1Password references — in the shell, or in a gitignored references file passed to `op run --env-file` — never as values:
 ```
-MINDBODY_API_KEY=your_api_key
-MINDBODY_SITE_ID=your_site_id
-MINDBODY_SOURCE_NAME=your_source_name
-MINDBODY_SOURCE_PASSWORD=your_source_password
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 ```
 
 ### Optional Settings
@@ -846,18 +848,15 @@ Mindbody takes and returns every date and time as the site's local time with no 
 ## Configuration for Development
 
 ### Environment Setup
-In this repository, `bun run dev` (and the other `dev*`/`start*` scripts)
-resolves these from 1Password through `op run`, so no `.env` is needed; see the
-README's 1Password setup. For the published server, or a checkout that supplies
-credentials itself, `.env.example` is the template. Sandbox values:
-
+Use 1Password references, never values — in your shell, or in a gitignored references file passed to `op run --env-file`:
 ```bash
-MINDBODY_API_KEY=your_key
-MINDBODY_SITE_ID=-99
-MINDBODY_SOURCE_NAME=your_source
-MINDBODY_SOURCE_PASSWORD=your_password
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
 ```
+An env file is optional and may hold references only. Launch through `op run --` so each reference is resolved before the server starts; read directly, the server would receive the literal `op://` string.
 
 ### Running Locally with Claude Desktop
 Update `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -865,19 +864,21 @@ Update `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "mindbody": {
-      "command": "bun",
-      "args": ["run", "dev"],
+      "command": "op",
+      "args": ["run", "--", "bun", "run", "dev"],
       "cwd": "/path/to/MindbodyMCP",
       "env": {
-        "MINDBODY_API_KEY": "...",
-        "MINDBODY_SITE_ID": "-99",
-        "MINDBODY_SOURCE_NAME": "...",
-        "MINDBODY_SOURCE_PASSWORD": "..."
+        "MINDBODY_API_KEY": "op://<vault>/<item>/<api-key-field>",
+        "MINDBODY_SITE_ID": "op://<vault>/<item>/<site-id-field>",
+        "MINDBODY_SOURCE_NAME": "op://<vault>/<item>/<source-name-field>",
+        "MINDBODY_SOURCE_PASSWORD": "op://<vault>/<item>/<source-password-field>"
       }
     }
   }
 }
 ```
+
+The `env` block holds references, not values; `op run` resolves them at launch.
 
 ## Debugging
 

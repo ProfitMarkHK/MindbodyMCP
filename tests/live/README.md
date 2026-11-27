@@ -87,27 +87,9 @@ All credentials are read from a **separate namespace**, never from `MINDBODY_*`:
 
 ### Why a separate namespace
 
-Two layers keep this tier away from production credentials.
+The repo's own `.env` is sandbox-only, and `bunfig.toml` sets `dotenv = true`, so whatever it holds has already been loaded into `process.env` by the time any test runs. If this tier inherited a live credential from an env file or from the shell, it would create clients and appointments inside somebody's live account on the first run anyone made. A separate namespace makes that impossible rather than merely unlikely.
 
-The first is the namespace. `live-config.ts` reads only `MINDBODY_TEST_*`, so an
-environment that already exports the operator's `MINDBODY_*` values — a shell,
-or a consumer checkout whose `.env` `bunfig.toml`'s `dotenv = true` has loaded —
-cannot supply this tier. That is a human-facing guard: it turns "the live tier
-is about to run against the wrong site" into a visible misconfiguration instead
-of a silent one.
-
-The second is mechanical, and it does not depend on the absence of a file.
-`buildLiveChildEnv` constructs the spawned server's environment from the
-resolved `MINDBODY_TEST_*` values rather than spreading `process.env`, and the
-server's cwd is an empty scratch directory, so neither an exported variable nor
-a `.env` reaches it. In this repository there is normally no `.env` at all: the
-dev and start scripts resolve credentials from 1Password through `op run`.
-
-Put the live credentials in your shell environment or the wrapper's saved file
-under `~/.config`; do not add them to any repo `.env`. `.env.example` documents
-only the server's `MINDBODY_*` names, for people running the published package;
-the live tier's namespace is documented here and by
-`scripts/live-e2e.sh --help`, and is deliberately absent from that template.
+Keep the live credentials in your shell environment or in the references file `op run --env-file` resolves for the run. `scripts/live-e2e.sh --save` may persist them to `~/.config/mindbody-live-e2e.env` instead — outside the repository, readable only by you, and it refuses a path inside the repo. `.env.example` lists the names as **commented-out, empty** entries for that reason, and never a value.
 
 ### Required Mindbody parameters are discovered, never hardcoded
 
@@ -273,7 +255,11 @@ cancel path, and the only one the cleanup uses.
 Purchasability is not readable. `getContracts` lists 11 contracts at location 1 and the API refuses 9 of them there ("Contract <id> cannot be purchased at location 1"), with no field on the contract saying which. The test therefore walks the discovered list and keeps the first the API accepts; a refusal writes nothing, so the attempts before it are free. Because the committed contract cannot be deleted, it is reported in the LEFTOVERS banner.
 
 Both Mindbody endpoints accept `Test: true`, which validates without committing.
-The MCP server exposes neither. So through this server every checkout commits:
+The MCP server exposes it on `checkoutShoppingCart` (default `false`) but not on
+`purchaseContract`. The checkout tests below omit it on purpose so their sales
+commit; the separate `checkoutShoppingCart test: true records no sale and checks
+payments` test sends it and leaves nothing. The purchase below therefore always
+commits through this server:
 
 - `checkoutShoppingCart` creates a Sale with tax lines and a payment
   transaction. `returnsale` can reverse it but is not exposed either, and a
@@ -354,7 +340,8 @@ Learned from authenticated runs against `-99` on 2026-10-17. Each one shapes
 the suite; none is hardcoded as an id.
 
 - **Authentication works.** `POST /usertoken/issue` answers HTTP 200 and issues
-  a token; the server attaches it (no "Falling back" line on stderr). The auth
+  a token, and the server fails the call rather than falling back to the API key
+  (`tests/auth-fail-closed.test.ts`). The auth
   test probes `getClientVisits` with a never-created client id and accepts only
   `ClientNotFound`, which can only come from an authenticated request.
 - **`addClient` requires a birth date** on this site: without one it answers
@@ -469,6 +456,17 @@ The tallies below this point are from the 2026-10-28 run (29 tests), kept for th
 - **`getClientSchedule` passed (2026-11-16).** Client 100015484 read back 1 booking (an appointment) over the past year, and 0 in the default window.
 - **`cancelClientBooking` with `observeBalance` passed (2026-11-16, #26 branch).** A second unpaid booking of class 18223 was normal-cancelled. With `observeBalance: true` the impact reads landed and were timestamped. The result was `observed: false` ("the visit carries no ServiceId"), because an unpaid booking has no paying service, and the balance delta was 0. The `observed: true` path (a pass's `Remaining` before and after) is covered by unit tests only: proving it live would consume a paid session.
 - **The sandbox refused every user token on 2026-11-15** (`403 StaffMemberNotFound`, "Staff user was not found for this site"), which failed every authenticated live test. Restored by 2026-11-16.
+- **The sandbox refused user tokens again on 2026-11-24** (`403 DeniedAccess`,
+  "Staff identity authentication failed" on `POST /usertoken/issue`), while
+  `GET /site/sites` answered 200 with the same API key and SiteId. Same shape as
+  the 2026-11-15 refusal: the key and site are valid and the layer below them is
+  rejected, so the live tier is unauthenticated until Mindbody restores the
+  source credentials. Reported to Mindbody; no local change. Diagnose with
+  `scripts/mb-auth-check.ps1`, and never work around it by dropping the token —
+  API-key-only reads answer with a different data set (see `tests/auth-fail-closed.test.ts`).
+  **Restored on 2026-11-26** with freshly provisioned sandbox credentials (source
+  name and password rotated, API key unchanged): all four probe layers answered
+  green, and `GET /client/clients` listed 4,467 clients again.
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.

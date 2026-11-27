@@ -59,35 +59,18 @@ it needs no secret file. See [Secrets and local 1Password tooling](docs/SECRETS.
 Hosted production needs no secret file either: the platform injects plain
 variables.
 
-The `.env` steps below are the legacy path for running the published server, a
-Docker image, or a checkout where you supply the credentials yourself. In this
-repository the `dev` and `start` scripts read the same four variables from
-1Password at launch, so no `.env` is needed — see
-[1Password setup](#1password-setup). The opt-in live E2E tier uses the separate
-`MINDBODY_TEST_*` namespace. Never commit a filled-in `.env`.
-
-Create a `.env` file in your project root:
+Point the four `MINDBODY_*` variables at your 1Password item as `op://` references — in your shell (see [1Password setup](#1password-setup)) or in a gitignored references file such as `.env.op-refs`:
 
 ```bash
-# Copy the example file
-cp .env.example .env
-
-# Edit with your credentials
-MINDBODY_API_KEY=your_api_key_here
-MINDBODY_SITE_ID=-99  # Your site ID
-MINDBODY_SOURCE_NAME=your_source_name
-MINDBODY_SOURCE_PASSWORD=your_source_password
-
-# Optional settings
-MINDBODY_API_URL=https://api.mindbodyonline.com/public/v6
-# MINDBODY_SITE_TIMEZONE=America/Los_Angeles  # Fallback only; normally read from the API
-# MINDBODY_PRICING_MAP_DIR=/path/outside/repo  # Holds pricing.<siteId>.json (staff titles, session-type services). Unset disables the checkout resolver
-# MINDBODY_LATE_CANCEL_WINDOW_HOURS=24  # lateCancel is refused unless this is set; then only within N hours of the start
-# MINDBODY_LATE_CANCEL_WINDOW_RULES='[{"serviceId":10,"hours":2},{"programId":3,"hours":24}]'  # Optional per-service windows, first match wins, falling back to the default
-CACHE_TTL_MINUTES=5
-MCP_SERVER_NAME=mindbody-mcp
-MCP_SERVER_VERSION=2.0.0
+MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
+MINDBODY_SITE_ID=op://<vault>/<item>/<site-id-field>
+MINDBODY_SOURCE_NAME=op://<vault>/<item>/<source-name-field>
+MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 ```
+
+Those are references, not values. A real credential belongs in no file in this project: not an env file, a compose file or a client config. If you keep a references file, it stays out of version control and is only meaningful in front of `op run --env-file <file>`.
+
+Everything the server reads beyond the four credentials is optional and non-secret, and [`.env.example`](.env.example) lists it — dates and timezone behaviour, cache TTL, transport, DNS-rebinding protection and the Cloudflare Access variables. Do not copy that template into `.env` and fill it with credentials.
 
 ### Dates and timezones
 
@@ -104,37 +87,22 @@ Add to your Claude Desktop configuration:
 {
   "mcpServers": {
     "mindbody": {
-      "command": "bunx",
-      "args": ["github:ProfitMarkHK/MindbodyMCP"],
+      "command": "op",
+      "args": ["run", "--", "bunx", "github:ProfitMarkHK/MindbodyMCP"],
       "env": {
-        "MINDBODY_API_KEY": "your_api_key",
-        "MINDBODY_SITE_ID": "-99",
-        "MINDBODY_SOURCE_NAME": "your_source_name",
-        "MINDBODY_SOURCE_PASSWORD": "your_source_password"
+        "MINDBODY_API_KEY": "op://<vault>/<item>/<api-key-field>",
+        "MINDBODY_SITE_ID": "op://<vault>/<item>/<site-id-field>",
+        "MINDBODY_SOURCE_NAME": "op://<vault>/<item>/<source-name-field>",
+        "MINDBODY_SOURCE_PASSWORD": "op://<vault>/<item>/<source-password-field>"
       }
     }
   }
 }
 ```
 
-Or run a local clone:
+The `env` block holds references, not values: `op run` resolves each one at launch, and without it the server would receive the literal `op://` string. Replace `<vault>`, `<item>` and the field names with your own; see [1Password setup](#1password-setup). For a local clone, replace `"bunx", "github:ProfitMarkHK/MindbodyMCP"` with `"bun", "run", "/path/to/MindbodyMCP/src/index.ts"`.
 
-```json
-{
-  "mcpServers": {
-    "mindbody": {
-      "command": "bunx",
-      "args": ["github:ProfitMarkHK/MindbodyMCP"],
-      "env": {
-        "MINDBODY_API_KEY": "your_api_key",
-        "MINDBODY_SITE_ID": "-99",
-        "MINDBODY_SOURCE_NAME": "your_source_name",
-        "MINDBODY_SOURCE_PASSWORD": "your_source_password"
-      }
-    }
-  }
-}
-```
+A server started this way has no terminal for an unlock prompt. [docs/SETUP.md](docs/SETUP.md) Step 5b covers the service-account variant that launches without one.
 
 ## 🛠️ Available Tools
 
@@ -260,10 +228,10 @@ node dist/index.js        # add --transport sse|http for the hosted transports
 
 ### 1Password setup
 
-The `dev`, `dev:sse`, `dev:http`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret or env file is stored in this repository. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
+The `dev`, `dev:sse`, `dev:http`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` server scripts launch through the 1Password CLI. They read the Mindbody credentials from 1Password at launch, so no secret is stored in this repository and no env file is required. If you keep one, it may hold `op://` references only. **These scripts use production credentials.** The build, test and lint scripts don't read credentials.
 
 1. Install the 1Password CLI (`op`) and turn on its desktop app integration.
-2. Set four environment variables in your shell to references to your item's fields, not the values. Use your own vault and item:
+2. Set four environment variables to references to your item's fields, not the values — in your shell, or in a gitignored references file passed to `op run --env-file`. Use your own vault and item:
 
 ```bash
 MINDBODY_API_KEY=op://<vault>/<item>/<api-key-field>
@@ -274,7 +242,7 @@ MINDBODY_SOURCE_PASSWORD=op://<vault>/<item>/<source-password-field>
 
 3. Run the script as usual, for example `bun run dev`. `op run` resolves each reference and passes it to the server as an environment variable.
 
-`bun run dev:sandbox` (and `dev:sandbox:sse`) uses the same four variables, so point them at your sandbox item for that run. The script pins the site to `-99` and refuses to start if `MINDBODY_SITE_ID` names any other site, which is what happens when the production references are still in the shell. Production and sandbox use separate 1Password items, clearly named for the site they serve (for example `Mindbody Production` and `Mindbody Sandbox`). See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances.
+`bun run dev:sandbox` (and `dev:sandbox:sse`) uses the same four variables, so point them at your sandbox item for that run. The script always pins the site to the sandbox (`-99`) and refuses an incoming `MINDBODY_SITE_ID` that names any other site. Production and sandbox use separate 1Password items, so don't leave the production references in the shell when you run the sandbox scripts. See [docs/SETUP.md](docs/SETUP.md) Step 5b for the Claude Code instances, and [Local sidecar](AGENTS.md#local-sidecar-dev-only) for the two-profile HTTP sidecar.
 
 For a launcher that keeps the 1Password **service account token (SAT)** in the OS credential store and reads `op://` refs from a file, use `bun run launch:sandbox` / `bun run launch:prod`. Hosted deployments use `bun run start:platform` with plain injected `MINDBODY_*` variables — no `op` in production. Full setup, MCP client config and rotation: [docs/SECRETS.md](docs/SECRETS.md).
 
