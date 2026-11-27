@@ -21,8 +21,8 @@
 #
 # Gates 4, 5, 9, 10, 11 and 12 are NOT run here. Gates 4, 5, 9, 10 and 11
 # need human judgement. Gate 3's complexity budget (3b) is a gap.
-# Gate 12 is green but deliberately not yet wired in; it is documented in
-# docs/quality-gates.md rather than run here. Gate 8 is wired, but only its
+# Gate 12 is retired (no vendored skills left to validate); see
+# docs/quality-gates.md. Gate 8 is wired, but only its
 # offline half: `npm audit --audit-level=moderate` needs the registry, so it is
 # left to CI; the secret scan — the fail-closed half, and the half that can
 # actually block a commit — runs here on every invocation.
