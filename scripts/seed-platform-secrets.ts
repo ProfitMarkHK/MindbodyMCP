@@ -6,30 +6,16 @@
  * or Azure Key Vault.
  *
  * This script reads op:// pointers from the same ref files as mcp-launch.ts,
- * resolves them with `op read` using the SAT from the OS store, and writes each
- * variable to the chosen platform. It prints variable NAMES only.
+ * resolves them with the launcher's `op inject` using the SAT from the OS store,
+ * and writes each variable to the chosen platform. It prints variable NAMES only.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  SAT_ENV_VAR,
-  defaultSatContext,
-  readSat,
-  type CommandSpec,
-  type Profile,
-  type SatContext,
-} from "./op-sat.js";
-import { REF_FILE_ENV, parseRefFile, refFilePath } from "./mcp-launch.js";
+import { defaultSatContext, readSat, type CommandSpec, type Profile, type SatContext } from "./op-sat.js";
+import { parseRefFile, refFilePath, resolveRefs } from "./mcp-launch.js";
 
 export type PlatformTarget = "railway" | "azure";
-
-export const PLATFORM_KEYS = [
-  "MINDBODY_API_KEY",
-  "MINDBODY_SITE_ID",
-  "MINDBODY_SOURCE_NAME",
-  "MINDBODY_SOURCE_PASSWORD",
-] as const;
 
 /** Sandbox ref files omit the site id: scripts/dev-sandbox.ts pins it locally. */
 export const SANDBOX_SITE_ID = "-99";
@@ -43,24 +29,14 @@ export function defaultSeedContext(): SeedContext {
   return { ...defaultSatContext(), env: process.env, tempRoot: tmpdir() };
 }
 
-/** Map a platform environment name to a 1Password profile; explicit override wins. */
-export function profileForEnvironment(environment: string, env: NodeJS.ProcessEnv = process.env): Profile {
-  const explicit = env.MINDBODY_OP_PROFILE;
-  if (explicit === "prod" || explicit === "sandbox") return explicit;
+/** Map a platform environment name to a 1Password profile. */
+export function profileForEnvironment(environment: string): Profile {
   if (environment === "prod" || environment === "production") return "prod";
   if (environment === "sandbox") return "sandbox";
-  throw new Error(`Cannot map environment ${environment} to a 1Password profile; set MINDBODY_OP_PROFILE`);
+  throw new Error(`Cannot map environment ${environment} to a 1Password profile; expected prod, production or sandbox`);
 }
 
 /** Pure builders: the secret value is only ever `input`, never an argument. */
-export function buildOpReadCommand(ref: string, sat: string): CommandSpec {
-  return {
-    command: "op",
-    args: ["read", "--no-newline", ref],
-    env: { [SAT_ENV_VAR]: sat },
-  };
-}
-
 export function buildRailwaySetCommand(key: string, service: string, environment: string, value: string): CommandSpec {
   return {
     command: "railway",
@@ -81,31 +57,6 @@ export function azureSecretName(key: string, environment: string, prefix?: strin
   return `${base}-${key.toLowerCase().replace(/_/g, "-")}`;
 }
 
-/** Pure value source: op:// refs resolve through `op read`; no value is logged. */
-export async function resolveValues(
-  profile: Profile,
-  refs: Record<string, string>,
-  sat: string,
-  runner: SatContext["runner"]
-): Promise<Array<[string, string]>> {
-  const resolved: Array<[string, string]> = [];
-  for (const key of PLATFORM_KEYS) {
-    const ref = refs[key];
-    if (ref && ref.startsWith("op://")) {
-      const result = await runner.run(buildOpReadCommand(ref, sat));
-      if (result.exitCode !== 0 || !result.stdout.trim()) {
-        throw new Error(`Unable to resolve the 1Password reference for ${key}`);
-      }
-      resolved.push([key, result.stdout.trim()]);
-    } else if (key === "MINDBODY_SITE_ID" && profile === "sandbox" && !ref) {
-      resolved.push([key, SANDBOX_SITE_ID]);
-    } else {
-      throw new Error(`Reference file is missing an op:// reference for ${key}`);
-    }
-  }
-  return resolved;
-}
-
 export async function seed(
   platformArg: string,
   environment: string,
@@ -114,7 +65,7 @@ export async function seed(
   if (platformArg !== "railway" && platformArg !== "azure") {
     throw new Error(`Unknown platform: ${platformArg}; expected railway or azure`);
   }
-  const profile = profileForEnvironment(environment, ctx.env);
+  const profile = profileForEnvironment(environment);
   const service = ctx.env.RAILWAY_SERVICE;
   const vault = ctx.env.AZURE_KEYVAULT;
   if (platformArg === "railway" && !service) {
@@ -124,13 +75,11 @@ export async function seed(
     throw new Error("AZURE_KEYVAULT is required to seed Azure Key Vault secrets");
   }
 
-  const refFile = ctx.env[REF_FILE_ENV] || refFilePath(profile, ctx.env, ctx.home);
-  if (!existsSync(refFile)) {
-    throw new Error(`Missing 1Password reference file for ${profile}: ${refFile}`);
-  }
-  const refs = parseRefFile(readFileSync(refFile, "utf8"));
-  const sat = await readSat(profile, ctx);
-  const values = await resolveValues(profile, refs, sat, ctx.runner);
+  const refs = parseRefFile(readFileSync(refFilePath(profile, ctx.env, ctx.home), "utf8"));
+  const values = Object.entries({
+    ...(profile === "sandbox" && { MINDBODY_SITE_ID: SANDBOX_SITE_ID }),
+    ...(await resolveRefs(refs, await readSat(profile, ctx), ctx.runner)),
+  });
 
   const tempDir = platformArg === "azure" ? mkdtempSync(join(ctx.tempRoot, "mindbody-seed-")) : undefined;
   try {

@@ -7,8 +7,8 @@ There are two different secrets in play, and they must not be confused:
   variable for the server.
 - The **Mindbody credentials** (`MINDBODY_API_KEY`, `MINDBODY_SITE_ID`,
   `MINDBODY_SOURCE_NAME`, `MINDBODY_SOURCE_PASSWORD`) live in 1Password items.
-  They are passed to the server by `op run`, which resolves `op://` pointers from
-  a ref file at launch.
+  The launcher resolves the `op://` pointers in a ref file with `op inject` at
+  launch and passes the values to the server as environment variables.
 
 The SAT stays in the operating system's credential store. The ref files contain
 only pointers, never values, and are safe to back up. These scripts are
@@ -22,22 +22,17 @@ Store the SAT in the OS credential store for one profile at a time:
 bun run scripts/op-sat.ts install sandbox   # or: prod
 ```
 
-- **macOS: run the install command in an interactive terminal; piping a SAT is
-  rejected.** `security -w` prompts on the terminal; the child process inherits
-  stdio so the prompt reaches the real tty. Piped stdin is not used because
-  `security -w` does not read a piped SAT, and a closed pipe can silently store an
-  empty password. The `-w` flag is last and has no argument, so the SAT never
+- **macOS: run the install command in an interactive terminal.** `security -w`
+  prompts on the terminal; the child process inherits stdio so the prompt reaches
+  the real tty. The `-w` flag is last and has no argument, so the SAT never
   appears in argv or process listings.
-- **Windows and Linux: the SAT MUST be piped; a TTY install is rejected.** Pipe
-  the output of your one-time `op service-account create` command straight into
-  the installer. There is no interactive prompt on these platforms, so running
-  the install command in a terminal without a pipe fails before any store
-  command runs.
+- **Windows and Linux: pipe the SAT in.** Pipe the output of your one-time
+  `op service-account create` command straight into the installer. There is no
+  interactive prompt on these platforms.
 - On Linux, `secret-tool store --label ... service mindbody-op-sat account <profile>`
-  is used when `secret-tool` is installed **and** `DBUS_SESSION_BUS_ADDRESS` is
-  set. Otherwise the script falls back to a mode-600 file at
-  `~/.config/mindbody-op-sat/<profile>` in a mode-0700 directory. The fallback
-  still requires a piped SAT; there is no interactive prompt.
+  is used, so `secret-tool` (libsecret) and a D-Bus session are required.
+- Nothing checks the token at install time. A wrong or empty token is stored as
+  given, and the first launch or `doctor` run fails at `op`.
 - On Windows, the token is written from stdin to
   `%LOCALAPPDATA%\mindbody-op-sat\<profile>.bin`, protected with DPAPI
   (`DataProtectionScope.CurrentUser`) and given a restrictive ACL where `icacls`
@@ -50,9 +45,9 @@ bun run scripts/op-sat.ts install sandbox   # or: prod
 bun run scripts/op-sat.ts read sandbox
 ```
 
-`doctor` prints statuses only — `sat_shape`, `op_whoami_service_account`,
-`op_vault_exact` — and never prints a value. It checks that the SAT has the
-`ops_` shape, that `op whoami` reports `SERVICE_ACCOUNT`, and that
+`doctor` prints statuses only — `sat_readable`, `op_whoami_service_account`,
+`op_vault_exact` — and never prints a value. It checks that the SAT can be read
+from the OS store, that `op whoami` reports `SERVICE_ACCOUNT`, and that
 `op vault list --format=json` shows exactly the expected vault:
 
 ```bash
@@ -89,9 +84,22 @@ override the default path if you keep ref files elsewhere.
 
 ## MCP client configuration
 
-The launcher reads the SAT, puts it in the child process environment only, checks
-the ref file, then runs `op run --env-file=<path> -- bun run <entry>` with
-inherited stdio. No credential is printed.
+The launcher reads the ref file and the SAT, and runs one `op inject` with
+the SAT in that process's environment only. The template goes in on stdin, one
+`KEY={{ op://... }}` line per reference, and the resolved lines come back on
+stdout. `op inject` exits before the server starts. The launcher then runs
+`bun run <entry>` itself, with inherited stdio and the resolved `MINDBODY_*`
+values in its environment. The server is never a child of `op`, so it never
+receives the SAT. An `OP_SERVICE_ACCOUNT_TOKEN` inherited from the MCP host is
+removed from the server's environment too. No credential is printed.
+
+`op run` is deliberately not used here: it passes its whole environment,
+including the SAT it needs, to the command it runs, and it has no option to
+withhold one variable.
+
+Values are not validated. A missing or empty variable is refused by the server
+at startup. A wrong value, including one mangled by a newline, surrounding
+quotes or spaces, fails at Mindbody login.
 
 Claude Desktop (`claude_desktop_config.json`):
 
@@ -149,8 +157,9 @@ MCP_TRANSPORT=http MCP_PORT=3000 bun run start:platform
 transport and port through your platform's variable UI.
 
 `scripts/seed-platform-secrets.ts` is a **local admin/rotation tool only**; it
-is never part of the runtime image. It resolves the four `MINDBODY_*` pointers
-with `op read --no-newline <ref>` using the SAT and prints variable names only:
+is never part of the runtime image. It resolves the `MINDBODY_*` pointers with
+the launcher's `op inject` using the SAT and prints variable names only. For
+`sandbox`, `MINDBODY_SITE_ID` defaults to the pinned `-99`:
 
 ```bash
 RAILWAY_SERVICE=mindbody-mcp bun run scripts/seed-platform-secrets.ts railway prod
@@ -165,8 +174,7 @@ AZURE_KEYVAULT=my-vault bun run scripts/seed-platform-secrets.ts azure productio
   `AZURE_KEYVAULT` is required; secret names default to `<environment>-<key-name>`
   and can be prefixed with `AZURE_SECRET_PREFIX`.
 - The CLI environment name selects the ref-file profile: `prod`/`production` →
-  `prod`, `sandbox` → `sandbox`. Set `MINDBODY_OP_PROFILE` explicitly for any
-  other name.
+  `prod`, `sandbox` → `sandbox`. Any other name is refused.
 
 ## Rotation
 
@@ -178,5 +186,4 @@ AZURE_KEYVAULT=my-vault bun run scripts/seed-platform-secrets.ts azure productio
    or Azure Key Vault secrets pick up the new values. Restart the deployments.
 4. Revoke the old SAT.
 
-A `doctor` failure is fail-closed: no command prints a token, and an empty or
-malformed SAT is never used as an authorized `op` session.
+No command prints a token.

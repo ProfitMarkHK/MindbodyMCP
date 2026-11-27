@@ -3,8 +3,6 @@
  * All commands are captured by an injected runner: no OS store, op, or network.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SAT_ENV_VAR,
@@ -16,8 +14,6 @@ import {
   profileConfig,
   readSat,
   storeCommandFor,
-  useFileFallback,
-  validateSatShape,
   vaultListHasOnly,
   type CommandResult,
   type CommandSpec,
@@ -61,15 +57,12 @@ function context(overrides: Partial<SatContext> = {}): SatContext {
     platform: "darwin",
     home: "/fake/home",
     localAppData: "/fake/appdata",
-    stdinIsTty: false,
     readStdin: () => SAT,
-    secretToolAvailable: true,
-    hasDbusSession: true,
     ...overrides,
   };
 }
 
-describe("profileConfig and SAT shape", () => {
+describe("profileConfig", () => {
   it("maps both profiles to their account, vault, ref file and entry", () => {
     expect(profileConfig("prod", "/home/tester")).toEqual({
       profile: "prod",
@@ -90,12 +83,6 @@ describe("profileConfig and SAT shape", () => {
     expect(() => profileConfig("staging" as "prod")).toThrow(/Unknown 1Password profile/);
   });
 
-  it("validates the SAT as a non-empty ops_ value and names it in errors", () => {
-    expect(validateSatShape(`  ${SAT}  `)).toBe(SAT);
-    expect(() => validateSatShape("")).toThrow(/service account token \(SAT\)/);
-    expect(() => validateSatShape("mb_fake")).toThrow(/service account token \(SAT\)/);
-    expect(() => validateSatShape("ops_")).toThrow(/service account token \(SAT\)/);
-  });
 });
 
 describe("storeCommandFor", () => {
@@ -112,12 +99,6 @@ describe("storeCommandFor", () => {
     expect(install.args.join(" ")).not.toContain(SAT);
     expect(install.stdio).toBe("inherit");
     expect(install.input).toBeUndefined();
-  });
-
-  it("uses inherited terminal stdio for a macOS install so security prompts", () => {
-    const spec = storeCommandFor("install", "prod", context({ stdinIsTty: true }));
-    expect(spec.stdio).toBe("inherit");
-    expect(spec.input).toBeUndefined();
   });
 
   it("uses DPAPI on Windows with the path in env and the SAT on stdin", () => {
@@ -154,43 +135,18 @@ describe("storeCommandFor", () => {
     expect(install.args.join(" ")).not.toContain(SAT);
   });
 
-  it("detects the documented Linux file fallback", () => {
-    expect(useFileFallback(context({ platform: "linux", secretToolAvailable: false }))).toBe(true);
-    expect(useFileFallback(context({ platform: "linux", hasDbusSession: false }))).toBe(true);
-    expect(useFileFallback(context({ platform: "linux" }))).toBe(false);
-    expect(useFileFallback(context({ platform: "darwin", secretToolAvailable: false }))).toBe(false);
-  });
 });
 
 describe("readSat and installSat", () => {
-  it("reads from the injected runner and validates the shape", async () => {
+  it("reads from the injected runner", async () => {
     const runner = recordingRunner([{ exitCode: 0, stdout: `${SAT}\n`, stderr: "" }]);
     expect(await readSat("prod", context({ runner }))).toBe(SAT);
     expect(runner.calls[0].args).toContain("mindbody-prod");
   });
 
-  it("fails closed on an empty or failed store read without echoing output", async () => {
-    const empty = recordingRunner([{ exitCode: 0, stdout: "", stderr: SAT }]);
-    await expect(readSat("prod", context({ runner: empty }))).rejects.toThrow(/Unable to read.*SAT/);
+  it("fails closed on a failed store read without echoing output", async () => {
     const failed = recordingRunner([{ exitCode: 1, stdout: SAT, stderr: "" }]);
     await expect(readSat("prod", context({ runner: failed }))).rejects.toThrow(/Unable to read.*SAT/);
-  });
-
-  it("uses a mode-600 fallback file when secret-tool or D-Bus is absent", async () => {
-    const home = mkdtempSync(join(tmpdir(), "op-sat-home-"));
-    try {
-      const ctx = context({ platform: "linux", home, secretToolAvailable: false, hasDbusSession: false });
-      await expect(readSat("sandbox", ctx)).rejects.toThrow(/No 1Password service account token \(SAT\)/);
-      await installSat("sandbox", ctx);
-      const path = join(home, ".config", "mindbody-op-sat", "sandbox");
-      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
-      expect(await readSat("sandbox", ctx)).toBe(SAT);
-      chmodSync(path, 0o644);
-      await installSat("sandbox", ctx);
-      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
   });
 
   it("pipes the SAT to install and never places it in argv", async () => {
@@ -201,12 +157,11 @@ describe("readSat and installSat", () => {
     expect(runner.calls[0].args.join(" ")).not.toContain(SAT);
   });
 
-  it("runs a darwin tty install with inherited stdio and no piped input", async () => {
+  it("runs a darwin install with inherited stdio and no piped input", async () => {
     const runner = recordingRunner();
     await installSat("prod", context({
       runner,
       platform: "darwin",
-      stdinIsTty: true,
       readStdin: () => {
         throw new Error("tty install must not read stdin");
       },
@@ -219,68 +174,6 @@ describe("readSat and installSat", () => {
     expect(runner.calls[0].args.join(" ")).not.toContain(SAT);
   });
 
-  it("rejects a piped macOS install before reading stdin or running any command", async () => {
-    const runner = recordingRunner();
-    const message =
-      "macOS install requires an interactive terminal for the 1Password service account token (SAT): " +
-      "security -w reads from the terminal prompt, not stdin";
-    await expect(
-      installSat("prod", context({
-        runner,
-        stdinIsTty: false,
-        readStdin: () => {
-          throw new Error("piped SAT must not be read on macOS");
-        },
-      }))
-    ).rejects.toThrow(message);
-    expect(runner.calls).toHaveLength(0);
-  });
-
-  it("rejects a win32 tty install before reading stdin or running any command", async () => {
-    const runner = recordingRunner();
-    const message =
-      "Pipe the 1Password service account token (SAT) to install on Windows/Linux: " +
-      "an interactive terminal is not supported; stdin must be a pipe";
-    await expect(
-      installSat("prod", context({
-        runner,
-        platform: "win32",
-        stdinIsTty: true,
-        readStdin: () => {
-          throw new Error("tty install must not read stdin");
-        },
-      }))
-    ).rejects.toThrow(message);
-    expect(runner.calls).toHaveLength(0);
-  });
-
-  it("rejects a Linux tty install with secret-tool before reading stdin or running any command", async () => {
-    const runner = recordingRunner();
-    await expect(
-      installSat("prod", context({
-        runner,
-        platform: "linux",
-        secretToolAvailable: true,
-        hasDbusSession: true,
-        stdinIsTty: true,
-        readStdin: () => {
-          throw new Error("tty install must not read stdin");
-        },
-      }))
-    ).rejects.toThrow(/Pipe the 1Password service account token \(SAT\) to install on Windows\/Linux/);
-    expect(runner.calls).toHaveLength(0);
-  });
-
-  it("refuses an invalid piped SAT and a tty install that cannot supply one", async () => {
-    const runner = recordingRunner();
-    await expect(
-      installSat("prod", context({ runner, platform: "win32", readStdin: () => "mb_fake" }))
-    ).rejects.toThrow(/Invalid 1Password service account token \(SAT\)/);
-    expect(runner.calls).toHaveLength(0);
-    await expect(
-      installSat("prod", context({ runner, stdinIsTty: true, platform: "linux", secretToolAvailable: false }))
-    ).rejects.toThrow(/Pipe the 1Password service account token \(SAT\)/);
-  });
 });
 
 describe("doctor and CLI", () => {
@@ -292,8 +185,8 @@ describe("doctor and CLI", () => {
     ]);
     captureLogs();
     const status = await doctor("prod", context({ runner }));
-    expect(status).toEqual({ satShape: true, serviceAccount: true, expectedVault: true });
-    expect(logs).toEqual(["sat_shape=true", "op_whoami_service_account=true", "op_vault_exact=true"]);
+    expect(status).toEqual({ satReadable: true, serviceAccount: true, expectedVault: true });
+    expect(logs).toEqual(["sat_readable=true", "op_whoami_service_account=true", "op_vault_exact=true"]);
     expect(logs.join("\n")).not.toContain(SAT);
     expect(runner.calls[1]).toEqual({
       command: "op",
@@ -307,8 +200,8 @@ describe("doctor and CLI", () => {
     const runner = recordingRunner([{ exitCode: 1, stdout: SAT, stderr: "" }]);
     captureLogs();
     const status = await doctor("sandbox", context({ runner }));
-    expect(status).toEqual({ satShape: false, serviceAccount: false, expectedVault: false });
-    expect(logs).toEqual(["sat_shape=false", "op_whoami_service_account=false", "op_vault_exact=false"]);
+    expect(status).toEqual({ satReadable: false, serviceAccount: false, expectedVault: false });
+    expect(logs).toEqual(["sat_readable=false", "op_whoami_service_account=false", "op_vault_exact=false"]);
     expect(runner.calls).toHaveLength(1);
   });
 
