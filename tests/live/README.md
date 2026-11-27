@@ -273,7 +273,11 @@ cancel path, and the only one the cleanup uses.
 Purchasability is not readable. `getContracts` lists 11 contracts at location 1 and the API refuses 9 of them there ("Contract <id> cannot be purchased at location 1"), with no field on the contract saying which. The test therefore walks the discovered list and keeps the first the API accepts; a refusal writes nothing, so the attempts before it are free. Because the committed contract cannot be deleted, it is reported in the LEFTOVERS banner.
 
 Both Mindbody endpoints accept `Test: true`, which validates without committing.
-The MCP server exposes neither. So through this server every checkout commits:
+The MCP server exposes it on `checkoutShoppingCart` (default `false`) but not on
+`purchaseContract`. The checkout tests below omit it on purpose so their sales
+commit; the separate `checkoutShoppingCart test: true records no sale and checks
+payments` test sends it and leaves nothing. The purchase below therefore always
+commits through this server:
 
 - `checkoutShoppingCart` creates a Sale with tax lines and a payment
   transaction. `returnsale` can reverse it but is not exposed either, and a
