@@ -142,7 +142,9 @@ export async function getStaffAppointmentsTool(
   };
 }
 
-// Add appointment
+// Add appointment. `test: true` sends Test and returns a dry-run result with no
+// appointment. Test is documented on AddAppointmentRequest in docs/openapi.json
+// but not live-verified (E-6).
 export async function addAppointmentTool(
   clientId: string,
   staffId: number,
@@ -157,9 +159,11 @@ export async function addAppointmentTool(
   _executePayment?: boolean,
   sendEmail?: boolean,
   applyPayment?: boolean,
+  test?: boolean,
   client: IMindbodyClient = mindbodyClient
 ): Promise<{
   success: boolean;
+  dryRun?: boolean;
   appointment?: {
     id: number;
     status: string;
@@ -172,6 +176,18 @@ export async function addAppointmentTool(
   };
   message: string;
 }> {
+  // MCP arguments are untyped at runtime. A truthy string would otherwise read
+  // as a dry run to the caller while Mindbody committed the booking.
+  if (test !== undefined && typeof test !== 'boolean') {
+    return { success: false, message: `test ${JSON.stringify(test)} is not a boolean` };
+  }
+  if (test === true && sendEmail === true) {
+    return { success: false, message: 'test cannot be combined with sendEmail: a dry run must not email a client' };
+  }
+  if (test === true && applyPayment === true) {
+    return { success: false, message: 'test cannot be combined with applyPayment: a dry run must not apply a payment' };
+  }
+
   try {
     const response = await client.post<any>('/appointment/addappointment', {
       ClientId: clientId,
@@ -184,7 +200,20 @@ export async function addAppointmentTool(
       StaffRequested: staffRequested,
       SendEmail: sendEmail,
       ApplyPayment: applyPayment,
+      // SPEC-ALIGNED BUT UNVERIFIED: AddAppointmentRequest documents Test
+      // ("validated, but no new appointment data is added"), but the -99 probe
+      // was blocked by a 403 on POST /usertoken/issue. No sandbox observation
+      // exists for this endpoint; see docs/mindbody-spec-discrepancies.md, E-6.
+      ...(test === true ? { Test: true } : {}),
     });
+
+    if (test === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: 'Dry run: Mindbody validated the appointment and saved nothing. Repeat the call without test to book it.',
+      };
+    }
 
     // The returned `Appointment` carries no `SessionType`/`Location` object, only
     // their ids, so the ids are what this result reports.
@@ -617,6 +646,7 @@ export const MAX_CANCELLATIONS_PER_REQUEST = 3;
 
 export interface CancelAppointmentsResult {
   success: boolean;
+  dryRun?: boolean;
   cancelled: Array<{ id: number; status: string; startDateTime: string }>;
   rejected: Array<{ id: number; reason: string }>;
   message: string;
@@ -695,12 +725,19 @@ function cancellationRejectionReason(
  * Every guard is evaluated before any write: request shape, ownership, start
  * time and status. All-or-nothing: if any id fails a guard, nothing is
  * cancelled. Writes are sequential and stop at the first upstream failure.
+ *
+ * `test: true` sends `Test: true` on the same updateappointment request. The
+ * guards still run, but no cancellation is saved: the result carries
+ * `dryRun: true` and an empty `cancelled` list. It is refused with `lateCancel`
+ * or `sendEmail`, which would forfeit a service or email a client if the flag
+ * were ignored. The flag is spec-aligned but not live-verified (E-7).
  */
 export async function cancelAppointmentsTool(
   clientId: string,
   appointmentIds: number[],
   lateCancel?: boolean,
   sendEmail?: boolean,
+  test?: boolean,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<CancelAppointmentsResult> {
@@ -710,6 +747,33 @@ export async function cancelAppointmentsTool(
       success: false,
       cancelled: [],
       rejected: shapeErrors,
+      message: 'Request rejected; no appointments were cancelled.',
+    };
+  }
+
+  // Refuse a malformed flag or a side effect that a dry run must never cause
+  // before the lookup too: a dry run is not an excuse to widen the read.
+  if (test !== undefined && typeof test !== 'boolean') {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ id: -1, reason: `test ${JSON.stringify(test)} is not a boolean` }],
+      message: 'Request rejected; no appointments were cancelled.',
+    };
+  }
+  if (test === true && lateCancel === true) {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ id: -1, reason: 'test cannot be combined with lateCancel: a dry run must not forfeit a service' }],
+      message: 'Request rejected; no appointments were cancelled.',
+    };
+  }
+  if (test === true && sendEmail === true) {
+    return {
+      success: false,
+      cancelled: [],
+      rejected: [{ id: -1, reason: 'test cannot be combined with sendEmail: a dry run must not email a client' }],
       message: 'Request rejected; no appointments were cancelled.',
     };
   }
@@ -776,6 +840,11 @@ export async function cancelAppointmentsTool(
         AppointmentId: id,
         Execute: execute,
         SendEmail: sendEmail ?? false,
+        // SPEC-ALIGNED BUT UNVERIFIED: UpdateAppointmentRequest documents Test
+        // on Execute: cancel, but the -99 probe was blocked by a 403 on
+        // POST /usertoken/issue. No sandbox observation exists for this path;
+        // see docs/mindbody-spec-discrepancies.md, E-7.
+        ...(test === true ? { Test: true } : {}),
       });
       const row = verified.get(id);
       cancelled.push({
@@ -787,13 +856,25 @@ export async function cancelAppointmentsTool(
       const notAttempted = appointmentIds.slice(cancelled.length + 1);
       return {
         success: false,
-        cancelled,
+        cancelled: test === true ? [] : cancelled,
         rejected: [{ id, reason: errorMessage(error, 'cancellation failed') }],
-        message:
-          `Cancelled ${cancelled.length} of ${appointmentIds.length} before appointment ${id} failed; stopped.` +
-          (notAttempted.length > 0 ? ` Not attempted: ${notAttempted.join(', ')}.` : ''),
+        message: test === true
+          ? `Dry run validated ${cancelled.length} of ${appointmentIds.length} before appointment ${id} failed; nothing was saved.` +
+            (notAttempted.length > 0 ? ` Not attempted: ${notAttempted.join(', ')}.` : '')
+          : `Cancelled ${cancelled.length} of ${appointmentIds.length} before appointment ${id} failed; stopped.` +
+            (notAttempted.length > 0 ? ` Not attempted: ${notAttempted.join(', ')}.` : ''),
       };
     }
+  }
+
+  if (test === true) {
+    return {
+      success: true,
+      dryRun: true,
+      cancelled: [],
+      rejected: [],
+      message: 'Dry run: Mindbody validated the cancellation(s) and saved nothing. Repeat the call without test to cancel.',
+    };
   }
 
   return {

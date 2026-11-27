@@ -215,7 +215,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'addClientToClass',
-        description: 'Book a client into a class',
+        description: 'Book a client into a class. test: true is a dry run that validates the booking and saves nothing (result has dryRun: true, no visitId)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -223,6 +223,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             classId: { type: 'number', description: 'Class ID to book' },
             requirePayment: { type: 'boolean', description: 'Require payment (default true)' },
             waitlist: { type: 'boolean', description: 'Add to waitlist if full (default false)' },
+            test: {
+              type: 'boolean',
+              description:
+                'Dry run (default false): sent as Test. Mindbody validates the booking, saves no visit and the result carries dryRun: true with no visitId. Repeat without test to book.',
+            },
           },
           required: ['clientId', 'classId'],
         },
@@ -806,7 +811,8 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
       },
       {
         name: 'addAppointment',
-        description: 'Book an appointment',
+        description:
+          'Book an appointment. test: true is a dry run: Mindbody validates the booking, saves nothing, and the result has dryRun: true with no appointment',
         inputSchema: {
           type: 'object',
           properties: {
@@ -821,6 +827,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             executePayment: { type: 'boolean', description: 'Deprecated and ignored: not part of the Mindbody API' },
             sendEmail: { type: 'boolean', description: 'Send confirmation email' },
             applyPayment: { type: 'boolean', description: 'Apply payment' },
+            test: {
+              type: 'boolean',
+              description:
+                'Dry run (default false): sent as Test. Mindbody validates the appointment, saves nothing and the result carries dryRun: true with no appointment. Refused with sendEmail or applyPayment. Repeat without test to book.',
+            },
           },
           required: ['clientId', 'staffId', 'locationId', 'sessionTypeId', 'startDateTime'],
         },
@@ -888,7 +899,9 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
           `one client per call; 1-${MAX_CANCELLATIONS_PER_REQUEST} appointment IDs, no duplicates; ` +
           `each appointment must belong to that client, start in the future, and not already be ` +
           `cancelled, late-cancelled, completed, a no-show or arrived (un-arrive it or cancel in Mindbody directly). ` +
-          `Not a dry run: sendEmail (default false) can email a real client. All-or-nothing: if any ID fails a guard, ` +
+          `test: true is a dry run: the same guards run, Mindbody validates the cancellation and nothing is saved ` +
+          `(result has dryRun: true and no cancelled IDs); it is refused with lateCancel or sendEmail. ` +
+          `Otherwise sendEmail (default false) can email a real client. All-or-nothing: if any ID fails a guard, ` +
           `none are cancelled. Cancellations run one at a time and stop at the first failure.`,
         inputSchema: {
           type: 'object',
@@ -901,6 +914,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
             },
             lateCancel: { type: 'boolean', description: 'Record as late cancellations (default false). Refused unless a late-cancel window applies to each (MINDBODY_LATE_CANCEL_WINDOW_RULES first match, else MINDBODY_LATE_CANCEL_WINDOW_HOURS), and then only for sessions starting within that window' },
             sendEmail: { type: 'boolean', description: 'Email the client about the cancellation (default false)' },
+            test: {
+              type: 'boolean',
+              description:
+                'Dry run (default false): sent as Test with Execute: cancel. Every guard still runs, no cancellation is saved, and the result carries dryRun: true with an empty cancelled list. Refused with lateCancel or sendEmail.',
+            },
           },
           required: ['clientId', 'appointmentIds'],
         },
@@ -1101,7 +1119,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.clientId as string,
           args.classId as number,
           args.requirePayment as boolean | undefined,
-          args.waitlist as boolean | undefined
+          args.waitlist as boolean | undefined,
+          args.test as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(addClassResult, null, 2) }] };
       
@@ -1419,7 +1438,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.staffRequested as boolean | undefined,
           args.executePayment as boolean | undefined,
           args.sendEmail as boolean | undefined,
-          args.applyPayment as boolean | undefined
+          args.applyPayment as boolean | undefined,
+          args.test as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(addAppointmentResult, null, 2) }] };
       
@@ -1446,7 +1466,8 @@ const callToolHandler = async (request: CallToolRequest): Promise<CallToolResult
           args.clientId as string,
           args.appointmentIds as number[],
           args.lateCancel as boolean | undefined,
-          args.sendEmail as boolean | undefined
+          args.sendEmail as boolean | undefined,
+          args.test as boolean | undefined
         );
         return { content: [{ type: 'text', text: JSON.stringify(cancelAppointmentsResult, null, 2) }] };
 

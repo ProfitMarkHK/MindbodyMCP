@@ -212,7 +212,7 @@ describe("getClassDescriptionsTool — C-7 ImageURL field", () => {
 describe("addClientToClassTool — C-8 response carries only Visit", () => {
   it("returns visitId and serviceId and drops the phantom payment fields", async () => {
     const result = await addClientToClassTool(
-      "c1", 1, false, false, makeClient(addClientToClassFixture), emptyCache()
+      "c1", 1, false, false, undefined, makeClient(addClientToClassFixture), emptyCache()
     );
     expect(result.success).toBe(true);
     expect(result.visitId).toBe(9001);
@@ -225,7 +225,7 @@ describe("addClientToClassTool — C-8 response carries only Visit", () => {
 
   it("reports serviceId when the visit carries one", async () => {
     const result = await addClientToClassTool(
-      "c1", 1, false, false,
+      "c1", 1, false, false, undefined,
       makeClient({ Visit: { ...addClientToClassFixture.Visit, ServiceId: 4001 } }),
       emptyCache()
     );
@@ -236,9 +236,54 @@ describe("addClientToClassTool — C-8 response carries only Visit", () => {
     const throwing = {
       post: async () => { throw new Error("class full"); },
     } as any;
-    const result = await addClientToClassTool("c1", 1, false, false, throwing, emptyCache());
+    const result = await addClientToClassTool("c1", 1, false, false, undefined, throwing, emptyCache());
     expect(result.success).toBe(false);
     expect(result.message).toBe("class full");
+  });
+
+  it("sends Test: true only for a dry run, and reports no visitId", async () => {
+    let body: any;
+    const recording = {
+      post: async (_url: string, data: any) => {
+        body = data;
+        return { Visit: { Id: 9001, ClassId: 1, ClientId: "c1" } };
+      },
+    } as any;
+
+    const dryRun = await addClientToClassTool("c1", 1, false, false, true, recording, emptyCache());
+    expect(body).toEqual({
+      ClientId: "c1", ClassId: 1, RequirePayment: false, Waitlist: false, Test: true,
+    });
+    expect(dryRun).toMatchObject({ success: true, dryRun: true });
+    expect("visitId" in dryRun).toBe(false);
+    expect(dryRun.message).toContain("saved nothing");
+  });
+
+  it("does not send Test on a real booking", async () => {
+    let body: any;
+    const recording = {
+      post: async (_url: string, data: any) => {
+        body = data;
+        return { Visit: { Id: 9001, ClassId: 1, ClientId: "c1" } };
+      },
+    } as any;
+
+    const booked = await addClientToClassTool("c1", 1, false, false, false, recording, emptyCache());
+    expect("Test" in body).toBe(false);
+    expect(booked.visitId).toBe(9001);
+    expect(booked.dryRun).toBeUndefined();
+  });
+
+  it("refuses a non-boolean test without calling the API", async () => {
+    let calls = 0;
+    const recording = {
+      post: async () => { calls += 1; return {}; },
+    } as any;
+
+    const result = await addClientToClassTool("c1", 1, false, false, "true" as any, recording, emptyCache());
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("is not a boolean");
+    expect(calls).toBe(0);
   });
 });
 

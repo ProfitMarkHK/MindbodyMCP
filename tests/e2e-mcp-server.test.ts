@@ -420,6 +420,16 @@ describe('tools/list', () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
   });
 
+  itE2E('exposes a boolean test argument on every dry-run-capable write tool', async () => {
+    const { tools } = await client.listTools();
+    for (const name of ['addClientToClass', 'addAppointment', 'cancelAppointments']) {
+      const tool = tools.find((entry) => entry.name === name);
+      expect(tool, `${name} must be registered`).toBeDefined();
+      const properties = (tool!.inputSchema as { properties?: Record<string, { type?: unknown }> }).properties ?? {};
+      expect(properties.test?.type, `${name} must expose test as a boolean`).toBe('boolean');
+    }
+  });
+
   itE2E('gives every tool a unique, well-formed name and a non-empty description', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
@@ -1677,6 +1687,31 @@ describe('domain — appointments (read and write)', () => {
     });
   });
 
+  itE2E('addAppointment sends Test and returns no appointment on a dry run', async () => {
+    stub.resetLog();
+
+    const result = await client.callTool({
+      name: 'addAppointment',
+      arguments: {
+        clientId: STUB_FIXTURES.clientId,
+        staffId: 42,
+        locationId: 1,
+        sessionTypeId: 9,
+        startDateTime: '2026-03-06T09:00:00',
+        test: true,
+      },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const payload = resultJson(result);
+    expect(payload).toMatchObject({ success: true, dryRun: true });
+    expect(payload.appointment).toBeUndefined();
+    expect(payload.message).toContain('saved nothing');
+
+    const [post] = stub.requestsTo('/public/v6/appointment/addappointment', 'POST');
+    expect(post.body.Test).toBe(true);
+  });
+
   itE2E('updateAppointment moves the appointment and reports the new status', async () => {
     stub.resetLog();
     const appointmentId = CANCELLATION_FIXTURES.futureBookedA;
@@ -1831,6 +1866,26 @@ describe('domain — appointments (read and write)', () => {
     expect(lookups[0].query.StartDate).toBe(
       siteDateString(new Date(), STUB_FIXTURES.siteTimeZone)
     );
+  });
+
+  itE2E('cancelAppointments sends Test with Execute: cancel and reports no cancellations', async () => {
+    stub.resetLog();
+    const id = CANCELLATION_FIXTURES.futureBookedA;
+
+    const result = await client.callTool({
+      name: 'cancelAppointments',
+      arguments: { clientId: CANCELLATION_FIXTURES.clientId, appointmentIds: [id], test: true },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const payload = resultJson(result);
+    expect(payload).toMatchObject({ success: true, dryRun: true, cancelled: [], rejected: [] });
+    expect(payload.message).toContain('saved nothing');
+
+    const posts = stub.requestsTo(UPDATE_APPOINTMENT_PATH, 'POST');
+    expect(posts.map((post) => post.body)).toEqual([
+      { AppointmentId: id, Execute: 'cancel', SendEmail: false, Test: true },
+    ]);
   });
 
   itE2E('cancelAppointments rejects a cross-client id and cancels nothing', async () => {

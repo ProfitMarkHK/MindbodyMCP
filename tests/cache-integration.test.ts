@@ -132,12 +132,25 @@ describe('cache integration: getClassesTool', () => {
     await readClasses(client, cache, { locationIds: [1] });
     expect(classesGets(client)).toBe(1);
 
-    const booked = await addClientToClassTool('c1', 501, false, false, client, cache);
+    const booked = await addClientToClassTool('c1', 501, false, false, undefined, client, cache);
     expect(booked.success).toBe(true);
     expect(client.posts).toEqual(['/class/addclienttoclass']);
 
     await readClasses(client, cache, { locationIds: [1] });
     expect(classesGets(client)).toBe(2);
+  });
+
+  test('addClientToClass dry run leaves the cached class read in place', async () => {
+    await readClasses(client, cache, { locationIds: [1] });
+    expect(classesGets(client)).toBe(1);
+
+    const dryRun = await addClientToClassTool('c1', 501, false, false, true, client, cache);
+    expect(dryRun).toMatchObject({ success: true, dryRun: true });
+    expect('visitId' in dryRun).toBe(false);
+    expect(client.posts).toEqual(['/class/addclienttoclass']);
+
+    await readClasses(client, cache, { locationIds: [1] });
+    expect(classesGets(client)).toBe(1); // nothing was saved, so the cache still stands
   });
 
   test('removeClientFromClass invalidates the class read: next getClasses calls the API', async () => {
@@ -157,7 +170,7 @@ describe('cache integration: getClassesTool', () => {
     await readClasses(client, cache, { staffIds: [7] });
     expect(classesGets(client)).toBe(2);
 
-    await addClientToClassTool('c1', 501, false, false, client, cache);
+    await addClientToClassTool('c1', 501, false, false, undefined, client, cache);
 
     await readClasses(client, cache, { locationIds: [1] });
     await readClasses(client, cache, { staffIds: [7] });
@@ -168,7 +181,7 @@ describe('cache integration: getClassesTool', () => {
     await readClasses(client, cache);
     client.failPosts = true;
 
-    const booked = await addClientToClassTool('c1', 501, false, false, client, cache);
+    const booked = await addClientToClassTool('c1', 501, false, false, undefined, client, cache);
     const cancelled = await removeClientFromClassTool('c1', 501, false, client, cache);
     expect(booked.success).toBe(false);
     expect(cancelled.success).toBe(false);

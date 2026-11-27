@@ -476,3 +476,31 @@ The tallies below this point are from the 2026-10-28 run (29 tests), kept for th
 
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.
+
+## Dry-run probes for booking and cancellation (not yet run)
+
+`test: true` is now exposed on `addClientToClass`, `addAppointment` and
+`cancelAppointments`. The tier contains three new probes, each of which reads
+back the state it claims did not change:
+
+- `addClientToClass test: true validates a booking without saving a visit` —
+  picks a future class with space, sends `Test: true`, then checks the client
+  schedule for a visit in that class. Class bookings were already observed on
+  `-99` (2026-11-17), so this probe is a re-check, not new evidence.
+- `addAppointment test: true validates a booking without saving it` — sends
+  `Test: true` against the first availability-derived candidate before the real
+  booking consumes that slot, then reads the client's appointments back. E-6.
+- `cancelAppointments test: true validates a cancellation without saving it` —
+  dry-runs a normal cancellation of the run's still-Booked appointment before
+  arrival changes it, then re-reads status, times and staff. E-7.
+
+The two existing cancellation-guard probes now also pass `test: true`, so even
+a regression of the count or ownership guard would save nothing. ID-producing
+chain writes (client, class seat, appointment, sale, contract) remain real: a
+dry run there would break the read-backs downstream.
+
+**None of these new probes has been run in this worktree.** The fresh `-99`
+attempt was blocked by HTTP 403 on `POST /usertoken/issue` (credentials
+unavailable), so `addAppointment Test` and cancellation `Execute: cancel` +
+`Test` remain spec-aligned but unverified. A green unit suite does not change
+that; only a passing live run does.

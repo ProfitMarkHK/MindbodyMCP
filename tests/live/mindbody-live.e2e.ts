@@ -1156,6 +1156,48 @@ describe('live tier — booking-cancel resolver', () => {
     return undefined;
   }
 
+  // Recorded on -99 (2026-11-17): Test: true was accepted for 60 future classes
+  // with space. This probe re-checks it without consuming a class the real
+  // booking tests below need. A refusal or a persisted visit fails loudly.
+  const DRY_RUN_CLASS_TEST = 'addClientToClass test: true validates a booking without saving a visit';
+
+  itLive(DRY_RUN_CLASS_TEST, async () => {
+    if (!createdClientId) throw new Error('No client was created earlier in the run. See that failure.');
+
+    const listed = await callTool('getClasses', { startDate: day(2), endDate: day(9) });
+    const candidate = listed.classes
+      .find((cls: any) => !cls.isCanceled && cls.spotsAvailable > 0);
+    if (!candidate) {
+      announceLoudSkip(DRY_RUN_CLASS_TEST, [
+        "reason: no future class with space to dry-run book the run's client into.",
+        'The real booking tests below will report the same environment limitation.',
+      ]);
+      return;
+    }
+
+    const scheduleArgs = { clientId: createdClientId, startDate: day(0), endDate: day(10) };
+    const before = await callTool('getClientSchedule', scheduleArgs);
+    const seatFor = (schedule: any) =>
+      schedule.bookings.filter((booking: any) => booking.classId === candidate.id && !booking.lateCancelled);
+    expect(seatFor(before), 'the client already has a seat in the candidate class, so the probe would be vacuous').toHaveLength(0);
+
+    const dryRun = await callTool('addClientToClass', {
+      clientId: createdClientId,
+      classId: candidate.id,
+      requirePayment: false,
+      waitlist: false,
+      test: true,
+    });
+    expect(dryRun.success, `Mindbody refused addclienttoclass with Test: true: ${dryRun.message}`).toBe(true);
+    expect(dryRun.dryRun).toBe(true);
+    expect(dryRun.visitId).toBeUndefined();
+    expect(dryRun.message).toContain('saved nothing');
+
+    const after = await callTool('getClientSchedule', scheduleArgs);
+    expect(seatFor(after), `Test: true COMMITTED: client ${createdClientId} now has a visit for class ${candidate.id}`).toHaveLength(0);
+    console.log(` LIVE dry run: addClientToClass Test=true for class ${candidate.id} — no visit saved.\n`);
+  });
+
   itLive(CANCEL_RESOLVER_TEST, async () => {
     // Cancels with lateCancel: false, so nothing is forfeited whatever the site window is.
     const classId = await bookFutureClass(CANCEL_RESOLVER_TEST);
@@ -1514,6 +1556,55 @@ describe('live tier — appointments', () => {
     expect(typeof result.totalAppointments).toBe('number');
   });
 
+  // `Test` is documented on AddAppointmentRequest but has no recorded
+  // sandbox observation (E-6). Send it against the first availability-derived
+  // candidate BEFORE the real booking consumes that slot, then read the client's
+  // appointments back. A refusal or a persisted booking is a failure, not a skip.
+  const DRY_RUN_ADD_APPOINTMENT_TEST = 'addAppointment test: true validates a booking without saving it';
+
+  itLive(DRY_RUN_ADD_APPOINTMENT_TEST, async () => {
+    const name = DRY_RUN_ADD_APPOINTMENT_TEST;
+    if (!createdClientId) {
+      throw new Error('No client was created, so the appointment dry run has nobody to book. See the earlier failure.');
+    }
+    if (!requireDiscovered(name, ['bookingCandidates', 'siteTimeZone'])) return;
+
+    const candidate = discovered.bookingCandidates![0];
+    const readArgs = {
+      staffIds: [candidate.staffId],
+      clientId: createdClientId,
+      startDate: siteLocalDate(siteZone(), 0),
+      endDate: siteLocalDate(siteZone(), BOOKABLE_START_OFFSET_DAYS + BOOKABLE_WINDOW_DAYS + 1),
+    };
+    const before = await callTool('getStaffAppointments', readArgs);
+    expect(Array.isArray(before.appointments)).toBe(true);
+
+    const dryRun = await callTool('addAppointment', {
+      clientId: createdClientId,
+      staffId: candidate.staffId,
+      locationId: candidate.locationId,
+      sessionTypeId: candidate.sessionTypeId,
+      startDateTime: candidate.startDateTime,
+      notes: `live-e2e dry run ${RUN_TOKEN}`,
+      executePayment: false,
+      applyPayment: false,
+      sendEmail: false,
+      test: true,
+    });
+    expect(dryRun.success, `Mindbody refused addappointment with Test: true: ${dryRun.message}`).toBe(true);
+    expect(dryRun.dryRun).toBe(true);
+    expect(dryRun.appointment).toBeUndefined();
+    expect(dryRun.message).toContain('saved nothing');
+
+    const after = await callTool('getStaffAppointments', readArgs);
+    expect(after.appointments).toHaveLength(before.appointments.length);
+    expect(
+      after.appointments.some((appointment: any) => sameLocalDateTime(appointment.startDateTime, candidate.startDateTime)),
+      `Test: true COMMITTED: client ${createdClientId} now has an appointment at ${candidate.startDateTime}`
+    ).toBe(false);
+    console.log(` LIVE dry run: addAppointment Test=true at ${candidate.startDateTime} — no appointment saved.\n`);
+  });
+
   itLive('addAppointment books a slot that is then readable back', async () => {
     if (!createdClientId) {
       throw new Error('No client was created, so the appointment has nobody to book. See the earlier failure.');
@@ -1686,6 +1777,40 @@ describe('live tier — appointments', () => {
     expect(after.staffId).toBe(before.staffId);
     expect(after.status).toBe(before.status);
     console.log(` LIVE dry run: notes after "${after.notes}" — unchanged.\n`);
+  });
+
+  // `Test` is documented on UpdateAppointmentRequest with Execute:
+  // cancel, but has no recorded sandbox observation (E-7). The appointment is
+  // still Booked here (arrival runs later), so a normal cancel is a valid probe.
+  // A refusal or a persisted cancellation is a failure, not a skip.
+  const DRY_RUN_CANCEL_TEST = 'cancelAppointments test: true validates a cancellation without saving it';
+
+  itLive(DRY_RUN_CANCEL_TEST, async () => {
+    if (!requireCreatedAppointment(DRY_RUN_CANCEL_TEST)) return;
+
+    const before = await readBackCreatedAppointment();
+    expect(CANCELLED_STATUSES).not.toContain(before.status);
+
+    const dryRun = await callTool('cancelAppointments', {
+      clientId: createdClientId,
+      appointmentIds: [createdAppointmentId],
+      sendEmail: false,
+      test: true,
+    });
+    expect(dryRun.rejected, `this server's own guards refused the dry run: ${dryRun.message}`).toEqual([]);
+    expect(dryRun.success, `Mindbody refused updateappointment Execute=cancel with Test: true: ${dryRun.message}`).toBe(true);
+    expect(dryRun.dryRun).toBe(true);
+    expect(dryRun.cancelled).toEqual([]);
+    expect(dryRun.message).toContain('saved nothing');
+
+    // The read-back is the assertion; the dry run's own answer is not.
+    const after = await readBackCreatedAppointment();
+    expect(after.status, `Test: true COMMITTED: appointment ${createdAppointmentId} is now ${after.status}`)
+      .toBe(before.status);
+    expect(after.startDateTime).toBe(before.startDateTime);
+    expect(after.endDateTime).toBe(before.endDateTime);
+    expect(after.staffId).toBe(before.staffId);
+    console.log(` LIVE dry run: cancelAppointments Test=true on ${createdAppointmentId} — still ${after.status}.\n`);
   });
 
   itLive('updateAppointment reschedules the booked appointment to a new slot', async () => {
@@ -1879,6 +2004,8 @@ describe('live tier — appointments', () => {
       clientId: createdClientId,
       appointmentIds,
       sendEmail: false,
+      // Extra safety net: even if the count guard regresses, a dry run saves nothing.
+      test: true,
     });
 
     expect(result.success).toBe(false);
@@ -1913,6 +2040,8 @@ describe('live tier — appointments', () => {
       clientId: String(other.id),
       appointmentIds: [createdAppointmentId],
       sendEmail: false,
+      // Extra safety net: even if the ownership guard regresses, a dry run saves nothing.
+      test: true,
     });
 
     expect(result.success).toBe(false);
