@@ -163,29 +163,51 @@ export async function getClassDescriptionsTool(
  * report an amount due: `serviceId` being absent or null on the returned Visit
  * is the only payment signal the endpoint offers, and it is returned as
  * `serviceId` rather than being interpreted here.
+ *
+ * `test: true` sends the spec-defined `Test` flag. The result carries
+ * `dryRun: true` and no `visitId`; the cache is not cleared because no booking
+ * was committed. The sandbox accepted this flag on 2026-11-17 and saved nothing.
  */
 export async function addClientToClassTool(
   clientId: string,
   classId: number,
   requirePayment: boolean = true,
   waitlist: boolean = false,
+  test?: boolean,
   client: IMindbodyClient = mindbodyClient,
   cache: SimpleCache = classCache
 ): Promise<{
   success: boolean;
+  dryRun?: boolean;
   visitId?: number;
   serviceId?: number;
   message: string;
 }> {
+  if (test !== undefined && typeof test !== 'boolean') {
+    return { success: false, message: `test ${JSON.stringify(test)} is not a boolean` };
+  }
+
   try {
     const response = await client.post<any>('/class/addclienttoclass', {
       ClientId: clientId,
       ClassId: classId,
       RequirePayment: requirePayment,
       Waitlist: waitlist,
+      // SANDBOX-OBSERVED (matches spec, 2026-11-17): AddClientToClassRequest
+      // documents Test and -99 accepted Test: true without committing a visit
+      // (60 future classes probed). No divergence; not an ADR deviation.
+      ...(test === true ? { Test: true } : {}),
     });
 
-    // Clear cache after booking
+    if (test === true) {
+      return {
+        success: true,
+        dryRun: true,
+        message: 'Dry run: Mindbody validated the booking and saved nothing. Repeat the call without test to book the class.',
+      };
+    }
+
+    // Clear cache after a real booking, never after a dry run: nothing changed.
     cache.clear();
 
     return {

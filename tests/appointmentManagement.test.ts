@@ -107,7 +107,7 @@ describe("cancelAppointmentsTool — request-shape guards make no calls at all",
 
   it("rejects more than the limit as a whole, without truncating", async () => {
     const client = new RecordingClient([row(1), row(2), row(3), row(4)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2, 3, 4], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2, 3, 4], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.cancelled).toEqual([]);
     expect(result.rejected).toHaveLength(1);
@@ -118,7 +118,7 @@ describe("cancelAppointmentsTool — request-shape guards make no calls at all",
 
   it("rejects duplicate ids", async () => {
     const client = new RecordingClient([row(1)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected).toEqual([{ id: 1, reason: "duplicate appointment id in request" }]);
     expect(client.callCount).toBe(0);
@@ -126,10 +126,10 @@ describe("cancelAppointmentsTool — request-shape guards make no calls at all",
 
   it("rejects an empty id list, non-integer ids and an empty clientId", async () => {
     const client = new RecordingClient([row(1)]);
-    expect((await cancelAppointmentsTool(CLIENT, [], false, false, client, client.cache)).rejected[0].id).toBe(-1);
-    const bad = await cancelAppointmentsTool(CLIENT, [1, 2.5, -3], false, false, client, client.cache);
+    expect((await cancelAppointmentsTool(CLIENT, [], false, false, undefined, client, client.cache)).rejected[0].id).toBe(-1);
+    const bad = await cancelAppointmentsTool(CLIENT, [1, 2.5, -3], false, false, undefined, client, client.cache);
     expect(bad.rejected.map((entry) => entry.id)).toEqual([2.5, -3]);
-    const noClient = await cancelAppointmentsTool("  ", [1], false, false, client, client.cache);
+    const noClient = await cancelAppointmentsTool("  ", [1], false, false, undefined, client, client.cache);
     expect(noClient.rejected).toEqual([{ id: -1, reason: "clientId must be a non-empty string" }]);
     expect(client.callCount).toBe(0);
   });
@@ -138,7 +138,7 @@ describe("cancelAppointmentsTool — request-shape guards make no calls at all",
 describe("cancelAppointmentsTool — verification guards make no writes", () => {
   it("resolves the site zone first, then looks up with spec-valid params: the ids, the single ClientId, site-today onward", async () => {
     const client = new RecordingClient([row(1)]);
-    await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(client.gets.map((get) => get.url)).toEqual(["/site/sites", "/appointment/staffappointments"]);
     const { params } = client.gets[1];
     expect(params.AppointmentIds).toEqual([1]);
@@ -150,14 +150,14 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
 
   it("uses the cached site record on a second call", async () => {
     const client = new RecordingClient([row(1)]);
-    await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
-    await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
+    await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(client.siteGets).toHaveLength(1);
   });
 
   it("treats another client's appointment as not found, without naming the owner", async () => {
     const client = new RecordingClient([row(1), row(2, { ClientId: "C-200" })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected).toEqual([{ id: 2, reason: "not found for this client" }]);
     expect(JSON.stringify(result)).not.toContain("C-200");
@@ -166,23 +166,23 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
 
   it("compares ClientId as strings, strictly", async () => {
     const client = new RecordingClient([row(1, { ClientId: 100 })]);
-    const numeric = await cancelAppointmentsTool("100", [1], false, false, client, client.cache);
+    const numeric = await cancelAppointmentsTool("100", [1], false, false, undefined, client, client.cache);
     expect(numeric.success).toBe(true);
     const prefixClient = new RecordingClient([row(1, { ClientId: 100 })]);
-    const prefix = await cancelAppointmentsTool("10", [1], false, false, prefixClient, prefixClient.cache);
+    const prefix = await cancelAppointmentsTool("10", [1], false, false, undefined, prefixClient, prefixClient.cache);
     expect(prefix.rejected).toEqual([{ id: 1, reason: "not found for this client" }]);
   });
 
   it("rejects an id the lookup did not return", async () => {
     const client = new RecordingClient([row(1)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 7], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 7], false, false, undefined, client, client.cache);
     expect(result.rejected).toEqual([{ id: 7, reason: "not found for this client" }]);
     expect(client.posts).toHaveLength(0);
   });
 
   it("rejects an id the lookup returned twice", async () => {
     const client = new RecordingClient([row(1), row(1)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.rejected[0].id).toBe(1);
     expect(result.rejected[0].reason).toContain("more than once");
     expect(client.posts).toHaveLength(0);
@@ -190,14 +190,14 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
 
   it("rejects an appointment that has already started", async () => {
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(-60 * 60 * 1000) })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.rejected).toEqual([{ id: 1, reason: "appointment has already started or is in the past" }]);
     expect(client.posts).toHaveLength(0);
   });
 
   it("rejects an unparseable start time", async () => {
     const client = new RecordingClient([row(1, { StartDateTime: "not a date" })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.rejected).toEqual([{ id: 1, reason: "appointment start time could not be parsed" }]);
     expect(client.posts).toHaveLength(0);
   });
@@ -205,7 +205,7 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
   for (const status of ["Cancelled", "LateCancelled", "Completed", "NoShow"]) {
     it(`rejects an appointment whose status is ${status}`, async () => {
       const client = new RecordingClient([row(1, { Status: status })]);
-      const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+      const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
       expect(result.rejected).toEqual([{ id: 1, reason: `appointment status is ${status}, which cannot be cancelled` }]);
       expect(client.posts).toHaveLength(0);
     });
@@ -216,7 +216,7 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
     try {
       for (const lateCancel of [false, true]) {
         const client = new RecordingClient([row(1, { Status: "Arrived" })]);
-        const result = await cancelAppointmentsTool(CLIENT, [1], lateCancel, false, client, client.cache);
+        const result = await cancelAppointmentsTool(CLIENT, [1], lateCancel, false, undefined, client, client.cache);
         expect(result.success).toBe(false);
         expect(result.rejected).toHaveLength(1);
         expect(result.rejected[0].reason).toContain("appointment status is Arrived, which cannot be cancelled");
@@ -231,7 +231,7 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
 
   it("is all-or-nothing: one good and one bad id cancels neither", async () => {
     const client = new RecordingClient([row(1), row(2, { Status: "Cancelled" })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.cancelled).toEqual([]);
     expect(result.rejected.map((entry) => entry.id)).toEqual([2]);
@@ -245,7 +245,7 @@ describe("cancelAppointmentsTool — verification guards make no writes", () => 
       if (url === "/site/sites") return realGet<T>(url, config);
       throw new Error("Mindbody API Error: down (Code: 500)");
     };
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0]).toEqual({ id: -1, reason: "appointment lookup failed: Mindbody API Error: down (Code: 500)" });
     expect(client.posts).toHaveLength(0);
@@ -285,14 +285,14 @@ describe("cancelAppointmentsTool — the start-time guard uses the SITE's zone, 
 
           const future = new RecordingClient([row(1, { StartDateTime: siteLocal(2 * HOUR_MS, siteTz) })]);
           future.siteZone = siteTz;
-          const accepted = await cancelAppointmentsTool(CLIENT, [1], false, false, future, future.cache);
+          const accepted = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, future, future.cache);
           expect(accepted.rejected).toEqual([]);
           expect(accepted.success).toBe(true);
           expect(future.posts).toHaveLength(1);
 
           const past = new RecordingClient([row(2, { StartDateTime: siteLocal(-2 * HOUR_MS, siteTz) })]);
           past.siteZone = siteTz;
-          const rejected = await cancelAppointmentsTool(CLIENT, [2], false, false, past, past.cache);
+          const rejected = await cancelAppointmentsTool(CLIENT, [2], false, false, undefined, past, past.cache);
           expect(rejected.success).toBe(false);
           expect(rejected.rejected).toEqual([{ id: 2, reason: "appointment has already started or is in the past" }]);
           expect(past.posts).toHaveLength(0);
@@ -316,7 +316,7 @@ describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-ca
   it("late-cancels an appointment inside the window", async () => {
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(6 * HOUR_MS) })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts.map((post) => post.data.Execute)).toEqual(["latecancel"]);
   });
@@ -324,7 +324,7 @@ describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-ca
   it("refuses a late cancel outside the window, whole request, with no write", async () => {
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(6 * HOUR_MS) }), row(2, { StartDateTime: siteLocal(30 * DAY_MS) })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], true, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0].id).toBe(2);
@@ -335,7 +335,7 @@ describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-ca
   it("still allows a plain cancel outside the window", async () => {
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(30 * DAY_MS) })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts.map((post) => post.data.Execute)).toEqual(["cancel"]);
   });
@@ -344,7 +344,7 @@ describe("cancelAppointmentsTool — lateCancel is bounded to the site's late-ca
     it(`refuses lateCancel with no call at all when the window is ${JSON.stringify(value)}`, async () => {
       if (value !== undefined) process.env[LATE_CANCEL_WINDOW_ENV] = value;
       const client = new RecordingClient([row(1)]);
-      const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+      const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
       expect(result.success).toBe(false);
       expect(result.rejected[0].id).toBe(-1);
       expect(result.rejected[0].reason).toContain(LATE_CANCEL_WINDOW_ENV);
@@ -367,7 +367,7 @@ describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)",
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 2 }]);
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 3, SessionTypeId: 7 })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain(`more than 2 hour(s)`);
     expect(result.rejected[0].reason).toContain(`${LATE_CANCEL_RULES_ENV}[0] (programId 3)`);
@@ -378,7 +378,7 @@ describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)",
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 2 }]);
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 4, SessionTypeId: 7 })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts.map((post) => post.data.Execute)).toEqual(["latecancel"]);
   });
@@ -386,7 +386,7 @@ describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)",
   it("refuses when no rule matches and there is no default, with no write", async () => {
     process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ programId: 3, hours: 24 }]);
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 4 })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain(LATE_CANCEL_WINDOW_ENV);
     expect(client.posts).toEqual([]);
@@ -396,7 +396,7 @@ describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)",
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     process.env[LATE_CANCEL_RULES_ENV] = JSON.stringify([{ serviceId: 10, hours: 2 }]);
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(10 * HOUR_MS), ProgramId: 3, ClientServiceId: 10 })]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain("serviceId is not known");
     expect(client.posts).toEqual([]);
@@ -406,13 +406,13 @@ describe("cancelAppointmentsTool — per-program late-cancel rules (issue #21)",
     process.env[LATE_CANCEL_WINDOW_ENV] = "24";
     process.env[LATE_CANCEL_RULES_ENV] = '[{"programId":"three","hours":2}]';
     const late = new RecordingClient([row(1)]);
-    const refused = await cancelAppointmentsTool(CLIENT, [1], true, false, late, late.cache);
+    const refused = await cancelAppointmentsTool(CLIENT, [1], true, false, undefined, late, late.cache);
     expect(refused.success).toBe(false);
     expect(refused.rejected[0].reason).toContain('rule 0 {"programId":"three","hours":2}');
     expect(late.callCount).toBe(0);
 
     const plain = new RecordingClient([row(1)]);
-    const ok = await cancelAppointmentsTool(CLIENT, [1], false, false, plain, plain.cache);
+    const ok = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, plain, plain.cache);
     expect(ok.success).toBe(true);
     expect(plain.posts.map((post) => post.data.Execute)).toEqual(["cancel"]);
   });
@@ -432,7 +432,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
   it("refuses, with no lookup and no write, when the site record has no TimeZone", async () => {
     const client = new RecordingClient([row(1)]);
     client.siteZone = null;
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.cancelled).toEqual([]);
     expect(result.rejected).toHaveLength(1);
@@ -449,7 +449,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
     client.get = async () => {
       throw new Error("Mindbody API Error: down (Code: 500)");
     };
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].id).toBe(-1);
     expect(result.rejected[0].reason).toContain("site lookup failed: Mindbody API Error: down (Code: 500)");
@@ -459,7 +459,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
   it("refuses when the site's zone is not a valid IANA name", async () => {
     const client = new RecordingClient([row(1)]);
     client.siteZone = "Pacific Standard Time";
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].reason).toContain('no usable TimeZone (got "Pacific Standard Time")');
     expect(client.posts).toHaveLength(0);
@@ -469,7 +469,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
     process.env[SITE_TIMEZONE_ENV] = "Asia/Hong_Kong";
     const client = new RecordingClient([row(1, { StartDateTime: siteLocal(2 * HOUR_MS, "Asia/Hong_Kong") })]);
     client.siteZone = null;
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(client.posts).toHaveLength(1);
   });
@@ -477,7 +477,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
   it("refuses to write when MINDBODY_SITE_TIMEZONE disagrees with the site record's zone", async () => {
     process.env[SITE_TIMEZONE_ENV] = "Asia/Hong_Kong";
     const client = new RecordingClient([row(1)]);
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.rejected[0].id).toBe(-1);
     expect(result.rejected[0].reason).toContain("disagrees with the site record's TimeZone");
@@ -496,7 +496,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
           Sites: [{ Id: 1, Name: "A", TimeZone: SITE_TZ }, { Id: 2, Name: "B", TimeZone: SITE_TZ }],
           PaginationResponse: { RequestedLimit: 200, RequestedOffset: 0, PageSize: 2, TotalResults: 2 },
         }) as any;
-      const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+      const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
       expect(result.success).toBe(false);
       expect(result.rejected[0].reason).toContain("this API key reaches 2 sites");
       expect(client.posts).toHaveLength(0);
@@ -509,7 +509,7 @@ describe("cancelAppointmentsTool — fails closed without a site timezone", () =
 describe("cancelAppointmentsTool — execution", () => {
   it("cancels each verified id with exactly one POST, Execute cancel, SendEmail false", async () => {
     const client = new RecordingClient([row(1), row(2), { Id: 99, ClientId: CLIENT }]);
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2], undefined, undefined, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], undefined, undefined, undefined, client, client.cache);
     expect(result.success).toBe(true);
     expect(result.rejected).toEqual([]);
     expect(result.cancelled).toEqual([
@@ -522,11 +522,56 @@ describe("cancelAppointmentsTool — execution", () => {
     ]);
   });
 
+  it("sends Test: true on a dry run and reports that nothing was cancelled", async () => {
+    const client = new RecordingClient([row(1), row(2), { Id: 99, ClientId: CLIENT }]);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], undefined, undefined, true, client, client.cache);
+    expect(result).toMatchObject({ success: true, dryRun: true, cancelled: [], rejected: [] });
+    expect(result.message).toContain("saved nothing");
+    expect(client.posts.map((post) => post.data)).toEqual([
+      { AppointmentId: 1, Execute: "cancel", SendEmail: false, Test: true },
+      { AppointmentId: 2, Execute: "cancel", SendEmail: false, Test: true },
+    ]);
+  });
+
+  it("still applies the verification guards to a dry run", async () => {
+    const client = new RecordingClient([row(1, { Status: "Cancelled" })]);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.rejected[0].reason).toContain("cannot be cancelled");
+    expect(client.posts).toHaveLength(0);
+  });
+
+  it("refuses a dry run combined with lateCancel, sendEmail or a non-boolean test", async () => {
+    for (const args of [
+      [true, false, true],
+      [false, true, true],
+      [false, false, "true"],
+    ] as const) {
+      const client = new RecordingClient([row(1)]);
+      const result = await cancelAppointmentsTool(CLIENT, [1], args[0], args[1], args[2] as any, client, client.cache);
+      expect(result.success).toBe(false);
+      expect(result.rejected[0].reason).toContain("test");
+      expect(client.callCount).toBe(0);
+    }
+  });
+
+  it("does not claim a cancellation when a dry run fails partway through", async () => {
+    const client = new RecordingClient([row(1), row(2), row(3)], (_url, data, index) => {
+      if (index === 1) throw new Error("Mindbody API Error: Test mode is not allowed (Code: 400)");
+      return { Appointment: { Id: data.AppointmentId, Status: "Cancelled" } };
+    });
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2, 3], false, false, true, client, client.cache);
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toEqual([]);
+    expect(result.message).toContain("nothing was saved");
+    expect(result.message).not.toContain("Cancelled 1");
+  });
+
   it("sends Execute latecancel and honours sendEmail", async () => {
     process.env[LATE_CANCEL_WINDOW_ENV] = "72"; // row() starts in 48h
     try {
       const client = new RecordingClient([row(1)]);
-      const result = await cancelAppointmentsTool(CLIENT, [1], true, true, client, client.cache);
+      const result = await cancelAppointmentsTool(CLIENT, [1], true, true, undefined, client, client.cache);
       expect(result.cancelled).toEqual([{ id: 1, status: "LateCancelled", startDateTime: "echoed" }]);
       expect(client.posts.map((post) => post.data)).toEqual([{ AppointmentId: 1, Execute: "latecancel", SendEmail: true }]);
     } finally {
@@ -537,7 +582,7 @@ describe("cancelAppointmentsTool — execution", () => {
   it("falls back to the looked-up start time when the response omits it", async () => {
     const start = siteLocal(3 * DAY_MS);
     const client = new RecordingClient([row(1, { StartDateTime: start })], () => ({}));
-    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1], false, false, undefined, client, client.cache);
     expect(result.cancelled).toEqual([{ id: 1, status: "Cancelled", startDateTime: start }]);
   });
 
@@ -546,7 +591,7 @@ describe("cancelAppointmentsTool — execution", () => {
       if (index === 1) throw new Error("Mindbody API Error: nope (Code: 400)");
       return { Appointment: { Id: data.AppointmentId, Status: "Cancelled", StartDateTime: "echoed" } };
     });
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2, 3], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2, 3], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.cancelled).toEqual([{ id: 1, status: "Cancelled", startDateTime: "echoed" }]);
     expect(result.rejected).toEqual([{ id: 2, reason: "Mindbody API Error: nope (Code: 400)" }]);
@@ -560,7 +605,7 @@ describe("cancelAppointmentsTool — execution", () => {
       if (index === 1) throw new Error("boom");
       return { Appointment: { Id: data.AppointmentId, Status: "Cancelled", StartDateTime: "echoed" } };
     });
-    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, client, client.cache);
+    const result = await cancelAppointmentsTool(CLIENT, [1, 2], false, false, undefined, client, client.cache);
     expect(result.success).toBe(false);
     expect(result.cancelled).toHaveLength(1);
     expect(result.rejected).toEqual([{ id: 2, reason: "boom" }]);
@@ -989,11 +1034,73 @@ describe("updateAppointmentTool — test (dry run, issue #30)", () => {
 });
 
 describe("addAppointmentTool", () => {
+  const start = "2030-01-01T10:00:00";
+
   it("never sends ExecutePayment, even when the caller passes it", async () => {
     const client = new RecordingClient([], () => ({ Appointment: { Id: 1, Status: "Booked" } }));
-    const result = await addAppointmentTool(CLIENT, 42, 1, 9, "2030-01-01T10:00:00", undefined, undefined, undefined, true, false, undefined, client);
+    const result = await addAppointmentTool(CLIENT, 42, 1, 9, start, undefined, undefined, undefined, true, false, undefined, undefined, client);
     expect(result.success).toBe(true);
     expect("ExecutePayment" in client.posts[0].data).toBe(false);
+  });
+
+  it("sends Test: true on a dry run and returns no appointment", async () => {
+    const client = new RecordingClient([], () => ({ Appointment: { Id: 1, Status: "Booked" } }));
+    const result = await addAppointmentTool(CLIENT, 42, 1, 9, start, undefined, undefined, undefined, undefined, false, false, true, client);
+    expect(client.posts).toHaveLength(1);
+    expect(client.posts[0].data.Test).toBe(true);
+    expect(result).toMatchObject({ success: true, dryRun: true });
+    expect("appointment" in result).toBe(false);
+    expect(result.message).toContain("saved nothing");
+  });
+
+  it("does not send Test on a real booking", async () => {
+    const booked = {
+      Appointment: {
+        Id: 8003,
+        Status: "Booked",
+        StartDateTime: start,
+        EndDateTime: "2030-01-01T11:00:00",
+        Duration: 60,
+        SessionTypeId: 9,
+        LocationId: 1,
+      },
+    };
+    const client = new RecordingClient([], () => booked);
+    const result = await addAppointmentTool(CLIENT, 42, 1, 9, start, undefined, undefined, undefined, undefined, false, false, false, client);
+    expect("Test" in client.posts[0].data).toBe(false);
+    expect(result.appointment?.id).toBe(8003);
+    expect(result.dryRun).toBeUndefined();
+  });
+
+  it("refuses a non-boolean test, with no POST", async () => {
+    const client = new RecordingClient([], () => ({}));
+    const result = await addAppointmentTool(CLIENT, 42, 1, 9, start, undefined, undefined, undefined, undefined, false, false, "true" as any, client);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("is not a boolean");
+    expect(client.posts).toHaveLength(0);
+  });
+
+  it("refuses test with sendEmail or applyPayment, with no POST", async () => {
+    for (const [sendEmail, applyPayment] of [[true, false], [false, true]]) {
+      const client = new RecordingClient([], () => ({}));
+      const result = await addAppointmentTool(
+        CLIENT, 42, 1, 9, start, undefined, undefined, undefined,
+        undefined, sendEmail, applyPayment, true, client
+      );
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("dry run");
+      expect(client.posts).toHaveLength(0);
+    }
+  });
+
+  it("returns a Mindbody refusal of a dry run as success: false, not a dry-run success", async () => {
+    const client = new RecordingClient([], () => {
+      throw new Error("Mindbody API Error: Test mode is not allowed for this endpoint (Code: 400)");
+    });
+    const result = await addAppointmentTool(CLIENT, 42, 1, 9, start, undefined, undefined, undefined, undefined, false, false, true, client);
+    expect(result.success).toBe(false);
+    expect(result.dryRun).toBeUndefined();
+    expect(result.message).toContain("Test mode is not allowed");
   });
 });
 
@@ -1481,7 +1588,7 @@ describe("addAppointmentTool — maps the spec's Appointment model (C-2)", () =>
     // body, which is all C-2 needs: the defect was in the response mapping.
     const client = new RecordingValidatingClient(booked);
     const result = await addAppointmentTool(
-      "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, client
+      "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, undefined, client
     );
 
     expect(result).toEqual({
@@ -1513,7 +1620,7 @@ describe("addAppointmentTool — maps the spec's Appointment model (C-2)", () =>
     for (const [index, appointment] of rows.entries()) {
       const client = new RecordingValidatingClient({ ...booked, Appointment: appointment });
       const result = await addAppointmentTool(
-        "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, client
+        "c-1001", 42, 1, 9, "2026-03-06T09:00:00", undefined, undefined, undefined, undefined, false, undefined, undefined, client
       );
       expect(result.appointment?.staffName).toBe(index === 0 ? "Ada Lovelace" : undefined);
       expect(result.appointment?.sessionTypeId).toBe(9);

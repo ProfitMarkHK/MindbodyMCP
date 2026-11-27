@@ -189,6 +189,10 @@ interface UpdateAppointmentResponse {
 
 The spec is not proof: `POST /client/addclient` on `-99` refuses `Test: true` outright. The live tier probes this endpoint (`updateAppointment test=true validates a notes change and leaves the appointment unchanged`): it sends a dry run that would change the notes, then re-reads the appointment and requires the original notes, times, staff and status. **Observed on `-99` on 2026-11-16:** Mindbody accepted the dry run and the re-read showed the original notes unchanged.
 
+`addAppointment`, `cancelAppointments` and `addClientToClass` take the same `test` argument with the same result contract: every guard still runs, `Test: true` is sent only when `test === true`, and a successful dry run returns `success: true`, `dryRun: true`, no created id and a message saying nothing was saved. A non-boolean is refused before any request. `addAppointment` refuses `test: true` with `sendEmail` or `applyPayment`; `cancelAppointments` refuses it with `sendEmail` or `lateCancel`, because those would email a client or forfeit a service if the flag were ignored. A dry-run booking leaves the class cache untouched.
+
+Observed on `-99`: `addClientToClass Test: true` was accepted on 2026-11-17 (60 future classes, no visits saved). On 2026-11-27 the live tier saw all three save nothing: no visit, no appointment (the same slot then booked for real), and a cancellation dry run left the appointment `Booked` (a real cancel then removed it from the same lookup). This does not show that Mindbody refuses an invalid request in test mode. See E-6/E-7 in `docs/mindbody-spec-discrepancies.md`.
+
 #### Session type changes
 
 The use case is a booking made under the wrong service (for example "Extensions – Application" when the client had "Extensions – Removal"), corrected before checkout so the sale uses the right pricing option. The appointment is usually already `Arrived`. Cancelling and rebooking is not an alternative: an `Arrived` appointment cannot be cancelled here (see "Arrived appointments"), and a rebooked appointment loses its history.
@@ -239,6 +243,7 @@ Cancels future appointments for one client. This is the only cancel path in the 
 | `appointmentIds` | number[] | Yes | 1 to 3 appointment IDs, no duplicates | - |
 | `lateCancel` | boolean | No | Record as late cancellations. Honoured only inside the site's late-cancel window (see below) | false |
 | `sendEmail` | boolean | No | Email the client about the cancellation | false |
+| `test` | boolean | No | Dry run, sent as `Test` with `Execute: cancel`. Every guard still runs; nothing is saved and the result has `dryRun: true` with an empty `cancelled` list. Refused with `lateCancel` or `sendEmail`. | `false` (`Test` omitted) |
 
 #### Guards
 
@@ -260,7 +265,7 @@ The `Cancelled` / `LateCancelled` status check is defence in depth. The sandbox 
 
 #### Email is not dry-run
 
-There is no dry-run for cancellation. `sendEmail` defaults to `false`, but `sendEmail: true` makes Mindbody email the real client (only if the client has an email address and automatic emails have been set up), and the cancellation itself is committed. Nothing in the tool previews or undoes either.
+`sendEmail` defaults to `false`, but `sendEmail: true` makes Mindbody email the real client (only if the client has an email address and automatic emails have been set up), and the cancellation itself is committed. Nothing in the tool previews or undoes either. A dry run is the exception: `test: true` refuses `sendEmail: true` and `lateCancel: true` before any request, because the first would email a client and the second would forfeit a service if `Test` were ignored. A successful dry run validates every ID, saves nothing and returns `dryRun: true` with an empty `cancelled` list; a failure partway through reports "nothing was saved" rather than a partial cancellation.
 
 #### Late-cancel window
 
@@ -307,6 +312,7 @@ Code: `lateCancelConfig`, `resolveLateCancelWindow` and `lateCancelRefusalFor` i
 ```typescript
 interface CancelAppointmentsResponse {
   success: boolean;
+  dryRun?: true; // only on a successful test call; cancelled is then empty
   cancelled: Array<{ id: number; status: string; startDateTime: string }>;
   rejected: Array<{ id: number; reason: string }>; // id -1 means the whole request was rejected
   message: string;

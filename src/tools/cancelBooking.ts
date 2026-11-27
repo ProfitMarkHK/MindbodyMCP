@@ -425,7 +425,7 @@ export async function cancelClientBookingTool(
   let toolResult: any;
   if (booking.kind === 'appointment') {
     tool = 'cancelAppointments';
-    toolResult = await cancelAppointmentsTool(req.clientId, [booking.appointmentId!], late, sendEmail, recorder.client, cache);
+    toolResult = await cancelAppointmentsTool(req.clientId, [booking.appointmentId!], late, sendEmail, undefined, recorder.client, cache);
   } else if (booking.kind === 'enrollment') {
     tool = 'cancelEnrollmentVisits';
     toolResult = await cancelEnrollmentVisitsTool(req.clientId, [booking.visitId], late, sendEmail, recorder.client, cache);

@@ -200,6 +200,7 @@ Book a client into a class.
 - `classId` (required): Class ID to book
 - `requirePayment` (optional): Require payment (default true)
 - `waitlist` (optional): Add to waitlist if full
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the booking and saves no visit; the result has `dryRun: true` and no `visitId`, and the class cache is not cleared. Observed on `-99` (2026-11-17)
 
 #### `removeClientFromClass`
 Cancel a client's class booking.
@@ -521,6 +522,7 @@ Book a new appointment.
 - `sessionTypeId` (required): Service type ID
 - `startDateTime` (required): Start time (ISO format)
 - `notes` (optional): Appointment notes
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the booking and saves no appointment; the result has `dryRun: true` and no `appointment`. Refused with `sendEmail` or `applyPayment`. Observed on `-99` (2026-11-27, E-6)
 
 #### `updateAppointment`
 Update an existing appointment: reschedule, change staff, session type or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
@@ -557,6 +559,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
 - `lateCancel` (optional): Record as late cancellations (default false). Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window). Appointment rules key on `programId`/`sessionTypeId`: an appointment has no pricing-option id, so a `serviceId` rule ahead of the match refuses
 - `sendEmail` (optional): Email the client about the cancellation (default false)
+- `test` (optional, default false): Dry run, sent as `Test: true` with `Execute: cancel`. Every guard still runs; nothing is saved and the result has `dryRun: true` with an empty `cancelled` list. Refused with `lateCancel` or `sendEmail`. Observed on `-99` (2026-11-27, E-7)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call.
@@ -567,7 +570,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 
 All-or-nothing: if any ID fails a guard, nothing is cancelled and `rejected` gives the reason for each failing ID. If the verification lookup itself fails, nothing is cancelled. Once the guards pass, cancellations are sent one at a time via `POST /appointment/updateappointment` with `Execute: cancel` (or `latecancel`). If one of those writes fails, the cancellations already made stand: they are listed in `cancelled`, and the failing ID appears in `rejected`.
 
-**Returns:** `{ success, cancelled: [{ id, status, startDateTime }], rejected: [{ id, reason }], message }`
+**Returns:** `{ success, dryRun?, cancelled: [{ id, status, startDateTime }], rejected: [{ id, reason }], message }`
 
 #### `cancelClientBooking`
 Cancel one booking for one client and choose late or normal. A resolver: it finds the booking and decides, then hands the write to `cancelAppointments`, `cancelEnrollmentVisits` or `removeClientFromClass`, so every guard of those tools still applies. It never calls a write endpoint itself. Code: `cancelClientBookingTool(request, client?, cache?)` in `src/tools/cancelBooking.ts`.
