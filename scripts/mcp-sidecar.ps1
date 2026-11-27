@@ -31,7 +31,7 @@
   sandbox (default) or prod. prod connects to the LIVE Mindbody site.
 
 .PARAMETER Port
-  Loopback port to bind. Default 3000.
+  Loopback port to bind. Default: 3000 for sandbox, 3001 for prod, so both can run at once.
 
 .PARAMETER Background
   Detach, then poll /health until the server answers. Default is foreground, where
@@ -54,7 +54,7 @@
 param(
   [ValidateSet('sandbox', 'prod')]
   [string]$Profile = 'sandbox',
-  [int]$Port = 3000,
+  [int]$Port = 0,
   [switch]$Background,
   [switch]$Stop
 )
@@ -72,6 +72,9 @@ if ($Profile -eq 'prod') {
   $entry = Join-Path $root 'scripts\dev-sandbox.ts'
   $refs = Join-Path $root '.env.op-refs'
 }
+# Each profile has its own default port, so both can run at once. -Port overrides it.
+# This must run before -Stop and the health URL use $Port.
+if ($Port -eq 0) { $Port = if ($Profile -eq 'prod') { 3001 } else { 3000 } }
 
 $stateDir = Join-Path $env:LOCALAPPDATA 'mindbody-mcp'
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
@@ -103,6 +106,18 @@ function Get-PortOwners {
   return @($owners)
 }
 
+function Test-IsSidecar {
+  # A process is ours to stop only when its command line runs this profile's entry with
+  # --transport http. A pid file is not proof: pids are reused, so a stale file can name an
+  # unrelated process.
+  param([int]$ProcessId)
+  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+  if (-not $proc -or -not $proc.CommandLine) { return $false }
+  $line = $proc.CommandLine
+  return ($line.IndexOf($entry, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+          $line.IndexOf('--transport http', [StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
 function Stop-Tree {
   param([int]$ProcessId)
   # /T is required: `bun --watch` forks the real listener, so killing only the
@@ -115,17 +130,22 @@ if ($Stop) {
   $targets = New-Object System.Collections.Generic.List[int]
   if (Test-Path $pidFile) {
     $raw = (Get-Content $pidFile -Raw).Trim()
-    if ($raw -match '^\d+$') { $targets.Add([int]$raw) }
+    if ($raw -match '^\d+$' -and (Test-IsSidecar -ProcessId ([int]$raw))) { $targets.Add([int]$raw) }
   }
-  foreach ($owner in Get-PortOwners) { if (-not $targets.Contains($owner)) { $targets.Add($owner) } }
+  Remove-Item $pidFile -ErrorAction SilentlyContinue
+  foreach ($owner in Get-PortOwners) {
+    if (-not (Test-IsSidecar -ProcessId $owner)) {
+      Fail @("Port $Port is held by pid $owner, which is not a sidecar for profile $Profile. Not stopping it.")
+    }
+    if (-not $targets.Contains($owner)) { $targets.Add($owner) }
+  }
 
   if ($targets.Count -eq 0) {
-    Write-Host "Nothing listening on 127.0.0.1:$Port and no pid file at $pidFile."
+    Write-Host "No sidecar for profile $Profile is running on 127.0.0.1:$Port."
     exit 0
   }
 
   foreach ($target in $targets) { Stop-Tree -ProcessId $target }
-  Remove-Item $pidFile -ErrorAction SilentlyContinue
   Write-Host "Stopped sidecar (pid $($targets -join ', ')) on port $Port."
   exit 0
 }

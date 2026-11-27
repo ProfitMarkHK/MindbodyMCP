@@ -37,7 +37,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
 PROFILE="sandbox"
-PORT="3000"
+PORT=""
 BACKGROUND="false"
 STOP="false"
 
@@ -47,7 +47,7 @@ Start a loopback Streamable HTTP MCP sidecar, resolving credentials from 1Passwo
 
 Options:
   -p, --profile sandbox|prod   Credential profile (default: sandbox)
-      --port <n>               Loopback port (default: 3000)
+      --port <n>               Loopback port (default: 3000 sandbox, 3001 prod)
   -d, --background             Detach, then poll /health until it answers
       --stop                   Stop a running sidecar (kills the process tree)
   -h, --help                   Show this help
@@ -81,6 +81,10 @@ case "$PROFILE" in
   prod)    REFS="$ROOT/.env.op-refs.prod"; ENTRY="$ROOT/src/index.ts" ;;
   *) echo "Invalid --profile '$PROFILE' (expected sandbox or prod)" >&2; exit 2 ;;
 esac
+# Each profile has its own default port, so both can run at once. --port overrides it.
+if [ -z "$PORT" ]; then
+  case "$PROFILE" in prod) PORT="3001" ;; *) PORT="3000" ;; esac
+fi
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mindbody-mcp"
 mkdir -p "$STATE_DIR"
@@ -110,27 +114,50 @@ kill_tree() {
   kill "$pid" 2>/dev/null || true
 }
 
+# A process is ours to stop only when its command line runs this profile's entry with
+# --transport http. A pid file is not proof: pids are reused, so a stale file can name an
+# unrelated process.
+is_sidecar() {
+  local args
+  args="$(ps -o args= -p "$1" 2>/dev/null || true)"
+  case "$args" in
+    *"$ENTRY"*"--transport http"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ------------------------------------------------------------------ --stop
 if [ "$STOP" = "true" ]; then
   targets=""
   if [ -f "$PID_FILE" ]; then
-    targets="$(tr -dc '0-9' <"$PID_FILE")"
+    pid_from_file="$(tr -dc '0-9' <"$PID_FILE")"
+    if [ -n "$pid_from_file" ] && is_sidecar "$pid_from_file"; then
+      targets="$pid_from_file"
+    fi
   fi
+  rm -f "$PID_FILE"
+
   owner="$(port_owner_pid)"
-  if [ -n "$owner" ] && [ "$owner" != "$targets" ]; then
-    targets="$targets $owner"
+  if [ -n "$owner" ]; then
+    if ! is_sidecar "$owner"; then
+      echo "Port $PORT is held by pid $owner, which is not a sidecar for profile $PROFILE. Not stopping it." >&2
+      exit 1
+    fi
+    case " $targets " in
+      *" $owner "*) ;;
+      *) targets="$targets $owner" ;;
+    esac
   fi
 
   if [ -z "$(echo "$targets" | tr -d ' ')" ]; then
-    echo "Nothing listening on 127.0.0.1:$PORT and no pid file at $PID_FILE."
+    echo "No sidecar for profile $PROFILE is running on 127.0.0.1:$PORT."
     exit 0
   fi
 
   for pid in $targets; do
     kill_tree "$pid"
   done
-  rm -f "$PID_FILE"
-  echo "Stopped sidecar (pid $(echo "$targets" | tr ' ' ',')) on port $PORT."
+  echo "Stopped sidecar (pid $(echo $targets | tr ' ' ',')) on port $PORT."
   exit 0
 fi
 

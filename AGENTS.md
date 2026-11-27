@@ -211,8 +211,10 @@ working against Mindbody.
 ```
 
 Both wrap `op run --env-file <refs> -- bun --watch run <entry> --transport http
---port 3000 --host 127.0.0.1` with `MCP_ALLOW_UNAUTHENTICATED=true`, where `<entry>` is
-`scripts/dev-sandbox.ts` for `sandbox` and `src/index.ts` for `prod`. Why a sidecar at
+--port <port> --host 127.0.0.1` with `MCP_ALLOW_UNAUTHENTICATED=true`, where `<entry>` is
+`scripts/dev-sandbox.ts` for `sandbox` and `src/index.ts` for `prod`. The port is 3000 for
+`sandbox` and 3001 for `prod`, so both can run at once; `-Port` or `--port` overrides it.
+Why a sidecar at
 all: a client that spawns `op run` itself dies 60 s after a locked vault with
 `error initializing client: authorization timeout`, with nothing on screen to explain it.
 Starting it separately moves that failure into a terminal you can see and keeps the
