@@ -522,7 +522,7 @@ Book a new appointment.
 - `sessionTypeId` (required): Service type ID
 - `startDateTime` (required): Start time (ISO format)
 - `notes` (optional): Appointment notes
-- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the booking and saves no appointment; the result has `dryRun: true` and no `appointment`. Refused with `sendEmail` or `applyPayment`. Spec-aligned but not live-verified (E-6)
+- `test` (optional, default false): Dry run, sent as `Test: true`. Mindbody validates the booking and saves no appointment; the result has `dryRun: true` and no `appointment`. Refused with `sendEmail` or `applyPayment`. Observed on `-99` (2026-11-27, E-6)
 
 #### `updateAppointment`
 Update an existing appointment: reschedule, change staff, session type or notes, or apply a status action. Rescheduling is an update with a new `startDateTime`. This tool does not cancel; use `cancelAppointments`.
@@ -559,7 +559,7 @@ Cancel future appointments for one client. This is the only cancel path in the s
 - `appointmentIds` (required): 1 to 3 appointment IDs, no duplicates
 - `lateCancel` (optional): Record as late cancellations (default false). Refused unless a late-cancel window applies (see "Late-cancel windows" under Configuration), and then only for an appointment starting within that many hours (the v6 spec does not expose the site's window). Appointment rules key on `programId`/`sessionTypeId`: an appointment has no pricing-option id, so a `serviceId` rule ahead of the match refuses
 - `sendEmail` (optional): Email the client about the cancellation (default false)
-- `test` (optional, default false): Dry run, sent as `Test: true` with `Execute: cancel`. Every guard still runs; nothing is saved and the result has `dryRun: true` with an empty `cancelled` list. Refused with `lateCancel` or `sendEmail`. Spec-aligned but not live-verified (E-7)
+- `test` (optional, default false): Dry run, sent as `Test: true` with `Execute: cancel`. Every guard still runs; nothing is saved and the result has `dryRun: true` with an empty `cancelled` list. Refused with `lateCancel` or `sendEmail`. Observed on `-99` (2026-11-27, E-7)
 
 **Guards.** All are checked before any cancellation is sent:
 - One client per call.

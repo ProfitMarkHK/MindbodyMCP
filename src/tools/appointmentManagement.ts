@@ -144,7 +144,7 @@ export async function getStaffAppointmentsTool(
 
 // Add appointment. `test: true` sends Test and returns a dry-run result with no
 // appointment. Test is documented on AddAppointmentRequest in docs/openapi.json
-// but not live-verified (E-6).
+// and was observed on -99 (E-6).
 export async function addAppointmentTool(
   clientId: string,
   staffId: number,
@@ -200,10 +200,9 @@ export async function addAppointmentTool(
       StaffRequested: staffRequested,
       SendEmail: sendEmail,
       ApplyPayment: applyPayment,
-      // SPEC-ALIGNED BUT UNVERIFIED: AddAppointmentRequest documents Test
-      // ("validated, but no new appointment data is added"), but the -99 probe
-      // was blocked by a 403 on POST /usertoken/issue. No sandbox observation
-      // exists for this endpoint; see docs/mindbody-spec-discrepancies.md, E-6.
+      // SANDBOX-OBSERVED (matches spec, 2026-11-27): -99 accepted Test: true and
+      // saved no appointment; the same slot then booked for real.
+      // See docs/mindbody-spec-discrepancies.md, E-6.
       ...(test === true ? { Test: true } : {}),
     });
 
@@ -730,7 +729,7 @@ function cancellationRejectionReason(
  * guards still run, but no cancellation is saved: the result carries
  * `dryRun: true` and an empty `cancelled` list. It is refused with `lateCancel`
  * or `sendEmail`, which would forfeit a service or email a client if the flag
- * were ignored. The flag is spec-aligned but not live-verified (E-7).
+ * were ignored. The flag was observed on -99 (E-7).
  */
 export async function cancelAppointmentsTool(
   clientId: string,
@@ -840,10 +839,9 @@ export async function cancelAppointmentsTool(
         AppointmentId: id,
         Execute: execute,
         SendEmail: sendEmail ?? false,
-        // SPEC-ALIGNED BUT UNVERIFIED: UpdateAppointmentRequest documents Test
-        // on Execute: cancel, but the -99 probe was blocked by a 403 on
-        // POST /usertoken/issue. No sandbox observation exists for this path;
-        // see docs/mindbody-spec-discrepancies.md, E-7.
+        // SANDBOX-OBSERVED (matches spec, 2026-11-27): -99 accepted Execute: cancel
+        // with Test: true and the appointment stayed Booked.
+        // See docs/mindbody-spec-discrepancies.md, E-7.
         ...(test === true ? { Test: true } : {}),
       });
       const row = verified.get(id);

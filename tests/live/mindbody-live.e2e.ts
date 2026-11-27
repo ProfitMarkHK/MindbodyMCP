@@ -1556,8 +1556,8 @@ describe('live tier — appointments', () => {
     expect(typeof result.totalAppointments).toBe('number');
   });
 
-  // `Test` is documented on AddAppointmentRequest but has no recorded
-  // sandbox observation (E-6). Send it against the first availability-derived
+  // `Test` is documented on AddAppointmentRequest and was observed on -99
+  // on 2026-11-27 (E-6). Send it against the first availability-derived
   // candidate BEFORE the real booking consumes that slot, then read the client's
   // appointments back. A refusal or a persisted booking is a failure, not a skip.
   const DRY_RUN_ADD_APPOINTMENT_TEST = 'addAppointment test: true validates a booking without saving it';
@@ -1780,7 +1780,7 @@ describe('live tier — appointments', () => {
   });
 
   // `Test` is documented on UpdateAppointmentRequest with Execute:
-  // cancel, but has no recorded sandbox observation (E-7). The appointment is
+  // cancel, and was observed on -99 on 2026-11-27 (E-7). The appointment is
   // still Booked here (arrival runs later), so a normal cancel is a valid probe.
   // A refusal or a persisted cancellation is a failure, not a skip.
   const DRY_RUN_CANCEL_TEST = 'cancelAppointments test: true validates a cancellation without saving it';

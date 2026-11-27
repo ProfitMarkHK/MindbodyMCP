@@ -191,7 +191,7 @@ The spec is not proof: `POST /client/addclient` on `-99` refuses `Test: true` ou
 
 `addAppointment`, `cancelAppointments` and `addClientToClass` take the same `test` argument with the same result contract: every guard still runs, `Test: true` is sent only when `test === true`, and a successful dry run returns `success: true`, `dryRun: true`, no created id and a message saying nothing was saved. A non-boolean is refused before any request. `addAppointment` refuses `test: true` with `sendEmail` or `applyPayment`; `cancelAppointments` refuses it with `sendEmail` or `lateCancel`, because those would email a client or forfeit a service if the flag were ignored. A dry-run booking leaves the class cache untouched.
 
-Evidence differs by endpoint: `addClientToClass Test: true` was accepted on `-99` on 2026-11-17 (60 future classes, no visits saved). `addAppointment Test: true` and `cancelAppointments` with `Execute: cancel` + `Test: true` are **spec-aligned but unverified** — the fresh `-99` probe was blocked by HTTP 403 on `POST /usertoken/issue`. The live tier now probes both and fails loudly if either refuses or persists, but no passing result is claimed here. See E-6/E-7 in `docs/mindbody-spec-discrepancies.md`.
+Observed on `-99`: `addClientToClass Test: true` was accepted on 2026-11-17 (60 future classes, no visits saved). On 2026-11-27 the live tier saw all three save nothing: no visit, no appointment (the same slot then booked for real), and a cancellation dry run left the appointment `Booked` (a real cancel then removed it from the same lookup). This does not show that Mindbody refuses an invalid request in test mode. See E-6/E-7 in `docs/mindbody-spec-discrepancies.md`.
 
 #### Session type changes
 

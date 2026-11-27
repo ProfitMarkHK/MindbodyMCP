@@ -477,7 +477,7 @@ The tallies below this point are from the 2026-10-28 run (29 tests), kept for th
 Read every `LIVE …` block a run prints, not just the pass/fail tally: the
 `LIVE E2E INCOMPLETE` summary names any test that returned early.
 
-## Dry-run probes for booking and cancellation (not yet run)
+## Dry-run probes for booking and cancellation
 
 `test: true` is now exposed on `addClientToClass`, `addAppointment` and
 `cancelAppointments`. The tier contains three new probes, each of which reads
@@ -499,8 +499,11 @@ a regression of the count or ownership guard would save nothing. ID-producing
 chain writes (client, class seat, appointment, sale, contract) remain real: a
 dry run there would break the read-backs downstream.
 
-**None of these new probes has been run in this worktree.** The fresh `-99`
-attempt was blocked by HTTP 403 on `POST /usertoken/issue` (credentials
-unavailable), so `addAppointment Test` and cancellation `Execute: cancel` +
-`Test` remain spec-aligned but unverified. A green unit suite does not change
-that; only a passing live run does.
+**All three passed on `-99` on 2026-11-27.** The run was filtered with `-t` to
+these probes and the tests they depend on: 20 passed, 0 failed, 24 filtered out
+(including the comp-paid sale and the contract purchase, so it is not a full-tier
+result). Nothing was saved by any dry run. For the appointment probes a real
+write later in the run showed the read-back would have caught one; the class
+probe had no such control. Earlier that day `POST /usertoken/issue` answered 403
+`StaffMemberNotFound`; it issued a token again, with the same values, after a
+manual website login with them. The login is not proven to be the cause.
