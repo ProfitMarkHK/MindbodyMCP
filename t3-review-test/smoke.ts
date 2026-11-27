@@ -15,3 +15,4 @@ export function isAdult(age: number): boolean {
 }
 
 export const marker1 = 1;
+export const marker2 = 2;
