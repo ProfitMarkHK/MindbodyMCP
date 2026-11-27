@@ -76,7 +76,7 @@
     "node:dev:sse": "op run -- tsx src/index.ts --transport sse",
     "node:dev:http": "op run -- tsx src/index.ts --transport http",
     "prepublishOnly": "npm run build",
-    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "prepare": "node -e \"if(require('fs').existsSync('.git'))require('child_process').spawnSync('git',['config','core.hooksPath','.githooks'],{stdio:'inherit'})\"",
     "spec:update": "bun run scripts/update-spec.ts",
     "spec:coverage": "bun run scripts/spec-coverage.ts"
   },

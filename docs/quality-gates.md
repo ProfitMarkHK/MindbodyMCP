@@ -31,14 +31,23 @@ pre-commit hook with one command per clone:
 git config core.hooksPath .githooks
 ```
 
-That command is also the repo's `prepare` script, so `bun install` sets it on a
+The repo's `prepare` script runs that command, so `bun install` sets it on a
 fresh clone without anyone typing it. It is idempotent (`git config` overwrites
-one key) and it is a no-op outside a git checkout — the `prepare` line guards
-with `git rev-parse --git-dir` and swallows the error — so an install inside a
-Docker build that has no `.git` still succeeds. `core.hooksPath` is repo-local
-config and is **not** copied by a clone, which is exactly why the `prepare`
-script exists; run the command by hand if you ever clone with `--no-scripts`.
-The path is relative, so git resolves it against each worktree's own root.
+one key). It acts only when the package root has its own `.git` (a directory in
+a clone, a file in a linked worktree), so it does nothing in a source copy with
+no `.git`, and never touches the config of a repository that merely contains
+this package. A missing or failing `git` does not fail the install.
+`core.hooksPath` is repo-local config and is **not** copied by a clone, which is
+exactly why the `prepare` script exists; run the command by hand if you ever
+install with `--ignore-scripts`. The path is relative, so git resolves it
+against each worktree's own root.
+
+`prepare` is inline JavaScript (`node -e`) rather than shell syntax because it
+has to run under Bun's own shell on Windows, `cmd.exe` under npm and `sh`
+elsewhere. Bun's shell rejects `>/dev/null 2>&1` at parse time, which failed
+every `bun install` on Windows. `tests/prepare-script.test.ts` runs the script
+under Bun's shell on every platform, so Linux CI catches a return of that class
+of error. It does not cover `cmd.exe`.
 
 The hook file itself is committed at [`.githooks/pre-commit`](../.githooks/pre-commit),
 so it survives a fresh clone and needs no dependency install. It is wired with
@@ -100,7 +109,7 @@ its output so the side effect is never a surprise.
 | 9 | Change reviewed | applies | manual — peer review via `.github/PULL_REQUEST_TEMPLATE.md`. Never a gate that always passes. |
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. `bun run spec:coverage` lists which spec paths the tools reach and which they do not (informational, see below Gate 13). **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
-| 12 | Agent skill structure validates | **no-op** | **no-op for Claude Code extension keys** — `skills-ref` validates the open Agent Skills spec (6 fields), while Claude Code's schema is a strict superset. All 29 skills pass every portable property (name/description present, name lowercase, name matches directory, description within limits). **Do not edit the skills to satisfy the validator** — see gate 12 below. |
+| 12 | Agent skill structure validates | **retired** | **Retired 2026-11-22 — the skills it validated are no longer vendored in this repo.** `.agents/skills/` (29 stale skills) was removed; skills now come from a machine-level install at `E:\.agents\skills`, inherited by every project via the `skills` array in `~/.config/opencode/opencode.jsonc`. Retained analysis in case skills are ever re-vendored: see gate 12 below. |
 | 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
 
@@ -815,55 +824,44 @@ and not needed" from "forgotten":
     policy alongside the diff. It still writes both files and still exits 0 — it
     is a maintenance command, not a gate, and only Gate 16 blocks a commit.
 
-- **Gate 12 — agent skill structure (no-op for Claude Code extension keys).**
-  `npx --yes skills-ref validate <dir>` passes for 24 of the 29
-  `.agents/skills/*/` directories and fails for `handoff`,
-  `setup-matt-pocock-skills`, `teach`, `ubiquitous-language`, and `zoom-out` — all
-  five on disallowed frontmatter keys `argument-hint` and
-  `disable-model-invocation`. **This is a schema mismatch, not malformed skills.**
-  `skills-ref` implements the open Agent Skills spec, which permits exactly six
-  fields: `name`, `description`, `license`, `allowed-tools`, `metadata`,
-  `compatibility`. Claude Code's schema is a **strict superset** of that, and both
-  extension keys are documented, current, non-deprecated Claude Code fields. The
-  validator is behaving consistently — every passing skill has exactly `name` +
-  `description` and no extension keys — so there is no validator bug either. Both
-  sides are correct in their own domain.
+- **Gate 12 — agent skill structure (RETIRED 2026-11-22: no longer anything to
+  validate).** The 29 vendored skills this gate examined lived in
+  `.agents/skills/`; that directory is gone from the repo. Skills are now a
+  machine-level install at `E:\.agents\skills` — all 39 current skills from
+  `mattpocock/skills` — registered for OpenCode through the `skills` array in
+  `~/.config/opencode/opencode.jsonc`, so every project on the machine inherits
+  them and no repo needs to vendor its own copy. Refresh them from `E:\` with
+  `npx --yes skills@latest update -p`, or re-run
+  `npx --yes skills@latest add mattpocock/skills -s '*' -a opencode -y` there to
+  pick up new skills. With nothing vendored under the repo, `skills-ref
+  validate` has no input; if skills are ever re-vendored into a repo, the
+  findings below still apply and are kept for that case.
 
-  **Do not edit the skills to satisfy the validator.** Four of the five keys are
-  load-bearing:
-
-  - `disable-model-invocation: true` on `setup-matt-pocock-skills` and
-    `ubiquitous-language` stops skills that **write files into the repo** from being
-    auto-triggered. Removing it would let the model mutate repo config unprompted.
-    It also keeps those two descriptions out of the always-in-context catalogue.
-  - `argument-hint` on `handoff` is referenced by the skill's own body text ("If the
-    user passed arguments...") and is the only thing telling the user to pass one.
-
-  **Do not relocate the keys into `metadata:` either — that is a trap.** Claude Code
-  reads `disable-model-invocation` only as a **top-level** field, so moving it under
-  `metadata:` turns Gate 12 green while silently destroying all four guards, with
-  nothing failing anywhere. Recorded here so nobody repeats it.
-
-  What is still true and worth keeping: all 29 skills pass the *portable* properties
-  the validator usefully checks — `name` and `description` present, name lowercase,
-  name matches its directory, description within limits. The correct automated check
-  for this repo would validate against the **Claude Code** schema rather than
-  `skills-ref`, and a full `npx --yes` sweep still needs network access, so it is not
+  **Retained analysis (in case skills are ever re-vendored).** `npx --yes
+  skills-ref validate <dir>` passed for 24 of the 29 directories and failed for
+  `handoff`, `setup-matt-pocock-skills`, `teach`, `ubiquitous-language` and
+  `zoom-out` — all five on disallowed frontmatter keys `argument-hint` and
+  `disable-model-invocation`. **This was a schema mismatch, not malformed
+  skills:** `skills-ref` implements the open Agent Skills spec, which permits
+  exactly six fields (`name`, `description`, `license`, `allowed-tools`,
+  `metadata`, `compatibility`), while Claude Code's schema is a strict superset
+  and both extension keys are documented, current Claude Code fields. **Do not
+  edit the skills to satisfy the validator** — the keys are load-bearing
+  (`disable-model-invocation: true` stopped skills that write files into the
+  repo from auto-triggering; `argument-hint` on `handoff` is referenced by the
+  skill's own body text). **And do not relocate the keys into `metadata:`** —
+  Claude Code reads `disable-model-invocation` only as a top-level field, so the
+  move turns the validator green while silently destroying the guard, with
+  nothing failing anywhere. The correct automated check for vendored skills
+  validates against the **Claude Code** schema rather than `skills-ref`, and a
+  full `npx --yes` sweep needs network access, which is why this gate was never
   in the pre-commit runner.
-
-  Provenance, because it affects durability. The 29 skills were vendored by the
-  `vercel-labs/skills` CLI from a third-party repo. `skills-lock.json` records a
-  `computedHash` but **no version pin**, so a future `npx skills add` / `update`
-  tracks upstream HEAD. `.claude/skills/` is 29 **symlinks** into
-  `.agents/skills/`, so the two trees cannot drift — editing one updates both.
-  Upstream has since deleted `zoom-out` and `ubiquitous-language` outright, so
-  "fix it upstream" is not available for 2 of the 5.
 - **Not in the runner, and why.** Gates 4, 5, 9, 10 and 11 need human judgement
   and are enforced by the done-done block in `AGENTS.md`, `Claude.md`, and
   `.github/copilot-instructions.md` pointing at this file. Gate 3b and Gate 12 are
   excluded for different reasons: Gate 3's complexity budget (3b) is not wired;
-  Gate 12's check needs `npx --yes` network access and, for
-  the skills that matter, the Claude Code schema rather than `skills-ref`. Gate 8
+  Gate 12 is retired outright — the skills it validated are no longer vendored
+  in this repo (see its entry). Gate 8
   is **half** in: its secret scan and staged-`.env` guard run as the first gate of
   the runner, so every commit is covered; only `npm audit` is left out, because it
   needs the registry and CI runs it. The runner covers Gates 1, 2, 3 (lint only), 6, 7, 8, 13
