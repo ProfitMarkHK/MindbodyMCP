@@ -9,3 +9,7 @@ export function average(values: number[]): number {
   }
   return total / values.length;
 }
+
+export function isAdult(age: number): boolean {
+  return age > 18;
+}
