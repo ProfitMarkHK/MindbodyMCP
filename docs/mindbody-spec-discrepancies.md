@@ -493,9 +493,12 @@ Same IP, same API key, same site; the only difference is the usertoken. The
 unauthenticated-in-effect call answers **200 with an empty list**, not 401/403,
 so a caller cannot distinguish "no clients exist" from "no staff token
 presented". `POST /usertoken/issue` also fails with distinct messages per cause
-(`Unsupported IP Address …` / `Staff user was not found for this site`), and
-`src/api/auth.ts` responds by silently downgrading every subsequent call to
-API-key-only auth (one stderr log line, no marker in any tool response).
+(`Unsupported IP Address …` / `Staff user was not found for this site`). This
+server does not degrade along with the API: `src/api/client.ts` builds every
+request's headers through `mindbodyAuth.getAuthHeaders()`, which throws
+`MindbodyAuthError` instead of proceeding, so a refused token fails the call
+loudly and is never retried (`tests/auth-fail-closed.test.ts`). The empty-200
+behaviour is reachable only by a client that sends the API key alone.
 
 **Implication for this repo.** Any empty result from the client domain is
 unproven until the token state is confirmed. This is now defect class 4 in

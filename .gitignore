@@ -6,12 +6,20 @@ bun.lockb
 .env
 .env.local
 .env.*.local
-# Production credentials. Deliberately NOT covered by the `.env.*.local` rule
-# above, so it has to be listed: this file holds live Mindbody OAuth secrets and
+# Environment files. Policy: an env file may hold op:// references, never a
+# credential value (AGENTS.md, Environment Variables). They stay ignored anyway,
+# in case one ever holds a value by mistake.
+#
+# Live Mindbody OAuth credentials, if any ever land here. Deliberately NOT
+# covered by the `.env.*.local` rule above, so it has to be listed: this file
 # must never reach a commit.
 .env.production
-# Development credentials. Holds a 1Password service account token, so it must never reach a commit.
+# May hold a 1Password service account token, so it must never reach a commit.
 .env.development
+# 1Password *references* only (op:// pointers, no secret values). Still local:
+# the vault layout is not committed. Resolved by `op run --env-file .env.op-refs`.
+# The glob covers the .prod variant used by scripts/mcp-sidecar.*.
+.env.op-refs*
 
 # Build output
 dist/

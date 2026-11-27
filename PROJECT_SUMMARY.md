@@ -29,7 +29,7 @@ mindbody-mcp/
 │   ├── test-tool.ts       # Tool testing script
 │   ├── benchmark.ts       # Performance benchmark
 │   └── test-bun-compat.ts # Bun compatibility test
-├── .env.example           # Environment template
+├── .env.example           # Template; placeholders only, no values
 ├── .gitignore            # Git ignore rules
 ├── bunfig.toml          # Bun configuration
 ├── CHANGELOG.md         # Version history
@@ -73,11 +73,11 @@ mindbody-mcp/
 # Install dependencies
 bun install
 
-# Configure environment (this repo's scripts use 1Password; no .env is needed)
-# For the published server only: cp .env.example .env, then fill it in
-
+# Configure credentials as op:// references (in the shell, or a references file
+# passed to op run --env-file) — never values, and no env file is required
 # Test the setup
-bun run test:tool
+# add --env-file .env.op-refs if the references are in a file
+op run -- bun run test:tool
 
 # Run the server
 bun run dev

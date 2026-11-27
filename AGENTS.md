@@ -28,6 +28,8 @@ bun run typecheck
 - `bun run dev` - Run in STDIO mode against **production** via 1Password (for local Claude Desktop testing; see Environment Variables)
 - `bun run dev:sse` - Run in SSE mode against **production** via 1Password (web-based, production-like)
 - `bun run dev:http` - Run in Streamable HTTP mode against **production** via 1Password (for hosted use; see [`docs/RAILWAY.md`](docs/RAILWAY.md))
+- `./scripts/mcp-sidecar.ps1` / `./scripts/mcp-sidecar.sh` - Start a loopback Streamable HTTP sidecar, sandbox by default or `prod` on request; see [Local sidecar](#local-sidecar-dev-only)
+- `./scripts/mb-auth-check.ps1` / `./scripts/mb-auth-check.sh` - Probe the four Mindbody credentials (API key and site, source user, and a token-authenticated search for the `--client-id` client) without starting the server; see [Checking credentials](#checking-credentials-dev-only)
 
 ### Testing
 - `bun test` - Run all tests (discovery is scoped to `tests/` by `bunfig.toml`;
@@ -166,10 +168,11 @@ export async function getClassesTool(
 
 ### Environment Variables
 **1Password-first policy:**
-- Mindbody credentials come from 1Password at launch through `op run`. No env file is required: do not create `.env.production`, `.env.development` or `prod.env`, and do not keep naked `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` values in any file.
-- The four variables below must be set in the shell environment as `op://` references to the item the operator chooses. The references are not secrets, but they name the vault layout, so they are never committed.
-- Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items, clearly named for the site they serve (for example `Mindbody Production` and `Mindbody Sandbox`): the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
-- `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and refuses an incoming `MINDBODY_SITE_ID` that names any other site, which is the signature of the production item's references still being in the shell. Use it for all local work and tests against the sandbox.
+- Mindbody credentials come from 1Password at launch through `op run`. No env file is required, and one is allowed **only as a container for `op://` references**, never for values: a literal `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` belongs in no file at all — not `.env`, `.env.production`, `.env.development`, `prod.env`, `.env.op-refs*`, a compose file, or a client config. The only real secret values stored on a machine are 1Password service account tokens, in the system keychain or a DPAPI-protected file (see [`docs/SECRETS.md`](docs/SECRETS.md)). A hosted deployment keeps values only in the platform's built-in secrets management (Railway variables, Kubernetes Secrets, Azure Key Vault). `scripts/live-e2e.sh --save` still writes a plain-text file; that breaks this rule, so do not use it ([#95](https://github.com/ProfitMarkHK/MindbodyMCP/issues/95)).
+- Env files are local and gitignored: `.gitignore` covers `.env*`, with `.env.example` the one tracked file and placeholders only. Name a references file `.env.op-refs` or `.env.op-refs.prod` — the names the sidecar scripts read — rather than `.env`, which the server itself loads. A references file is only meaningful in front of `op run --env-file <file>`; loaded directly, the server would receive the literal `op://` string.
+- The four variables below must be set as `op://` references, in the shell environment or in a references file passed to `op run --env-file`. The references are not secrets, but they name the vault layout, so they are never committed.
+- Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items: the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
+- `bun run dev:sandbox` (and `dev:sandbox:sse`) pins the site to the sandbox (`-99`) and refuses an incoming `MINDBODY_SITE_ID` that names any other site. Use it for all local work and tests against the sandbox.
 - `bun run dev`, `start`, `start:sse`, `start:http`, `start:prod` and `node:*` select production through the same references. Run them only on purpose. If a task truly needs a live site, state that explicitly before running one.
 - The live E2E tier (`scripts/live-e2e.sh`, `tests/live/`) still reads `MINDBODY_TEST_*` names. The npm dev scripts do not. That namespace is a human-facing guard only; the mechanical isolation is `buildLiveChildEnv` in `tests/live/live-config.ts`, which builds the child environment from the resolved test values instead of inheriting the shell's `MINDBODY_*`.
 - Do not add a `MINDBODY_PROD_*` namespace. `MINDBODY_*` is the runtime contract for the published server, Docker, Railway and `.env.example`; the live tier's `MINDBODY_TEST_*` is the only second namespace. A prod prefix would break existing deployments without adding a safety property the site guard does not already provide. Production and sandbox are separated by which 1Password item the references point at, and by the `-99` site guard.
@@ -185,6 +188,112 @@ export async function getClassesTool(
 **Optional:**
 - `MINDBODY_API_URL` - API base URL (default: `https://api.mindbodyonline.com/public/v6`)
 - `CACHE_TTL_MINUTES` - Cache TTL override
+
+### Local sidecar (dev-only)
+
+[`scripts/mcp-sidecar.ps1`](scripts/mcp-sidecar.ps1) (Windows, PowerShell 7) and
+[`scripts/mcp-sidecar.sh`](scripts/mcp-sidecar.sh) (macOS/Linux, bash 3.2) start the
+Streamable HTTP transport on loopback with credentials resolved from 1Password at launch.
+Manual use only: nothing registers at login, and the sidecar exists only while you are
+working against Mindbody.
+
+```powershell
+./scripts/mcp-sidecar.ps1                      # sandbox (default), foreground, Ctrl-C to stop
+./scripts/mcp-sidecar.ps1 -Profile prod        # LIVE Mindbody site
+./scripts/mcp-sidecar.ps1 -Profile prod -Background
+./scripts/mcp-sidecar.ps1 -Profile prod -Stop  # stop takes the same -Profile and -Port
+```
+
+```bash
+./scripts/mcp-sidecar.sh
+./scripts/mcp-sidecar.sh --profile prod --background
+./scripts/mcp-sidecar.sh --profile prod --stop  # stop takes the same --profile and --port
+```
+
+Both wrap `op run --env-file <refs> -- bun --watch run <entry> --transport http
+--port <port> --host 127.0.0.1` with `MCP_ALLOW_UNAUTHENTICATED=true`, where `<entry>` is
+`scripts/dev-sandbox.ts` for `sandbox` and `src/index.ts` for `prod`. The port is 3000 for
+`sandbox` and 3001 for `prod`, so both can run at once; `-Port` or `--port` overrides it.
+Why a sidecar at
+all: a client that spawns `op run` itself dies 60 s after a locked vault with
+`error initializing client: authorization timeout`, with nothing on screen to explain it.
+Starting it separately moves that failure into a terminal you can see and keeps the
+secret-holding process outside the client, which matters for clients that sandbox the
+servers they spawn.
+
+**Profiles.**
+
+- `sandbox` (default) reads `.env.op-refs`.
+- `prod` reads `.env.op-refs.prod`, announces itself in yellow, and refuses to start if
+  the file is missing — you cannot hit the live site by forgetting a flag.
+- Both files hold `op://` pointers only, never values, and are covered by the
+  `.env.op-refs*` rule in [`.gitignore`](.gitignore). The `.prod` variant does not exist
+  yet: copy the sandbox template and point it at a separate production item whose
+  `MINDBODY_SITE_ID` is the live site, per [Environment Variables](#environment-variables).
+- The `sandbox` profile starts through `scripts/dev-sandbox.ts`, the same launcher as
+  `dev:sandbox`, so the site is pinned to `-99` in code: any `MINDBODY_SITE_ID` in
+  `.env.op-refs` or its 1Password item is ignored. Only `prod` takes its site from the
+  refs file.
+
+**`op` is a development tool only.** It resolves secrets for a human at a keyboard on
+this machine. The `Dockerfile` does not install it and no deployed path may require it:
+hosted environments receive the same four variables as plain values from the platform
+(Railway variables today, see [`docs/RAILWAY.md`](docs/RAILWAY.md)). An `op://` reference
+belongs only in a gitignored local refs file or the developer's shell. A change that makes
+`src/` shell out to `op`, or that places a reference in a deployed environment variable,
+is a bug.
+
+**Operating notes.**
+
+- Idempotent: if this profile's own sidecar already answers `/health`, it prints the URLs
+  and exits 0 instead of starting a second copy. Anything else answering on the port is
+  refused, because `/health` does not say which site it serves. On posix that check needs
+  `lsof` and `ps -o`; without them a healthy port is refused.
+- Port held but unhealthy → it refuses and points at `-Stop` / `--stop`, rather than
+  launching into `EADDRINUSE`.
+- Stop kills the process tree, not just the listener. `bun --watch` forks the real
+  listener, so killing only the child makes the watcher respawn it and the port looks
+  immortal.
+- The readiness poll is 90 s, sized past the CLI's 60 s `authorization timeout`. On
+  failure it prints the tail of stderr and kills what it started, so a failed launch
+  cannot trip the port guard on the next attempt.
+- Foreground is the default because `-Background` / `--background` assumes the 1Password
+  desktop app integration, so the unlock prompt is a GUI dialog. If your CLI falls back to
+  a console password prompt, that prompt is invisible in a detached process.
+- Logs and pid files: `%LOCALAPPDATA%\mindbody-mcp\` on Windows,
+  `${XDG_STATE_HOME:-~/.local/state}/mindbody-mcp/` elsewhere. Nothing runtime-ish lands
+  in the repo.
+- Loopback and unauthenticated: the same constraints as the "Local use" section of
+  [`docs/RAILWAY.md`](docs/RAILWAY.md#local-use). Never bind beyond `127.0.0.1`, and do
+  not run the `prod` profile on a shared machine.
+
+### Checking credentials (dev-only)
+
+Credentials rotate, and a refused token is the one failure that looks like a data
+problem: the sandbox answers most client reads with an empty `200` when no staff
+usertoken is attached. [`scripts/mb-auth-check.ps1`](scripts/mb-auth-check.ps1) and
+[`scripts/mb-auth-check.sh`](scripts/mb-auth-check.sh) name the broken layer without
+starting the server.
+
+```bash
+op run --env-file .env.op-refs -- pwsh -NoProfile -File ./scripts/mb-auth-check.ps1 --client-id 12345
+op run --env-file .env.op-refs -- ./scripts/mb-auth-check.sh --client-id 12345
+```
+
+Two read-only requests and a token issue, each with explicit headers, then two client reads for
+`--client-id`: `GET /site/activationcode` (API key and `SiteId`), `POST /usertoken/issue` (source
+name and password), `GET /client/clientcompleteinfo` (API key only: is that client on this site?),
+and `GET /client/clients`, searched by that client's name, through the server's own request path.
+The search is the test that matters: a token that is issued but not attached gets zero rows and no
+error, while the record read answers the same with or without a token. The probe is
+`scripts/mb-auth-check.ts`; the two wrappers only start it with bun. It prints no credential or
+client name, exits `1` when a credential or the search fails, `2` when the client is not on this
+site or `--client-id` was not given, and `0` when every step passes. It needs nothing running: a
+green run alongside a failing server means the server is holding values from before the fix, so
+restart the sidecar.
+
+On Windows, run the `.sh` under Git Bash, not the `bash` from WSL — WSL does not
+inherit the environment `op run` builds.
 
 ## Spec Conformance: the rules that matter most
 
@@ -221,10 +330,17 @@ watching for:
    `{Clients: [], PaginationResponse: {TotalResults: 0}}`; the same call with a
    Bearer usertoken returns 4,465 clients. `GET /client/clientcompleteinfo`
    returns full data with the API key alone, so the degradation is
-   endpoint-specific and cannot be assumed either way. `src/api/auth.ts` falls
-   back to API-key-only auth when `POST /usertoken/issue` fails and logs one
-   stderr line (`Falling back to API-key-only auth`) — the tool response itself
-   carries no hint. **Rule for any probe or investigation: acquire and present
+   endpoint-specific and cannot be assumed either way. That degradation is a
+   property of the **raw API**, and this server refuses to trigger it: every
+   request takes its headers from `mindbodyAuth.getAuthHeaders()`
+   (`src/api/client.ts`), which awaits `getUserToken()` and throws
+   `MindbodyAuthError` when the source credentials are unset or
+   `POST /usertoken/issue` refuses. `MindbodyAuthError` is marked `isAuthError`
+   and is never retried, so no request reaches Mindbody with the API key alone.
+   A missing or refused token therefore surfaces as a **failed tool call** naming
+   the status and Mindbody's own message, never as an empty collection — there
+   is no silent fallback and no stderr line to look for.
+   `tests/auth-fail-closed.test.ts` holds that line. **Rule for any probe or investigation: acquire and present
    a staff usertoken (or confirm one was attached) before reading an empty
    collection as evidence of absence.** An empty 200 is proof of nothing until
    the token state is known.
