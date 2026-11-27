@@ -13,3 +13,5 @@ export function average(values: number[]): number {
 export function isAdult(age: number): boolean {
   return age > 18;
 }
+
+export const marker1 = 1;
