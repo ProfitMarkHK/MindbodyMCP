@@ -29,7 +29,7 @@
 #   ./scripts/mcp-sidecar.sh                  # sandbox, foreground
 #   ./scripts/mcp-sidecar.sh --profile prod   # LIVE Mindbody site
 #   ./scripts/mcp-sidecar.sh --background     # detach and poll /health
-#   ./scripts/mcp-sidecar.sh --stop
+#   ./scripts/mcp-sidecar.sh --stop                  # add the same --profile/--port you started with
 #
 set -euo pipefail
 
@@ -55,7 +55,7 @@ Options:
 Examples:
   ./scripts/mcp-sidecar.sh
   ./scripts/mcp-sidecar.sh --profile prod --background
-  ./scripts/mcp-sidecar.sh --stop
+  ./scripts/mcp-sidecar.sh --profile prod --stop
 EOF
   exit "${1:-0}"
 }
@@ -85,6 +85,12 @@ esac
 if [ -z "$PORT" ]; then
   case "$PROFILE" in prod) PORT="3001" ;; *) PORT="3000" ;; esac
 fi
+# Digits only: the port is spliced into the health URL, where "1@host" would name another host.
+case "$PORT" in
+  *[!0-9]*) echo "Invalid --port '$PORT' (expected a number)" >&2; exit 2 ;;
+esac
+# Printed hints must name this profile and port, or they stop a different sidecar.
+STOP_CMD="$0 --profile $PROFILE --port $PORT --stop"
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mindbody-mcp"
 mkdir -p "$STATE_DIR"
@@ -96,13 +102,12 @@ HEALTH_URL="http://127.0.0.1:$PORT/health"
 MCP_URL="http://127.0.0.1:$PORT/mcp"
 
 # The loopback URL is written out here, not read from $HEALTH_URL: rule 6 of the gate
-# (docs/quality-gates.md) reads a shell script line by line and refuses a client whose
-# target is a variable.
+# (docs/quality-gates.md) only accepts this exact line.
 healthy() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; }
 
 port_owner_pid() {
   if command -v lsof >/dev/null 2>&1; then
-    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true
   fi
 }
 
@@ -137,8 +142,7 @@ if [ "$STOP" = "true" ]; then
   fi
   rm -f "$PID_FILE"
 
-  owner="$(port_owner_pid)"
-  if [ -n "$owner" ]; then
+  for owner in $(port_owner_pid); do
     if ! is_sidecar "$owner"; then
       echo "Port $PORT is held by pid $owner, which is not a sidecar for profile $PROFILE. Not stopping it." >&2
       exit 1
@@ -147,7 +151,7 @@ if [ "$STOP" = "true" ]; then
       *" $owner "*) ;;
       *) targets="$targets $owner" ;;
     esac
-  fi
+  done
 
   if [ -z "$(echo "$targets" | tr -d ' ')" ]; then
     echo "No sidecar for profile $PROFILE is running on 127.0.0.1:$PORT."
@@ -163,19 +167,30 @@ fi
 
 # ------------------------------------------------------------ pre-flight
 if healthy; then
+  # /health does not say which site answers, so only this profile's own sidecar counts.
+  owners="$(port_owner_pid)"
+  ours="false"
+  for owner in $owners; do
+    if is_sidecar "$owner"; then ours="true"; else ours="false"; break; fi
+  done
+  if [ "$ours" != "true" ]; then
+    echo "Something answers on 127.0.0.1:$PORT but it cannot be confirmed as a sidecar for profile $PROFILE (pid $(echo ${owners:-unknown}))." >&2
+    echo "Not using it. Free the port, or pass --port. Confirming a sidecar needs lsof and ps -o." >&2
+    exit 1
+  fi
   cat <<EOF
 Already running and healthy.
   MCP:    $MCP_URL
   health: $HEALTH_URL
-  stop:   $0 --stop
+  stop:   $STOP_CMD
 EOF
   exit 0
 fi
 
 stale="$(port_owner_pid || true)"
 if [ -n "${stale:-}" ]; then
-  echo "Port $PORT is held by pid $stale but /health does not answer." >&2
-  echo "Stop it first: $0 --stop" >&2
+  echo "Port $PORT is held by pid $(echo $stale) but /health does not answer." >&2
+  echo "Stop it first: $STOP_CMD" >&2
   exit 1
 fi
 
@@ -214,7 +229,7 @@ if [ "$BACKGROUND" != "true" ]; then
   echo "Starting sidecar (foreground). Unlock 1Password when prompted."
   echo "  MCP:    $MCP_URL"
   echo "  health: $HEALTH_URL"
-  echo "  stop:   Ctrl-C, or $0 --stop"
+  echo "  stop:   Ctrl-C, or $STOP_CMD"
   echo
   exec op "${OP_ARGS[@]}"
 fi
@@ -260,7 +275,7 @@ Sidecar is up.
   pid:    $PID  (recorded in $PID_FILE)
   logs:   $LOG_OUT
           $LOG_ERR
-  stop:   $0 --stop
+  stop:   $STOP_CMD
 
 Client config (stdio-only clients):
   { "mcpServers": { "mindbody": { "command": "npx",

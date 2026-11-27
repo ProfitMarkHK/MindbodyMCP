@@ -121,8 +121,13 @@ sudo mkdir -p /opt/mindbody-mcp
 sudo cp -r src package.json tsconfig.json node_modules /opt/mindbody-mcp/
 sudo chown -R mcp-service:mcp-service /opt/mindbody-mcp
 
-# Configure environment. The unit binds 0.0.0.0, so MCP_AUTH_TOKEN is required.
-sudo cp .env /opt/mindbody-mcp/.env
+# Configure the environment. systemd has no op, so this root-only file on the
+# server is the platform's secret store and holds plain values, like the
+# Kubernetes Secret below. Type the four MINDBODY_* variables into it. Never copy
+# a local .env here: it may hold op:// references, which would reach the server
+# as literal strings. The unit binds 0.0.0.0, so MCP_AUTH_TOKEN is required.
+sudo install -m 600 /dev/null /opt/mindbody-mcp/.env
+sudoedit /opt/mindbody-mcp/.env
 echo "MCP_AUTH_TOKEN=$(openssl rand -hex 32)" | sudo tee -a /opt/mindbody-mcp/.env > /dev/null
 sudo chmod 600 /opt/mindbody-mcp/.env
 
@@ -175,15 +180,15 @@ kubectl logs -f deployment/mindbody-mcp-sse -n mindbody-mcp
 ### 4. Docker Compose
 
 ```bash
-# Copy the template, then replace the four credential placeholders with op://
-# references — never values, and MCP_AUTH_TOKEN included.
+# Compose reads the variables from the environment it is started in. On a
+# deployed host, inject them with that host's secret mechanism. On a development
+# machine, keep op:// references (never values) for the four MINDBODY_* variables
+# and MCP_AUTH_TOKEN in a gitignored .env.op-refs.compose file.
 # (docker-compose refuses to start the service without MCP_AUTH_TOKEN)
-cp .env.example .env
-nano .env
+nano .env.op-refs.compose
 
-# Start services. op resolves the references into compose's environment, which
-# takes precedence over the file's own interpolation.
-op run --env-file .env -- docker-compose up -d
+# Start services. op resolves the references into compose's environment.
+op run --env-file .env.op-refs.compose -- docker-compose up -d
 
 # View logs
 docker-compose logs -f

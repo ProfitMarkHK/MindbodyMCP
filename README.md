@@ -349,8 +349,8 @@ bun test
 # Test SSE connection (pass the server's token if it has one)
 MCP_AUTH_TOKEN=... bun run test:sse
 
-# Test specific tool
-bun run test:tool
+# Test specific tool (add --env-file .env.op-refs if the references are in a file)
+op run -- bun run test:tool
 
 # Run benchmarks
 bun run benchmark

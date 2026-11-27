@@ -41,9 +41,9 @@
  * whose `.get()` hands the path to axios; its own call sites are what the scan
  * checks).
  *
- * Code outside the TypeScript roots cannot be parsed: rule 6 holds shell scripts
- * under scripts/ to "no network client or absolute URL on a non-comment line", except that a
- * line may name a client when it names a loopback literal on that same line (see `offends`).
+ * Code outside the TypeScript roots cannot be parsed: rule 6 holds shell and
+ * PowerShell scripts under scripts/ to "no network client or absolute URL on a
+ * non-comment line", except for the sidecars' own loopback lines (`LOOPBACK_LINES`).
  *
  * Every rule is its own test, and its failure message lists every offender as
  * `file:line → path`. The suite prints `GATE13_PAGINATION_RESULT sites=N
@@ -105,31 +105,32 @@ const ROOT_FLOOR_SLACK = 5;
 const FIXTURE_DIR = join(ROOT, "tests/fixtures/gate13");
 
 /**
- * Code outside the TypeScript roots that the scanner cannot parse: shell scripts
- * under scripts/. Rule 6 holds them to "no network client", the explicit counterpart of the roots.
+ * Code outside the TypeScript roots that the scanner cannot parse: shell and PowerShell
+ * scripts under scripts/. Rule 6 holds them to "no network client", the explicit counterpart of the roots.
  */
 function listUnparsedCode(root: string): string[] {
-  return listFiles(join(root, "scripts"), (name) => name.endsWith(".sh"));
+  return listFiles(join(root, "scripts"), (name) => name.endsWith(".sh") || name.endsWith(".ps1"));
 }
 
 /** A network client or an absolute URL on any non-comment line. A comment cannot run, so full-line comments are skipped. */
-const NETWORK_CLIENT = /\b(?:curl|wget|ncat|socat|telnet|fetch|axios|XMLHttpRequest)\b|\/dev\/tcp\/|https?:\/\/|mindbodyonline/i;
-const CLIENT_TOKEN = /\b(?:curl|wget|ncat|socat|telnet|fetch|axios|XMLHttpRequest)\b/gi;
-const ABSOLUTE_URL = /https?:\/\/[^\s"'`)]*/gi;
-/** A loopback host literal: this machine's own service. The port may be a variable; the host may not. */
-const LOOPBACK_URL = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::(?:\d+|\$\{?\w+\}?))?(?:\/|$)/i;
+const NETWORK_CLIENT =
+  /\b(?:curl|wget|ncat|socat|telnet|fetch|axios|XMLHttpRequest|iwr|irm)\b|Invoke-(?:WebRequest|RestMethod)|Start-BitsTransfer|Test-NetConnection|\bNet\.(?:Http|Sockets|WebClient|WebRequest|HttpWebRequest)\b|\/dev\/tcp\/|https?:\/\/|mindbodyonline/i;
 
 /**
- * Whether a live line is a refused network reference. Mindbody, /dev/tcp and any absolute URL that
- * is not a loopback literal are refused. A line may name a client only with one loopback literal per
- * client on that same line, so a client whose target is a variable is refused.
+ * The only lines that may name a client or a URL: the sidecar scripts' loopback URL
+ * assignments and health polls. Each pattern matches a whole line, so no second URL, flag
+ * or trailing comment can ride along. A script using a variable port must keep it numeric.
  */
+const LOOPBACK_LINES = [
+  // HEALTH_URL="http://127.0.0.1:$PORT/health"   $mcpUrl = "http://127.0.0.1:$Port/mcp"
+  /^\$?\w+ ?= ?"http:\/\/127\.0\.0\.1:(?:\d+|\$PORT|\$Port)\/(?:health|mcp)"$/,
+  /^(?:healthy\(\) \{ )?curl -fsS --max-time \d+ "http:\/\/127\.0\.0\.1:(?:\d+|\$PORT)\/health" >\/dev\/null 2>&1(?:; \})?$/,
+  /^\$\w+ = Invoke-WebRequest -Uri "http:\/\/127\.0\.0\.1:(?:\d+|\$Port)\/health" -TimeoutSec \d+ -UseBasicParsing -ErrorAction Stop$/,
+];
+
+/** Whether a live line is a refused network reference. */
 function offends(text: string): boolean {
-  if (!NETWORK_CLIENT.test(text)) return false;
-  if (/mindbodyonline|\/dev\/tcp\//i.test(text)) return true;
-  const urls = text.match(ABSOLUTE_URL) ?? [];
-  if (urls.some((u) => !LOOPBACK_URL.test(u))) return true;
-  return (text.match(CLIENT_TOKEN) ?? []).length > urls.length;
+  return NETWORK_CLIENT.test(text) && !LOOPBACK_LINES.some((shape) => shape.test(text.trim()));
 }
 
 function networkOffenders(files: string[]): string[] {
@@ -138,7 +139,7 @@ function networkOffenders(files: string[]): string[] {
     readFileSync(file, "utf-8")
       .split("\n")
       .forEach((text, i) => {
-        if (/^\s*(?:#|\/\/|\/?\*)/.test(text) || !offends(text)) return;
+        if (/^\s*#/.test(text) || !offends(text)) return;
         out.push(`${relPosix(ROOT, file)}:${i + 1} → ${text.trim()}`);
       });
   }
@@ -253,11 +254,11 @@ describe("Gate 13 — mandatory pagination", () => {
 });
 
 describe("Gate 13 — code outside the scan roots", () => {
-  it("rule 6: shell scripts carry no network client", () => {
+  it("rule 6: shell and PowerShell scripts carry no network client", () => {
     const files = listUnparsedCode(ROOT);
-    // Not vacuous: the runner and the live-tier launcher are in the list.
+    // Not vacuous: the runner, the live-tier launcher and a PowerShell script are in the list.
     expect(files.map((f) => relPosix(ROOT, f))).toEqual(
-      expect.arrayContaining(["scripts/check-gates.sh", "scripts/live-e2e.sh"])
+      expect.arrayContaining(["scripts/check-gates.sh", "scripts/live-e2e.sh", "scripts/mcp-sidecar.ps1"])
     );
     expect(report("Network client outside the scan roots", unparsedOffenders)).toBe("");
   });
@@ -349,29 +350,39 @@ describe("Gate 13 — scanner self-test", () => {
     }
   });
 
-  it("rule 6 detector: allows a loopback literal named on the same line, refuses everything else", () => {
+  it("rule 6 detector: allows only the sidecars' loopback lines, refuses everything else", () => {
     const dir = require("fs").mkdtempSync(join(require("os").tmpdir(), "gate13-loop-"));
     const allowed = join(dir, "allowed.sh");
     const refused = join(dir, "refused.sh");
     require("fs").writeFileSync(allowed, [
       'HEALTH_URL="http://127.0.0.1:$PORT/health"',
-      'curl -fsS --max-time 2 "http://127.0.0.1:8080/health" >/dev/null',
-      'curl -fsS "http://localhost:8080/health"',
-      'curl -fsS "http://[::1]:8080/health"',
+      '$mcpUrl = "http://127.0.0.1:$Port/mcp"',
+      'healthy() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; }',
+      '    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop',
       "",
     ].join("\n"));
-    require("fs").writeFileSync(refused, [
-      'curl -fsS "$HEALTH_URL"', // a URL held in a variable cannot be checked on its line
-      'curl -fsS "http://127.0.0.1.evil.test/"', // not the loopback host
-      'curl -fsS "http://127.0.0.1@evil.test/"', // user-info, not the loopback host
-      'curl -fsS "http://127.0.0.1:8080/x" "https://api.mindbodyonline.com/x"', // a second target
-      'curl -fsS "http://127.0.0.1:8080/x"; curl -fsS "$URL"', // two clients, one literal
-      "for tool in op bun curl; do", // a client named with no target
-      "",
-    ].join("\n"));
+    const probe = 'curl -fsS --max-time 2 "http://127.0.0.1:8080/health" >/dev/null 2>&1';
+    const cases = [
+      'curl -fsS "$HEALTH_URL"',
+      'curl -fsS "$TARGET" # http://127.0.0.1/', // a comment naming loopback
+      'curl "http://127.0.0.1:8080/" "$TARGET"', // a second target
+      `${probe} "$TARGET"`, // a target after the redirect is still a curl argument
+      `${probe}; curl "$URL"`,
+      'curl --resolve "localhost:443:$IP" https://localhost/',
+      'curl --connect-to "127.0.0.1:80:$HOST:443" http://127.0.0.1/',
+      'curl -H "Referer: http://localhost/" "$URL"',
+      'curl -fsS --max-time 2 "http://127.0.0.1.evil.test/health" >/dev/null 2>&1',
+      'URL="http://127.0.0.1@evil.test/health"',
+      '*) curl "$URL" ;;', // a case arm, not a comment
+      "Invoke-WebRequest -Uri $healthUrl",
+      "irm $url",
+      "$c = New-Object System.Net.WebClient",
+      "for tool in op bun curl; do",
+    ];
+    require("fs").writeFileSync(refused, cases.join("\n"));
     try {
       expect(networkOffenders([allowed])).toEqual([]);
-      expect(networkOffenders([refused]).map((o) => Number(o.match(/refused\.sh:(\d+)/)![1]))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(networkOffenders([refused]).map((o) => Number(o.match(/refused\.sh:(\d+)/)![1]))).toEqual(cases.map((_, i) => i + 1));
     } finally {
       require("fs").rmSync(dir, { recursive: true, force: true });
     }

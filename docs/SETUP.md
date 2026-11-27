@@ -102,7 +102,8 @@ Store the four values in a 1Password item once, then use references everywhere. 
 
 ```bash
 # Test the connection and tool
-bun run test:tool
+# add --env-file .env.op-refs if the references are in a file
+op run -- bun run test:tool
 
 # You should see output like:
 # Testing Mindbody MCP Server...
@@ -307,7 +308,8 @@ In Claude Desktop:
 1. **Verify credentials in `.env`**
    ```bash
    # Test directly
-   bun run test:tool
+   # add --env-file .env.op-refs if the references are in a file
+   op run -- bun run test:tool
    ```
 
 2. **Check API key permissions**

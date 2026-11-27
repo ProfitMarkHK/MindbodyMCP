@@ -48,7 +48,7 @@
   ./scripts/mcp-sidecar.ps1 -Profile prod -Background
 
 .EXAMPLE
-  ./scripts/mcp-sidecar.ps1 -Stop
+  ./scripts/mcp-sidecar.ps1 -Profile prod -Stop
 #>
 [CmdletBinding()]
 param(
@@ -84,6 +84,8 @@ $logErr = Join-Path $stateDir "sidecar-$Profile.err.log"
 
 $healthUrl = "http://127.0.0.1:$Port/health"
 $mcpUrl = "http://127.0.0.1:$Port/mcp"
+# Printed hints must name this profile and port, or they stop a different sidecar.
+$stopCmd = "$($MyInvocation.MyCommand.Path) -Profile $Profile -Port $Port -Stop"
 
 function Fail {
   param([string[]]$Lines)
@@ -92,8 +94,10 @@ function Fail {
 }
 
 function Test-Health {
+  # The loopback URL is written out because rule 6 of the gate (docs/quality-gates.md) only
+  # accepts this exact line.
   try {
-    $r = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
     return ($r.StatusCode -eq 200)
   } catch {
     return $false
@@ -152,10 +156,19 @@ if ($Stop) {
 
 # ---------------------------------------------------------- pre-flight
 if (Test-Health) {
+  # /health does not say which site answers, so only this profile's own sidecar counts.
+  $owners = @(Get-PortOwners)
+  $foreign = @($owners | Where-Object { -not (Test-IsSidecar -ProcessId $_) })
+  if ($owners.Count -eq 0 -or $foreign.Count -gt 0) {
+    Fail @(
+      "Something answers on 127.0.0.1:$Port but it is not a sidecar for profile $Profile (pid $($owners -join ', ')).",
+      'Not using it. Free the port, or pass -Port.'
+    )
+  }
   Write-Host "Already running and healthy."
   Write-Host "  MCP:    $mcpUrl"
   Write-Host "  health: $healthUrl"
-  Write-Host "  stop:   $($MyInvocation.MyCommand.Path) -Stop"
+  Write-Host "  stop:   $stopCmd"
   exit 0
 }
 
@@ -163,7 +176,7 @@ $stale = Get-PortOwners
 if ($stale.Count -gt 0) {
   Fail @(
     "Port $Port is held by pid $($stale -join ', ') but /health does not answer.",
-    "Stop it first: $($MyInvocation.MyCommand.Path) -Stop"
+    "Stop it first: $stopCmd"
   )
 }
 
@@ -188,7 +201,9 @@ if ($Profile -eq 'prod') {
   Write-Host "PROFILE: prod - this connects to the LIVE Mindbody site." -ForegroundColor Yellow
 }
 
-$env:MCP_ALLOW_UNAUTHENTICATED = 'true'
+# A script shares its caller's environment, so the flag is put back after each launch.
+# Left set, a later HTTP server in the same session would start unauthenticated.
+$previousAllow = $env:MCP_ALLOW_UNAUTHENTICATED
 
 $argLine = 'run --env-file "{0}" -- bun --watch run "{1}" --transport http --port {2} --host 127.0.0.1' -f `
   $refs, $entry, $Port
@@ -198,17 +213,28 @@ if (-not $Background) {
   Write-Host "Starting sidecar (foreground). Unlock 1Password when prompted."
   Write-Host "  MCP:    $mcpUrl"
   Write-Host "  health: $healthUrl"
-  Write-Host "  stop:   Ctrl-C, or $($MyInvocation.MyCommand.Path) -Stop"
+  Write-Host "  stop:   Ctrl-C, or $stopCmd"
   Write-Host ''
-  & op run --env-file $refs -- bun --watch run $entry --transport http --port $Port --host 127.0.0.1
-  exit $LASTEXITCODE
+  try {
+    $env:MCP_ALLOW_UNAUTHENTICATED = 'true'
+    & op run --env-file $refs -- bun --watch run $entry --transport http --port $Port --host 127.0.0.1
+    $code = $LASTEXITCODE
+  } finally {
+    $env:MCP_ALLOW_UNAUTHENTICATED = $previousAllow
+  }
+  exit $code
 }
 
 # ------------------------------------------------------------ background
 Write-Host "Starting sidecar in the background. Unlock 1Password when prompted."
 
-$proc = Start-Process -FilePath 'op' -ArgumentList $argLine -WorkingDirectory $root -PassThru `
-  -WindowStyle Hidden -RedirectStandardOutput $logOut -RedirectStandardError $logErr
+try {
+  $env:MCP_ALLOW_UNAUTHENTICATED = 'true'
+  $proc = Start-Process -FilePath 'op' -ArgumentList $argLine -WorkingDirectory $root -PassThru `
+    -WindowStyle Hidden -RedirectStandardOutput $logOut -RedirectStandardError $logErr
+} finally {
+  $env:MCP_ALLOW_UNAUTHENTICATED = $previousAllow
+}
 
 $proc.Id | Set-Content -Path $pidFile -Encoding ascii
 
@@ -244,7 +270,7 @@ Write-Host "  health: $healthUrl"
 Write-Host "  pid:    $($proc.Id)  (recorded in $pidFile)"
 Write-Host "  logs:   $logOut"
 Write-Host "          $logErr"
-Write-Host "  stop:   $($MyInvocation.MyCommand.Path) -Stop"
+Write-Host "  stop:   $stopCmd"
 Write-Host ''
 Write-Host 'Client config (stdio-only clients):'
 Write-Host '  { "mcpServers": { "mindbody": { "command": "npx",'

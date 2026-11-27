@@ -76,7 +76,8 @@ bun install
 # Configure credentials as op:// references (in the shell, or a references file
 # passed to op run --env-file) — never values, and no env file is required
 # Test the setup
-bun run test:tool
+# add --env-file .env.op-refs if the references are in a file
+op run -- bun run test:tool
 
 # Run the server
 bun run dev

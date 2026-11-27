@@ -168,7 +168,7 @@ export async function getClassesTool(
 
 ### Environment Variables
 **1Password-first policy:**
-- Mindbody credentials come from 1Password at launch through `op run`. No env file is required, and one is allowed **only as a container for `op://` references**, never for values: a literal `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` belongs in no file at all — not `.env`, `.env.production`, `.env.development`, `prod.env`, `.env.op-refs*`, a compose file, or a client config. The one sanctioned on-disk exception is the opt-in live E2E tier, whose `MINDBODY_TEST_*` values `scripts/live-e2e.sh --save` writes to a file outside the repository, readable only by you.
+- Mindbody credentials come from 1Password at launch through `op run`. No env file is required, and one is allowed **only as a container for `op://` references**, never for values: a literal `MINDBODY_API_KEY`, `MINDBODY_SITE_ID`, `MINDBODY_SOURCE_NAME` or `MINDBODY_SOURCE_PASSWORD` belongs in no file at all — not `.env`, `.env.production`, `.env.development`, `prod.env`, `.env.op-refs*`, a compose file, or a client config. There are two sanctioned on-disk exceptions, both outside the repository: the opt-in live E2E tier, whose `MINDBODY_TEST_*` values `scripts/live-e2e.sh --save` writes to a file readable only by you, and a deployed host's own secret store (a Kubernetes Secret, or the root-only systemd `EnvironmentFile` in `docs/SSE_DEPLOYMENT.md`).
 - Env files are local and gitignored: `.gitignore` covers `.env*`, with `.env.example` the one tracked file and placeholders only. Name a references file `.env.op-refs` or `.env.op-refs.prod` — the names the sidecar scripts read — rather than `.env`, which the server itself loads. A references file is only meaningful in front of `op run --env-file <file>`; loaded directly, the server would receive the literal `op://` string.
 - The four variables below must be set as `op://` references, in the shell environment or in a references file passed to `op run --env-file`. The references are not secrets, but they name the vault layout, so they are never committed.
 - Mindbody does not issue per-environment keys, so the sandbox and production items may hold the same API key. Keep them as separate 1Password items: the sandbox item's `MINDBODY_SITE_ID` is `-99`, and the production item's is the live site. The sandbox guard is the site pin, not the key.
@@ -201,13 +201,13 @@ working against Mindbody.
 ./scripts/mcp-sidecar.ps1                      # sandbox (default), foreground, Ctrl-C to stop
 ./scripts/mcp-sidecar.ps1 -Profile prod        # LIVE Mindbody site
 ./scripts/mcp-sidecar.ps1 -Profile prod -Background
-./scripts/mcp-sidecar.ps1 -Stop
+./scripts/mcp-sidecar.ps1 -Profile prod -Stop  # stop takes the same -Profile and -Port
 ```
 
 ```bash
 ./scripts/mcp-sidecar.sh
 ./scripts/mcp-sidecar.sh --profile prod --background
-./scripts/mcp-sidecar.sh --stop
+./scripts/mcp-sidecar.sh --profile prod --stop  # stop takes the same --profile and --port
 ```
 
 Both wrap `op run --env-file <refs> -- bun --watch run <entry> --transport http
@@ -245,8 +245,10 @@ is a bug.
 
 **Operating notes.**
 
-- Idempotent: if `/health` already answers, it prints the URLs and exits 0 instead of
-  starting a second copy.
+- Idempotent: if this profile's own sidecar already answers `/health`, it prints the URLs
+  and exits 0 instead of starting a second copy. Anything else answering on the port is
+  refused, because `/health` does not say which site it serves. On posix that check needs
+  `lsof` and `ps -o`; without them a healthy port is refused.
 - Port held but unhealthy → it refuses and points at `-Stop` / `--stop`, rather than
   launching into `EADDRINUSE`.
 - Stop kills the process tree, not just the listener. `bun --watch` forks the real

@@ -110,7 +110,7 @@ its output so the side effect is never a surprise.
 | 10 | Tracker / ticket reconciled | **no-op** | This project uses GitHub Issues, not Jira (`.github/ISSUE_TEMPLATE/`, `docs/agents/issue-tracker.md`). There is no Jira integration to reconcile, so the Jira-specific part of this gate does not apply. Reconciling the GitHub Issue remains manual. |
 | 11 | Implementation aligns with functional & technical specs | applies | manual review against [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/API.md`](API.md), and the OpenAPI spec [`docs/openapi.json`](openapi.json). Note `tests/classManagement.test.ts` already validates tool calls against `docs/openapi.json` at runtime. `bun run spec:coverage` lists which spec paths the tools reach and which they do not (informational, see below Gate 13). **Spec provenance:** `docs/openapi.json` is the Mindbody public API v6 Swagger 2.0 export, fetched **unauthenticated** from `https://api.mindbodyonline.com/public/v6/swagger/doc` — the same URL `scripts/update-spec.ts` already uses. It is not a rare hand-supplied artifact: it is served publicly and matches the stored file byte for byte, so it is always recoverable by running `bun run spec:update`. That command fetches, refreshes **both** `docs/openapi.json` and `docs/openapi.lock`, and verifies the result. The file's SHA-256 is pinned in `docs/openapi.lock` (`970ffa101a254868290056081b062ee128c74b04d880190aa1605bfbb0068941`) and is enforced offline by Gate 16. The spec is **pinned, not auto-followed** — see the drift policy under Gate 16. |
 | 12 | Agent skill structure validates | **retired** | **Retired 2026-11-22 — the skills it validated are no longer vendored in this repo.** `.agents/skills/` (29 stale skills) was removed; skills now come from a machine-level install at `E:\.agents\skills`, inherited by every project via the `skills` array in `~/.config/opencode/opencode.jsonc`. Retained analysis in case skills are ever re-vendored: see gate 12 below. |
-| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
+| 13 | Mandatory pagination | applies | `bun test tests/pagination-gate.test.ts` — static scan of `src/**/*.ts` against `docs/openapi.json`: every GET endpoint the spec paginates (`request.limit` + `request.offset`) must be called through `fetchAllPages` (`src/api/client.ts`). Every GET call site under `src/` and `scripts/` is scanned (shell and PowerShell scripts are held to "no network client", rule 6), 0 violations; the suite prints the live `GATE13_PAGINATION_RESULT sites=N violations=0` line, so read N from the run rather than from this table. **No allowlist.** Run by the runner as part of Gate 1's `bun test` and derived from its `GATE13_PAGINATION_RESULT` line, fail-closed; see Gate 13 below. Gate 13 reads the spec, so Gate 16 runs before it. |
 | 16 | OpenAPI spec integrity | applies | `sha256` of [`docs/openapi.json`](openapi.json) must equal the value pinned in [`docs/openapi.lock`](openapi.lock). **Offline, no network, no credentials**, ~1s. Runs **second, right after Gate 8's two parts and before Gate 1** — see the positioning rationale under Gate 16. Fail-closed on four conditions (missing spec, missing lock, unparseable digest, mismatch), never skip, and the failure message names both digests and points at `bun run spec:update`. |
 
 State legend: **applies** (must pass), **no-op** (does not apply, reason
@@ -639,17 +639,20 @@ and not needed" from "forgotten":
      document `/swagger/doc` (what `scripts/update-spec.ts` fetches) is not a site
      read, and a URL that is not a literal fails here;
   6. a network client on a live line of code the scanner cannot parse. The
-     TypeScript scan cannot read shell, so **shell scripts are not parsed**:
-     every `*.sh` under `scripts/` must contain no
+     TypeScript scan cannot read shell, so **shell and PowerShell scripts are not parsed**:
+     every `*.sh` and `*.ps1` under `scripts/` must contain no
      `curl`, `wget`, `ncat`, `socat`, `telnet`, `fetch`, `axios`,
-     `XMLHttpRequest`, `/dev/tcp/`, absolute `http(s)://` URL or `mindbodyonline`
-     on a non-comment line, with one exception: a line may name a client when it also
-     names a loopback literal (`127.0.0.1`, `localhost` or `[::1]`, with a port that may
-     be a variable), one literal per client. A URL held in a variable, or any other
-     host, is still refused. The list is checked to be non-empty (the runner and the
-     live-tier launcher must be in it), so a moved directory
-     cannot make it vacuous. A shell script that needs the network must be
-     rewritten as a `.ts` file under `scripts/`, where it is scanned.
+     `XMLHttpRequest`, PowerShell web or socket client (`Invoke-WebRequest`,
+     `Invoke-RestMethod`, `iwr`, `irm`, `Start-BitsTransfer`, `Test-NetConnection`,
+     `Net.*` classes), `/dev/tcp/`, absolute `http(s)://` URL or `mindbodyonline`
+     on a non-comment line (only `#` starts a comment). The one exception is the
+     sidecars' loopback health poll and URL assignments, matched as whole lines
+     (`LOOPBACK_LINES` in the test): `127.0.0.1` only, with nothing added to the
+     line. A script that uses a variable port there must keep it numeric. The list
+     is checked to be non-empty (the runner, the live-tier launcher and the
+     PowerShell sidecar must be in it), so a moved directory cannot make it
+     vacuous. A script that needs any other network call must be rewritten as a
+     `.ts` file under `scripts/`, where it is scanned.
 
   A scanner self-test runs the same scanner over
   [`tests/fixtures/gate13/`](../tests/fixtures/gate13/README.md), which sits
@@ -712,7 +715,7 @@ and not needed" from "forgotten":
   `scripts/*.ts`; any further code base must be added to `SCAN_ROOTS`. `tests/` is
   deliberately outside: its reads go to stubs and fakes, never a live site, and
   the opt-in live tier under `tests/live/` is run by hand against the sandbox.
-  Shell scripts are only held to rule 6's deny-list, not parsed, so a script that
+  Shell and PowerShell scripts are only held to rule 6's deny-list, not parsed, so a script that
   reaches the network through an interpreter one-liner or a tool that list does not
   name (`python -c`, `nc`) would not be seen. Receiver detection is by
   type, so it is only as good as the types: a receiver the compiler types as `any`

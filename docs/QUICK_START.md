@@ -18,7 +18,8 @@ Point the four `MINDBODY_*` variables at your 1Password item as `op://` referenc
 Run the test script to verify everything works:
 
 ```bash
-bun run test:tool
+# add --env-file .env.op-refs if the references are in a file
+op run -- bun run test:tool
 ```
 
 This will attempt to fetch Alexia Bauer's schedule. If successful, you'll see her classes listed.
