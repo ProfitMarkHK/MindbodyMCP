@@ -107,39 +107,13 @@ bun run src/index.ts \
 
 ## Production Deployment
 
-### 1. Systemd Service (Linux)
+### 1. Systemd Service (Linux): not supported
 
-```bash
-# Copy service file
-sudo cp deploy/mindbody-mcp-sse.service /etc/systemd/system/
-
-# Create service user
-sudo useradd -r -s /bin/false mcp-service
-
-# Install application
-sudo mkdir -p /opt/mindbody-mcp
-sudo cp -r src package.json tsconfig.json node_modules /opt/mindbody-mcp/
-sudo chown -R mcp-service:mcp-service /opt/mindbody-mcp
-
-# Configure the environment. systemd has no op, so this root-only file on the
-# server is the platform's secret store and holds plain values, like the
-# Kubernetes Secret below. Type the four MINDBODY_* variables into it. Never copy
-# a local .env here: it may hold op:// references, which would reach the server
-# as literal strings. The unit binds 0.0.0.0, so MCP_AUTH_TOKEN is required.
-sudo install -m 600 /dev/null /opt/mindbody-mcp/.env
-sudoedit /opt/mindbody-mcp/.env
-echo "MCP_AUTH_TOKEN=$(openssl rand -hex 32)" | sudo tee -a /opt/mindbody-mcp/.env > /dev/null
-sudo chmod 600 /opt/mindbody-mcp/.env
-
-# Start service
-sudo systemctl daemon-reload
-sudo systemctl enable mindbody-mcp-sse
-sudo systemctl start mindbody-mcp-sse
-
-# Check status
-sudo systemctl status mindbody-mcp-sse
-sudo journalctl -u mindbody-mcp-sse -f
-```
+This repository has no systemd setup that supplies credentials without writing
+them to a plain-text file, and that is not allowed (see
+[SECRETS.md](SECRETS.md)). Do not deploy with
+`deploy/mindbody-mcp-sse.service`. Use a platform with built-in secrets
+management, such as [Railway](RAILWAY.md) or Kubernetes (below).
 
 ### 2. Nginx Reverse Proxy
 
@@ -164,8 +138,9 @@ sudo systemctl reload nginx
 # Create namespace and deploy
 kubectl apply -f deploy/k8s-deployment.yaml
 
-# Fill the secret with real values and MCP_AUTH_TOKEN. It is a cluster Secret,
-# not a file in this repository, and it holds values by design.
+# Fill the secret with real values and MCP_AUTH_TOKEN. A Kubernetes Secret is
+# the platform's built-in secrets management. It is encrypted at rest only if
+# the cluster is configured for that, so turn encryption at rest on first.
 kubectl edit secret mindbody-mcp-secrets -n mindbody-mcp
 
 # Check deployment
@@ -355,9 +330,6 @@ done
 ### Logging
 
 ```bash
-# View systemd logs
-journalctl -u mindbody-mcp-sse -f
-
 # View Docker logs
 docker logs -f mindbody-mcp-sse
 
@@ -374,7 +346,7 @@ The server exposes Prometheus-compatible metrics at `/metrics` endpoint (when en
 ### Common Issues
 
 1. **Connection refused**:
-   - Check if server is running: `systemctl status mindbody-mcp-sse`
+   - Check if server is running: `docker ps` or `kubectl get pods -n mindbody-mcp`
    - Verify port is not blocked: `sudo netstat -tlnp | grep 3000`
    - Check firewall rules: `sudo ufw status`
 

@@ -1,3 +1,6 @@
+# NOT SUPPORTED. There is no way here to supply credentials without a
+# plain-text file, which this project does not allow. See
+# docs/SSE_DEPLOYMENT.md.
 [Unit]
 Description=Mindbody MCP Server (SSE Transport)
 Documentation=https://github.com/ProfitMarkHK/MindbodyMCP
@@ -14,11 +17,8 @@ Environment="NODE_ENV=production"
 Environment="MCP_TRANSPORT=sse"
 Environment="MCP_PORT=3000"
 Environment="MCP_HOST=0.0.0.0"
-# MCP_AUTH_TOKEN is REQUIRED: with MCP_HOST=0.0.0.0 the server refuses to
-# start without it. Set it in the EnvironmentFile below (never inline here),
-# e.g. MCP_AUTH_TOKEN=<output of `openssl rand -hex 32`>. Clients send
-# "Authorization: Bearer <token>".
-EnvironmentFile=/opt/mindbody-mcp/.env
+# No credentials are set here, inline or by EnvironmentFile. With
+# MCP_HOST=0.0.0.0 the server refuses to start without MCP_AUTH_TOKEN.
 
 # Start command
 ExecStart=/usr/local/bin/bun run /opt/mindbody-mcp/src/index.ts --transport sse --port 3000
