@@ -31,14 +31,23 @@ pre-commit hook with one command per clone:
 git config core.hooksPath .githooks
 ```
 
-That command is also the repo's `prepare` script, so `bun install` sets it on a
+The repo's `prepare` script runs that command, so `bun install` sets it on a
 fresh clone without anyone typing it. It is idempotent (`git config` overwrites
-one key) and it is a no-op outside a git checkout — the `prepare` line guards
-with `git rev-parse --git-dir` and swallows the error — so an install inside a
-Docker build that has no `.git` still succeeds. `core.hooksPath` is repo-local
-config and is **not** copied by a clone, which is exactly why the `prepare`
-script exists; run the command by hand if you ever clone with `--no-scripts`.
-The path is relative, so git resolves it against each worktree's own root.
+one key). It acts only when the package root has its own `.git` (a directory in
+a clone, a file in a linked worktree), so it does nothing in a source copy with
+no `.git`, and never touches the config of a repository that merely contains
+this package. A missing or failing `git` does not fail the install.
+`core.hooksPath` is repo-local config and is **not** copied by a clone, which is
+exactly why the `prepare` script exists; run the command by hand if you ever
+install with `--ignore-scripts`. The path is relative, so git resolves it
+against each worktree's own root.
+
+`prepare` is inline JavaScript (`node -e`) rather than shell syntax because it
+has to run under Bun's own shell on Windows, `cmd.exe` under npm and `sh`
+elsewhere. Bun's shell rejects `>/dev/null 2>&1` at parse time, which failed
+every `bun install` on Windows. `tests/prepare-script.test.ts` runs the script
+under Bun's shell on every platform, so Linux CI catches a return of that class
+of error. It does not cover `cmd.exe`.
 
 The hook file itself is committed at [`.githooks/pre-commit`](../.githooks/pre-commit),
 so it survives a fresh clone and needs no dependency install. It is wired with
