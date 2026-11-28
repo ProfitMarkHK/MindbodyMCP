@@ -87,6 +87,16 @@ function scripted(pages: Array<Record<string, Array<{ Id: number }>>>, total: nu
   };
   return { client, offsets };
 }
+/** A client that answers each GET with the next reply, verbatim. */
+function replaying(replies: unknown[]) {
+  let call = 0;
+  const client: IMindbodyClient = {
+    request: async () => { throw new Error("unused"); },
+    post: async () => { throw new Error("unused"); },
+    get: async <T,>() => replies[call++] as T,
+  };
+  return { client, calls: () => call };
+}
 const page = (...rowIds: number[]) => ({ Things: rowIds.map((Id) => ({ Id })) });
 
 const ids = (items: Array<{ Id: number }>) => items.map((item) => item.Id);
@@ -253,6 +263,56 @@ describe("fetchAllPages — fails loudly instead of truncating or looping", () =
       "fetchAllPages: GET /client/clients returned 2 rows by Offset=0 but reports TotalResults=0; the response is inconsistent, refusing to return it"
     );
     expect(server.calls).toHaveLength(1);
+  });
+
+  it("throws when an empty page reports TotalResults=0 after pages promised more rows", async () => {
+    // Observed on /sale/sales: the walk's last page is empty and says TotalResults=0.
+    const served = [
+      { Things: [{ Id: 1 }, { Id: 2 }], PaginationResponse: { TotalResults: 3 } },
+      { Things: [], PaginationResponse: { TotalResults: 0 } },
+    ];
+    let call = 0;
+    const client: IMindbodyClient = {
+      request: async () => { throw new Error("unused"); },
+      post: async () => { throw new Error("unused"); },
+      get: async <T,>() => served[call++] as T,
+    };
+    await expect(fetchAllPages(client, "/sale/sales", {}, "Things", 2)).rejects.toThrow(
+      "fetchAllPages: GET /sale/sales returned an empty page at Offset=2 (2 items fetched of TotalResults=3); refusing to return a truncated result"
+    );
+    expect(call).toBe(2);
+  });
+
+  it("falls back to the empty page's own total when no earlier page reported one", async () => {
+    const { client, calls } = replaying([
+      { Things: [{ Id: 1 }, { Id: 2 }] },
+      { Things: [], PaginationResponse: { TotalResults: 5 } },
+    ]);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 2)).rejects.toThrow("2 items fetched of TotalResults=5");
+    expect(calls()).toBe(2);
+  });
+
+  it("keeps the total promised by earlier pages when the empty page reports a smaller one", async () => {
+    const { client, calls } = replaying([
+      { Things: range(5).map((Id) => ({ Id })), PaginationResponse: { TotalResults: 10 } },
+      { Things: [6, 7, 8].map((Id) => ({ Id })), PaginationResponse: { TotalResults: 10 } },
+      { Things: [], PaginationResponse: { TotalResults: 8 } },
+    ]);
+    await expect(fetchAllPages(client, "/x", {}, "Things", 5)).rejects.toThrow("8 items fetched of TotalResults=10");
+    expect(calls()).toBe(3);
+  });
+
+  it("refuses a TotalResults that contradicts the rows, unless ignoreTotalResults is set", async () => {
+    const reply = { Things: [{ Id: 1 }, { Id: 2 }], PaginationResponse: { TotalResults: 0 } };
+    const refused = replaying([reply]);
+    await expect(fetchAllPages(refused.client, "/x", {}, "Things", 2)).rejects.toThrow(
+      "returned 2 rows by Offset=0 but reports TotalResults=0"
+    );
+
+    const { client, calls } = replaying([reply, { Things: [], PaginationResponse: { TotalResults: 2812 } }]);
+    const { items } = await fetchAllPages<{ Id: number }>(client, "/x", {}, "Things", 2, { ignoreTotalResults: true });
+    expect(ids(items)).toEqual([1, 2]);
+    expect(calls()).toBe(2);
   });
 
   it("throws when a later page pushes the rows received past TotalResults", async () => {

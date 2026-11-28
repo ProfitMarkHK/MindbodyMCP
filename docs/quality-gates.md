@@ -672,8 +672,10 @@ and not needed" from "forgotten":
 
   **How `fetchAllPages` pages.** It sends `Limit` = page size (default 200, set
   per call) and advances `Offset` by the number of rows actually received. An
-  empty page ends the walk unless the server reported a larger `TotalResults`
-  (then it throws). When the server reports `TotalResults`, the walk
+  empty page ends the walk unless an earlier page with rows reported a larger
+  `TotalResults`, or, when none did, the empty page itself reports one (then it
+  throws). The empty page's own total never replaces an earlier one, so its `0`
+  cannot hide a short walk. When the server reports `TotalResults`, the walk
   continues until that many rows are collected, so a server that serves fewer
   rows than asked (a silent cap) is still read to the end. Without
   `TotalResults`, it stops on the first page shorter than the smaller of
